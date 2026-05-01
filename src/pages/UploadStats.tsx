@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import { parseStatsCsv } from "@/lib/csvParser";
+import { parseStatsWorkbook } from "@/lib/csvParser";
 
 const UploadStats = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -16,14 +16,14 @@ const UploadStats = () => {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async () => {
-    if (!file) { toast.error("Choose a CSV file"); return; }
+    if (!file) { toast.error("Choose an Excel file"); return; }
     if (!uploadDate) { toast.error("Pick an upload date"); return; }
     setBusy(true);
     setResult(null);
     try {
-      const text = await file.text();
-      const { players } = parseStatsCsv(text);
-      if (players.length === 0) throw new Error("No players found in CSV");
+      const buf = await file.arrayBuffer();
+      const { players } = parseStatsWorkbook(buf);
+      if (players.length === 0) throw new Error("No players found in workbook");
 
       // 1. Upsert players (by first+last)
       const playerRows = players.map((p) => ({
