@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Plus, Trash2, MapPin, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
+import { seasonYearFor, isSeasonClosed, currentSeasonYear, seasonLabel } from "@/lib/season";
 
 interface Game {
   id: string;
@@ -21,6 +22,7 @@ interface Game {
   opponent_score: number | null;
   result: string | null;
   notes: string | null;
+  season_year: number;
 }
 
 const gameSchema = z.object({
@@ -37,6 +39,8 @@ const gameSchema = z.object({
 const Schedule = () => {
   const [games, setGames] = useState<Game[]>([]);
   const [open, setOpen] = useState(false);
+  const [seasons, setSeasons] = useState<number[]>([]);
+  const [season, setSeason] = useState<number>(currentSeasonYear());
   const [form, setForm] = useState({
     game_date: "", game_time: "", opponent: "", location: "home",
     team_score: "", opponent_score: "", result: "", notes: ""
@@ -44,14 +48,24 @@ const Schedule = () => {
 
   const load = async () => {
     const { data } = await supabase.from("games").select("*").order("game_date", { ascending: true });
-    setGames((data ?? []) as Game[]);
+    const all = (data ?? []) as Game[];
+    setGames(all);
+    const yrs = Array.from(new Set([currentSeasonYear(), ...all.map((g) => g.season_year)])).sort((a, b) => b - a);
+    setSeasons(yrs);
   };
   useEffect(() => { load(); }, []);
+
+  const closed = isSeasonClosed(season);
 
   const submit = async () => {
     const parsed = gameSchema.safeParse(form);
     if (!parsed.success) {
       toast.error(parsed.error.issues[0].message);
+      return;
+    }
+    const yr = seasonYearFor(form.game_date);
+    if (isSeasonClosed(yr)) {
+      toast.error(`The ${yr} season is closed. You can't add games to a past season.`);
       return;
     }
     const payload = {
@@ -63,6 +77,7 @@ const Schedule = () => {
       opponent_score: form.opponent_score === "" ? null : Number(form.opponent_score),
       result: form.result || null,
       notes: form.notes || null,
+      season_year: yr,
     };
     const { error } = await supabase.from("games").insert(payload);
     if (error) { toast.error(error.message); return; }
@@ -81,8 +96,9 @@ const Schedule = () => {
   };
 
   const today = new Date().toISOString().slice(0, 10);
-  const upcoming = games.filter((g) => g.game_date >= today);
-  const past = games.filter((g) => g.game_date < today).reverse();
+  const seasonGames = games.filter((g) => g.season_year === season);
+  const upcoming = closed ? [] : seasonGames.filter((g) => g.game_date >= today);
+  const past = closed ? seasonGames.slice().reverse() : seasonGames.filter((g) => g.game_date < today).reverse();
 
   const renderGame = (g: Game) => {
     const isPast = g.game_date < today;

@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { parseStatsWorkbook } from "@/lib/csvParser";
+import { seasonYearFor, isSeasonClosed } from "@/lib/season";
 
 const UploadStats = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -25,21 +26,28 @@ const UploadStats = () => {
       const { players } = parseStatsWorkbook(buf);
       if (players.length === 0) throw new Error("No players found in workbook");
 
-      // 1. Upsert players (by first+last)
+      const season_year = seasonYearFor(uploadDate);
+      if (isSeasonClosed(season_year)) {
+        throw new Error(`The ${season_year} season is closed (ended May 31). Pick a date inside an open season window (Feb 1 – May 31).`);
+      }
+
+      // 1. Upsert players for THIS season (rosters are per-season)
       const playerRows = players.map((p) => ({
         first_name: p.first,
         last_name: p.last,
         jersey_number: p.number || "",
+        season_year,
       }));
       const { error: playerErr } = await supabase
         .from("players")
-        .upsert(playerRows, { onConflict: "first_name,last_name" });
+        .upsert(playerRows, { onConflict: "season_year,first_name,last_name" });
       if (playerErr) throw playerErr;
 
-      // 2. Fetch IDs
+      // 2. Fetch IDs scoped to this season
       const { data: playerRecords, error: fetchErr } = await supabase
         .from("players")
-        .select("id, first_name, last_name");
+        .select("id, first_name, last_name")
+        .eq("season_year", season_year);
       if (fetchErr) throw fetchErr;
       const idByName = new Map<string, string>();
       (playerRecords ?? []).forEach((r) => idByName.set(`${r.first_name}|${r.last_name}`, r.id));
@@ -47,7 +55,7 @@ const UploadStats = () => {
       // 3. Insert audit row
       const { data: uploadRow, error: upErr } = await supabase
         .from("csv_uploads")
-        .insert({ upload_date: uploadDate, filename: file.name, player_count: players.length })
+        .insert({ upload_date: uploadDate, filename: file.name, player_count: players.length, season_year })
         .select("id")
         .single();
       if (upErr) throw upErr;
@@ -62,6 +70,7 @@ const UploadStats = () => {
             upload_date: uploadDate,
             upload_id: uploadRow.id,
             stats: p.stats, // { batting, pitching, fielding }
+            season_year,
           };
         })
         .filter(Boolean);
