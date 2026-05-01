@@ -105,6 +105,36 @@ const TeamTotals = () => {
 
   const latest = byDate[byDate.length - 1]?.agg;
 
+  // Latest snapshot per player, plus the union of available stat keys per section
+  const { latestByPlayer, statKeys } = useMemo(() => {
+    const latestByPlayer: Record<string, Snapshot> = {};
+    for (const s of snapshots) {
+      const prev = latestByPlayer[s.player_id];
+      if (!prev || prev.upload_date < s.upload_date) latestByPlayer[s.player_id] = s;
+    }
+    const statKeys: Record<Section, string[]> = { batting: [], pitching: [], fielding: [] };
+    const sets: Record<Section, Set<string>> = { batting: new Set(), pitching: new Set(), fielding: new Set() };
+    (["batting","pitching","fielding"] as Section[]).forEach((sec) => {
+      for (const snap of Object.values(latestByPlayer)) {
+        const block = sectionOf(snap, sec);
+        for (const [k, v] of Object.entries(block)) {
+          if (typeof v === "number" && Number.isFinite(v)) sets[sec].add(k);
+        }
+      }
+      statKeys[sec] = Array.from(sets[sec]).sort();
+    });
+    return { latestByPlayer, statKeys };
+  }, [snapshots]);
+
+  const buildLeaderboard = (section: Section, stat: string) => {
+    const rows: { player_id: string; value: number }[] = [];
+    for (const [pid, snap] of Object.entries(latestByPlayer)) {
+      const v = sectionOf(snap, section)[stat];
+      if (typeof v === "number" && Number.isFinite(v)) rows.push({ player_id: pid, value: v });
+    }
+    return rows;
+  };
+
   if (loading) return <div className="container mx-auto px-6 py-10"><Skeleton className="h-96" /></div>;
 
   const renderTrend = (section: Section, keys: string[]) => {
