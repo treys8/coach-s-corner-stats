@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import { parseStatsCsv } from "@/lib/csvParser";
+import { parseStatsWorkbook } from "@/lib/csvParser";
 
 const UploadStats = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -16,14 +16,14 @@ const UploadStats = () => {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async () => {
-    if (!file) { toast.error("Choose a CSV file"); return; }
+    if (!file) { toast.error("Choose an Excel file"); return; }
     if (!uploadDate) { toast.error("Pick an upload date"); return; }
     setBusy(true);
     setResult(null);
     try {
-      const text = await file.text();
-      const { players } = parseStatsCsv(text);
-      if (players.length === 0) throw new Error("No players found in CSV");
+      const buf = await file.arrayBuffer();
+      const { players } = parseStatsWorkbook(buf);
+      if (players.length === 0) throw new Error("No players found in workbook");
 
       // 1. Upsert players (by first+last)
       const playerRows = players.map((p) => ({
@@ -89,7 +89,7 @@ const UploadStats = () => {
       <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Coach Tools</p>
       <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep mb-2">Upload Weekly Stats</h2>
       <p className="text-sm text-muted-foreground mb-8">
-        Upload the team's cumulative season-to-date CSV. Each upload is saved as a snapshot so trends build week over week.
+        Upload the team's cumulative season-to-date Excel workbook (.xlsx). Each upload is saved as a snapshot so trends build week over week.
       </p>
 
       <Card className="p-8 shadow-elevated">
@@ -100,14 +100,14 @@ const UploadStats = () => {
           </div>
 
           <div>
-            <Label htmlFor="csv-file" className="mb-1.5 block">CSV file</Label>
+            <Label htmlFor="csv-file" className="mb-1.5 block">Excel file (.xlsx)</Label>
             <div className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-sa-orange transition-colors bg-muted/20">
               <UploadIcon className="w-8 h-8 mx-auto mb-2 text-sa-blue" />
               <Input
                 ref={fileRef}
                 id="csv-file"
                 type="file"
-                accept=".csv"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                 className="max-w-sm mx-auto"
               />
@@ -141,12 +141,10 @@ const UploadStats = () => {
       <Card className="p-6 mt-6 bg-sa-grey-soft/40 border-dashed">
         <h3 className="font-display text-xl text-sa-blue-deep mb-2">Expected format</h3>
         <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-          <li>Row 1: category labels (Batting / Pitching / Fielding) — auto-detected to split sections</li>
-          <li>Row 2: column headers (Number, Last, First, GP, PA, AB, …)</li>
-          <li>Rows 3+: player rows</li>
-          <li>Last row: glossary — auto-skipped</li>
-          <li>Players are matched by first + last name across uploads</li>
-          <li>Duplicate stat names across sections (H, R, BB, SO, etc.) are kept separate</li>
+          <li>Three sheets named <strong>Hitting</strong>, <strong>Pitching</strong>, and <strong>Fielding</strong></li>
+          <li>Each sheet starts with a header row containing <code>Number, Last, First, …stat columns</code></li>
+          <li>Player rows follow; <strong>Totals</strong> and <strong>Glossary</strong> rows are auto-skipped</li>
+          <li>Players are matched by first + last name across weekly uploads</li>
         </ul>
       </Card>
     </div>

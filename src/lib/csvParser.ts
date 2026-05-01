@@ -1,4 +1,17 @@
-import Papa from "papaparse";
+// Stats parser. Despite the file name, this now reads the team's .xlsx workbook
+// with three sheets: "Hitting", "Pitching", "Fielding".
+//
+// Sheet layouts (per the coach-provided template):
+//   Hitting:  row 1 = column headers, rows 2..N = players, row(Totals) row = "Totals", glossary row last.
+//   Pitching: row 1 = section title cell ("Pitching"), row 2 = column headers, rows 3..N = players,
+//             a totals row (blank Last/First but with values), glossary row last.
+//   Fielding: same shape as Pitching.
+//
+// Players are matched across sheets by First+Last name. The "Totals" row and the
+// glossary row are skipped automatically (no last/first name on glossary; "Totals"
+// label or blank name on totals row).
+
+import * as XLSX from "xlsx";
 
 export interface SectionedStats {
   batting: Record<string, string | number>;
@@ -13,102 +26,122 @@ export interface ParsedPlayer {
   stats: SectionedStats;
 }
 
-export interface ParsedCsv {
+export interface ParsedWorkbook {
   battingHeaders: string[];
   pitchingHeaders: string[];
   fieldingHeaders: string[];
   players: ParsedPlayer[];
 }
 
-/**
- * Parses the team stats CSV.
- *
- * Row 1: category headers — empty cells except where a section starts ("Batting", "Pitching", "Fielding")
- * Row 2: column headers (Number, Last, First, GP, PA, AB, ...)
- * Rows 3..N-1: player data
- * Last row: glossary (skipped — no last/first name)
- *
- * Sections are detected from row 1 so we don't hardcode column indices.
- * Stats are stored split by section because column abbreviations are reused
- * across sections (e.g. H, R, BB, SO appear in both batting and pitching).
- */
-export function parseStatsCsv(text: string): ParsedCsv {
-  const result = Papa.parse<string[]>(text, { skipEmptyLines: true });
-  const rows = result.data as string[][];
-  if (rows.length < 3) throw new Error("CSV is too short — expected category row, header row, and data rows.");
+type Row = (string | number | null | undefined)[];
 
-  const categoryRow = rows[0];
-  const headerRow = rows[1].map((h) => (h || "").trim());
-  const dataRows = rows.slice(2);
+const parseCell = (raw: unknown): string | number => {
+  if (raw === null || raw === undefined) return "-";
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : "-";
+  const v = String(raw).trim();
+  if (v === "" || v === "-") return "-";
+  const n = Number(v);
+  return Number.isFinite(n) && v !== "" ? n : v;
+};
 
-  // Detect section ranges from category row.
-  const sections: { name: string; start: number; end: number }[] = [];
-  let cur: { name: string; start: number; end: number } | null = null;
-  for (let i = 0; i < categoryRow.length; i++) {
-    const label = (categoryRow[i] || "").trim();
-    if (label) {
-      if (cur) sections.push(cur);
-      cur = { name: label.toLowerCase(), start: i, end: i };
-    } else if (cur) {
-      cur.end = i;
+/** Find the header row in a sheet — first row whose first three cells are Number/Last/First. */
+const findHeaderRow = (rows: Row[]): number => {
+  for (let i = 0; i < Math.min(rows.length, 5); i++) {
+    const r = rows[i] ?? [];
+    const a = String(r[0] ?? "").trim().toLowerCase();
+    const b = String(r[1] ?? "").trim().toLowerCase();
+    const c = String(r[2] ?? "").trim().toLowerCase();
+    if (a === "number" && b === "last" && c === "first") return i;
+  }
+  return 0;
+};
+
+const isPlayerRow = (row: Row): boolean => {
+  const last = String(row[1] ?? "").trim();
+  const first = String(row[2] ?? "").trim();
+  if (!last && !first) return false;
+  if (last.toLowerCase() === "totals" || first.toLowerCase() === "totals") return false;
+  if (last.toLowerCase().includes("glossary")) return false;
+  return true;
+};
+
+/** Parse one sheet into a header list + map of "First|Last" => stat object. */
+const parseSheet = (
+  ws: XLSX.WorkSheet | undefined,
+  sheetName: string,
+): { headers: string[]; byKey: Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }> } => {
+  if (!ws) throw new Error(`Workbook is missing the "${sheetName}" sheet.`);
+  const rows = XLSX.utils.sheet_to_json<Row>(ws, { header: 1, blankrows: false, defval: null });
+  if (rows.length === 0) throw new Error(`"${sheetName}" sheet is empty.`);
+
+  const headerIdx = findHeaderRow(rows);
+  const headerRow = (rows[headerIdx] ?? []).map((h) => String(h ?? "").trim());
+  // Stat columns start at index 3 (after Number/Last/First)
+  const headers: string[] = [];
+  for (let i = 3; i < headerRow.length; i++) {
+    if (headerRow[i]) headers.push(headerRow[i]);
+  }
+
+  const byKey = new Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }>();
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || !isPlayerRow(row)) continue;
+    const number = String(row[0] ?? "").trim();
+    const last = String(row[1] ?? "").trim();
+    const first = String(row[2] ?? "").trim();
+    const stats: Record<string, string | number> = {};
+    for (let i = 3; i < headerRow.length; i++) {
+      const key = headerRow[i];
+      if (!key) continue;
+      stats[key] = parseCell(row[i]);
     }
+    byKey.set(`${first}|${last}`, { number, first, last, stats });
   }
-  if (cur) sections.push(cur);
+  return { headers, byKey };
+};
 
-  const findSection = (name: string) => sections.find((s) => s.name.startsWith(name));
-  const batSec = findSection("batting");
-  const pitSec = findSection("pitching");
-  const fldSec = findSection("fielding");
+/** Parse the team workbook (xlsx) buffer. */
+export function parseStatsWorkbook(data: ArrayBuffer): ParsedWorkbook {
+  const wb = XLSX.read(data, { type: "array" });
 
-  if (!batSec || !pitSec || !fldSec) {
-    throw new Error("CSV is missing one of the Batting / Pitching / Fielding section headers in row 1.");
-  }
-
-  const sliceHeaders = (s: { start: number; end: number }) =>
-    headerRow.slice(s.start, s.end + 1).filter((h) => h !== "");
-
-  const battingHeaders = sliceHeaders(batSec);
-  const pitchingHeaders = sliceHeaders(pitSec);
-  const fieldingHeaders = sliceHeaders(fldSec);
-
-  const parseCell = (raw: string): string | number => {
-    const v = (raw ?? "").toString().trim();
-    if (v === "" || v === "-") return "-";
-    const n = Number(v);
-    return Number.isFinite(n) ? n : v;
+  // Tolerant sheet lookup (case-insensitive).
+  const findSheet = (name: string): XLSX.WorkSheet | undefined => {
+    const match = wb.SheetNames.find((n) => n.trim().toLowerCase() === name.toLowerCase());
+    return match ? wb.Sheets[match] : undefined;
   };
 
+  const hit = parseSheet(findSheet("Hitting"), "Hitting");
+  const pit = parseSheet(findSheet("Pitching"), "Pitching");
+  const fld = parseSheet(findSheet("Fielding"), "Fielding");
+
+  // Union of all player keys across the three sheets.
+  const allKeys = new Set<string>([...hit.byKey.keys(), ...pit.byKey.keys(), ...fld.byKey.keys()]);
+
   const players: ParsedPlayer[] = [];
-  for (const row of dataRows) {
-    const number = (row[0] || "").trim();
-    const last = (row[1] || "").trim();
-    const first = (row[2] || "").trim();
-    if (!last || !first) continue; // glossary / blank rows
-    if (last.toLowerCase().includes("glossary")) continue;
-
-    const sectionStats = (s: { start: number; end: number }) => {
-      const out: Record<string, string | number> = {};
-      for (let i = s.start; i <= s.end; i++) {
-        const key = headerRow[i];
-        if (!key) continue;
-        out[key] = parseCell(row[i] ?? "");
-      }
-      return out;
-    };
-
+  for (const key of allKeys) {
+    const meta = hit.byKey.get(key) ?? pit.byKey.get(key) ?? fld.byKey.get(key);
+    if (!meta) continue;
     players.push({
-      number,
-      last,
-      first,
+      number: meta.number,
+      first: meta.first,
+      last: meta.last,
       stats: {
-        batting: sectionStats(batSec),
-        pitching: sectionStats(pitSec),
-        fielding: sectionStats(fldSec),
+        batting: hit.byKey.get(key)?.stats ?? {},
+        pitching: pit.byKey.get(key)?.stats ?? {},
+        fielding: fld.byKey.get(key)?.stats ?? {},
       },
     });
   }
 
-  return { battingHeaders, pitchingHeaders, fieldingHeaders, players };
+  // Stable sort by last name then first.
+  players.sort((a, b) => (a.last + a.first).localeCompare(b.last + b.first));
+
+  return {
+    battingHeaders: hit.headers,
+    pitchingHeaders: pit.headers,
+    fieldingHeaders: fld.headers,
+    players,
+  };
 }
 
 /** Format a stat value for display. */
@@ -116,7 +149,6 @@ export function formatStat(value: unknown): string {
   if (value === null || value === undefined || value === "" || value === "-") return "—";
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return "—";
-    // Sub-1 values rendered as rate stats (.300 style)
     if (Math.abs(value) > 0 && Math.abs(value) < 1) return value.toFixed(3).replace(/^0\./, ".");
     if (Number.isInteger(value)) return value.toString();
     return value.toFixed(2);
