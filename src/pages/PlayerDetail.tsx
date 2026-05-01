@@ -78,18 +78,24 @@ const PlayerDetail = () => {
     const visible = expanded ? allKeys : keyStats.filter((k) => k in latest);
     return (
       <>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
           {visible.map((k) => (
-            <div key={k} className="bg-muted/40 rounded-md p-3 border border-border">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+            <div
+              key={k}
+              className="group relative bg-muted/30 hover:bg-muted/60 rounded-md px-2.5 py-2 border border-border/70 transition-colors"
+            >
+              <div className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-sa-orange/0 group-hover:bg-sa-orange transition-colors" />
+              <div className="text-[9px] uppercase tracking-wider text-muted-foreground leading-none mb-1">
                 <StatLabel abbr={k} />
               </div>
-              <div className="font-mono-stat text-xl font-bold text-sa-blue-deep">{formatStat(latest[k])}</div>
+              <div className="font-mono-stat text-base font-bold text-sa-blue-deep leading-tight">
+                {formatStat(latest[k])}
+              </div>
             </div>
           ))}
         </div>
         {allKeys.length > visible.length || expanded ? (
-          <Button variant="outline" size="sm" className="mt-4" onClick={() => setShowAll((s) => ({ ...s, [section]: !s[section] }))}>
+          <Button variant="ghost" size="sm" className="mt-4 text-sa-blue hover:text-sa-orange" onClick={() => setShowAll((s) => ({ ...s, [section]: !s[section] }))}>
             {expanded ? <><ChevronUp className="w-4 h-4 mr-1" /> Show key stats</> : <><ChevronDown className="w-4 h-4 mr-1" /> Show all {allKeys.length} stats</>}
           </Button>
         ) : null}
