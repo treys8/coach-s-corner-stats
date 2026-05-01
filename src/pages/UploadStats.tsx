@@ -52,7 +52,7 @@ const UploadStats = () => {
         .single();
       if (upErr) throw upErr;
 
-      // 4. Upsert snapshots
+      // 4. Upsert snapshots — stats stored split by section
       const snapshots = players
         .map((p) => {
           const pid = idByName.get(`${p.first}|${p.last}`);
@@ -61,7 +61,7 @@ const UploadStats = () => {
             player_id: pid,
             upload_date: uploadDate,
             upload_id: uploadRow.id,
-            stats: p.stats,
+            stats: p.stats, // { batting, pitching, fielding }
           };
         })
         .filter(Boolean);
@@ -141,11 +141,12 @@ const UploadStats = () => {
       <Card className="p-6 mt-6 bg-sa-grey-soft/40 border-dashed">
         <h3 className="font-display text-xl text-sa-blue-deep mb-2">Expected format</h3>
         <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-          <li>Row 1: category labels (Batting / Pitching / Fielding) — auto-skipped</li>
+          <li>Row 1: category labels (Batting / Pitching / Fielding) — auto-detected to split sections</li>
           <li>Row 2: column headers (Number, Last, First, GP, PA, AB, …)</li>
           <li>Rows 3+: player rows</li>
           <li>Last row: glossary — auto-skipped</li>
           <li>Players are matched by first + last name across uploads</li>
+          <li>Duplicate stat names across sections (H, R, BB, SO, etc.) are kept separate</li>
         </ul>
       </Card>
     </div>
