@@ -78,17 +78,16 @@ const PlayerDetail = () => {
     const visible = expanded ? allKeys : keyStats.filter((k) => k in latest);
     return (
       <>
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-1.5">
           {visible.map((k) => (
             <div
               key={k}
-              className="group relative bg-muted/30 hover:bg-muted/60 rounded-md px-2.5 py-2 border border-border/70 transition-colors"
+              className="group relative bg-muted/30 hover:bg-muted/60 rounded-md px-2 py-1.5 border border-border/70 transition-colors flex items-baseline justify-between gap-2"
             >
-              <div className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-sa-orange/0 group-hover:bg-sa-orange transition-colors" />
-              <div className="text-[9px] uppercase tracking-wider text-muted-foreground leading-none mb-1">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-none">
                 <StatLabel abbr={k} />
               </div>
-              <div className="font-mono-stat text-base font-bold text-sa-blue-deep leading-tight">
+              <div className="font-mono-stat text-sm font-bold text-sa-blue-deep leading-none">
                 {formatStat(latest[k])}
               </div>
             </div>
