@@ -47,6 +47,14 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        sa: {
+          orange: "hsl(var(--sa-orange))",
+          "orange-glow": "hsl(var(--sa-orange-glow))",
+          blue: "hsl(var(--sa-blue))",
+          "blue-deep": "hsl(var(--sa-blue-deep))",
+          grey: "hsl(var(--sa-grey))",
+          "grey-soft": "hsl(var(--sa-grey-soft))",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
@@ -80,6 +88,11 @@ export default {
             height: "0",
           },
         },
+      },
+      fontFamily: {
+        display: ['"Bebas Neue"', 'Inter', 'sans-serif'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
