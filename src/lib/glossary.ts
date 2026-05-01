@@ -164,9 +164,3 @@ export const GLOSSARY: Record<string, string> = {
 export const KEY_BATTING = ["GP", "PA", "AB", "AVG", "OBP", "SLG", "OPS", "H", "HR", "RBI", "R", "BB", "SO", "SB"];
 export const KEY_PITCHING = ["IP", "W", "L", "SV", "ERA", "WHIP", "SO", "BB", "H", "BAA", "K/BB", "BF"];
 export const KEY_FIELDING = ["TC", "PO", "A", "E", "FPCT", "DP"];
-
-// Column ranges per user spec (1-indexed letters from CSV)
-// D-BB = batting (cols 4..54), BC-EY = pitching (cols 55..155), EZ-FY = fielding (cols 156..181)
-export const BATTING_RANGE: [number, number] = [3, 53];   // 0-indexed inclusive
-export const PITCHING_RANGE: [number, number] = [54, 154];
-export const FIELDING_RANGE: [number, number] = [155, 180];

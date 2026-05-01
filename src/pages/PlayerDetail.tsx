@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
@@ -8,23 +8,37 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, ChevronDown, ChevronUp } from "lucide-react";
 import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
-import { KEY_BATTING, KEY_PITCHING, KEY_FIELDING, BATTING_RANGE, PITCHING_RANGE, FIELDING_RANGE } from "@/lib/glossary";
+import { KEY_BATTING, KEY_PITCHING, KEY_FIELDING } from "@/lib/glossary";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 interface Player { id: string; jersey_number: string; first_name: string; last_name: string }
-interface Snapshot { upload_date: string; stats: Record<string, string | number> }
+type SectionStats = Record<string, string | number>;
+interface Snapshot {
+  upload_date: string;
+  stats: { batting?: SectionStats; pitching?: SectionStats; fielding?: SectionStats } | SectionStats;
+}
 
-const TREND_BATTING = ["AVG", "OBP", "SLG", "OPS", "H", "HR", "RBI"];
-const TREND_PITCHING = ["ERA", "WHIP", "SO", "BB", "IP"];
-const TREND_FIELDING = ["FPCT", "TC", "E"];
+type Section = "batting" | "pitching" | "fielding";
+
+const TREND: Record<Section, string[]> = {
+  batting: ["AVG", "OBP", "SLG", "OPS", "H", "HR", "RBI"],
+  pitching: ["ERA", "WHIP", "SO", "BB", "IP"],
+  fielding: ["FPCT", "TC", "E"],
+};
+
+/** Returns the section block from a snapshot, regardless of legacy or new shape. */
+const sectionOf = (snap: Snapshot, section: Section): SectionStats => {
+  const s = snap.stats as { batting?: SectionStats; pitching?: SectionStats; fielding?: SectionStats };
+  if (s && (s.batting || s.pitching || s.fielding)) return s[section] ?? {};
+  return {};
+};
 
 const PlayerDetail = () => {
   const { id } = useParams<{ id: string }>();
   const [player, setPlayer] = useState<Player | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [headers, setHeaders] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAll, setShowAll] = useState({ bat: false, pit: false, fld: false });
+  const [showAll, setShowAll] = useState({ batting: false, pitching: false, fielding: false });
 
   useEffect(() => {
     if (!id) return;
@@ -34,30 +48,13 @@ const PlayerDetail = () => {
         supabase.from("stat_snapshots").select("upload_date, stats").eq("player_id", id).order("upload_date", { ascending: true }),
       ]);
       setPlayer(pl as Player);
-      const list = (snaps ?? []) as unknown as Snapshot[];
-      setSnapshots(list);
-      // derive header order from latest snapshot
-      const latest = list[list.length - 1];
-      if (latest) setHeaders(Object.keys(latest.stats));
+      setSnapshots((snaps ?? []) as unknown as Snapshot[]);
       setLoading(false);
     };
     load();
   }, [id]);
 
-  const latest = snapshots[snapshots.length - 1]?.stats ?? {};
-
-  const battingHeaders = useMemo(
-    () => headers.slice(Math.max(0, BATTING_RANGE[0] - 3), Math.max(0, BATTING_RANGE[1] - 2)),
-    [headers]
-  );
-  const pitchingHeaders = useMemo(
-    () => headers.slice(Math.max(0, PITCHING_RANGE[0] - 3), Math.max(0, PITCHING_RANGE[1] - 2)),
-    [headers]
-  );
-  const fieldingHeaders = useMemo(
-    () => headers.slice(Math.max(0, FIELDING_RANGE[0] - 3), Math.max(0, FIELDING_RANGE[1] - 2)),
-    [headers]
-  );
+  const latestSnap = snapshots[snapshots.length - 1];
 
   if (loading) {
     return <div className="container mx-auto px-6 py-10"><Skeleton className="h-32 mb-6" /><Skeleton className="h-96" /></div>;
@@ -71,9 +68,14 @@ const PlayerDetail = () => {
     );
   }
 
-  const renderStatGrid = (keys: string[], all: string[], expanded: boolean, toggle: () => void) => {
-    const visible = expanded ? all : keys.filter((k) => all.includes(k));
-    if (visible.length === 0) return <p className="text-sm text-muted-foreground">No stats available.</p>;
+  const renderStatGrid = (section: Section, keyStats: string[]) => {
+    const latest = latestSnap ? sectionOf(latestSnap, section) : {};
+    const allKeys = Object.keys(latest);
+    if (allKeys.length === 0) {
+      return <p className="text-sm text-muted-foreground italic">No {section} stats yet — upload a CSV to populate.</p>;
+    }
+    const expanded = showAll[section];
+    const visible = expanded ? allKeys : keyStats.filter((k) => k in latest);
     return (
       <>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
@@ -86,23 +88,27 @@ const PlayerDetail = () => {
             </div>
           ))}
         </div>
-        {all.length > keys.length && (
-          <Button variant="outline" size="sm" className="mt-4" onClick={toggle}>
-            {expanded ? <><ChevronUp className="w-4 h-4 mr-1" /> Show key stats</> : <><ChevronDown className="w-4 h-4 mr-1" /> Show all {all.length} stats</>}
+        {allKeys.length > visible.length || expanded ? (
+          <Button variant="outline" size="sm" className="mt-4" onClick={() => setShowAll((s) => ({ ...s, [section]: !s[section] }))}>
+            {expanded ? <><ChevronUp className="w-4 h-4 mr-1" /> Show key stats</> : <><ChevronDown className="w-4 h-4 mr-1" /> Show all {allKeys.length} stats</>}
           </Button>
-        )}
+        ) : null}
       </>
     );
   };
 
-  const renderTrend = (keys: string[]) => {
+  const renderTrend = (section: Section) => {
     if (snapshots.length < 2) {
       return <p className="text-sm text-muted-foreground italic">Trends will appear after the second weekly upload.</p>;
     }
+    const keys = TREND[section];
     const data = snapshots.map((s) => {
-      const row: Record<string, string | number> = { date: new Date(s.upload_date).toLocaleDateString(undefined, { month: "short", day: "numeric" }) };
+      const block = sectionOf(s, section);
+      const row: Record<string, string | number> = {
+        date: new Date(s.upload_date).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      };
       keys.forEach((k) => {
-        const v = s.stats[k];
+        const v = block[k];
         row[k] = typeof v === "number" ? v : Number(v) || 0;
       });
       return row;
@@ -139,7 +145,7 @@ const PlayerDetail = () => {
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold mb-1">#{player.jersey_number}</p>
           <h2 className="font-display text-6xl md:text-7xl">{player.first_name} {player.last_name}</h2>
           <p className="text-white/70 mt-2 text-sm">
-            {snapshots.length} weekly snapshot{snapshots.length === 1 ? "" : "s"} · latest {snapshots[snapshots.length - 1] ? new Date(snapshots[snapshots.length - 1].upload_date).toLocaleDateString() : "—"}
+            {snapshots.length} weekly snapshot{snapshots.length === 1 ? "" : "s"} · latest {latestSnap ? new Date(latestSnap.upload_date).toLocaleDateString() : "—"}
           </p>
         </div>
       </div>
@@ -151,38 +157,21 @@ const PlayerDetail = () => {
           <TabsTrigger value="fielding">Fielding</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="batting" className="space-y-6 mt-6">
-          <Card className="p-6">
-            <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Stats</h3>
-            {renderStatGrid(KEY_BATTING, battingHeaders, showAll.bat, () => setShowAll((s) => ({ ...s, bat: !s.bat })))}
-          </Card>
-          <Card className="p-6">
-            <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
-            {renderTrend(TREND_BATTING)}
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="pitching" className="space-y-6 mt-6">
-          <Card className="p-6">
-            <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Stats</h3>
-            {renderStatGrid(KEY_PITCHING, pitchingHeaders, showAll.pit, () => setShowAll((s) => ({ ...s, pit: !s.pit })))}
-          </Card>
-          <Card className="p-6">
-            <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
-            {renderTrend(TREND_PITCHING)}
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="fielding" className="space-y-6 mt-6">
-          <Card className="p-6">
-            <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Stats</h3>
-            {renderStatGrid(KEY_FIELDING, fieldingHeaders, showAll.fld, () => setShowAll((s) => ({ ...s, fld: !s.fld })))}
-          </Card>
-          <Card className="p-6">
-            <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
-            {renderTrend(TREND_FIELDING)}
-          </Card>
-        </TabsContent>
+        {(["batting", "pitching", "fielding"] as Section[]).map((sec) => {
+          const keyStats = sec === "batting" ? KEY_BATTING : sec === "pitching" ? KEY_PITCHING : KEY_FIELDING;
+          return (
+            <TabsContent key={sec} value={sec} className="space-y-6 mt-6">
+              <Card className="p-6">
+                <h3 className="font-display text-2xl text-sa-blue-deep mb-4 capitalize">{sec} Stats</h3>
+                {renderStatGrid(sec, keyStats)}
+              </Card>
+              <Card className="p-6">
+                <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
+                {renderTrend(sec)}
+              </Card>
+            </TabsContent>
+          );
+        })}
       </Tabs>
     </div>
   );
