@@ -6,18 +6,23 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Lock } from "lucide-react";
 import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
 import { GLOSSARY } from "@/lib/glossary";
+import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 type SectionStats = Record<string, string | number>;
 interface Snapshot {
   player_id: string;
   upload_date: string;
+  season_year: number;
   stats: { batting?: SectionStats; pitching?: SectionStats; fielding?: SectionStats };
 }
+
+const MIN_AB = 5;
+const MIN_IP = 3;
 
 type Section = "batting" | "pitching" | "fielding";
 
@@ -43,9 +48,10 @@ const KEY_DISPLAY: Record<Section, string[]> = {
 const sectionOf = (snap: Snapshot, section: Section): SectionStats => snap.stats?.[section] ?? {};
 
 const TeamTotals = () => {
-  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [players, setPlayers] = useState<Record<string, { id: string; first_name: string; last_name: string; jersey_number: string }>>({});
+  const [allSnapshots, setAllSnapshots] = useState<Snapshot[]>([]);
+  const [allPlayers, setAllPlayers] = useState<Record<string, { id: string; first_name: string; last_name: string; jersey_number: string; season_year: number }>>({});
   const [loading, setLoading] = useState(true);
+  const [season, setSeason] = useState<number>(currentSeasonYear());
 
   // Leaderboard state per section
   const [leaderStat, setLeaderStat] = useState<Record<Section, string>>({ batting: "AVG", pitching: "ERA", fielding: "FPCT" });
@@ -54,17 +60,32 @@ const TeamTotals = () => {
   useEffect(() => {
     const load = async () => {
       const [{ data: snaps }, { data: pls }] = await Promise.all([
-        supabase.from("stat_snapshots").select("player_id, upload_date, stats").order("upload_date", { ascending: true }),
-        supabase.from("players").select("id, first_name, last_name, jersey_number"),
+        supabase.from("stat_snapshots").select("player_id, upload_date, season_year, stats").order("upload_date", { ascending: true }),
+        supabase.from("players").select("id, first_name, last_name, jersey_number, season_year"),
       ]);
-      setSnapshots((snaps ?? []) as unknown as Snapshot[]);
-      const pmap: Record<string, { id: string; first_name: string; last_name: string; jersey_number: string }> = {};
-      (pls ?? []).forEach((p: { id: string; first_name: string; last_name: string; jersey_number: string }) => { pmap[p.id] = p; });
-      setPlayers(pmap);
+      setAllSnapshots((snaps ?? []) as unknown as Snapshot[]);
+      const pmap: Record<string, { id: string; first_name: string; last_name: string; jersey_number: string; season_year: number }> = {};
+      (pls ?? []).forEach((p) => { pmap[p.id] = p; });
+      setAllPlayers(pmap);
       setLoading(false);
     };
     load();
   }, []);
+
+  const seasons = useMemo(() => {
+    const yrs = new Set<number>([currentSeasonYear()]);
+    allSnapshots.forEach((s) => yrs.add(s.season_year));
+    Object.values(allPlayers).forEach((p) => yrs.add(p.season_year));
+    return Array.from(yrs).sort((a, b) => b - a);
+  }, [allSnapshots, allPlayers]);
+
+  const closed = isSeasonClosed(season);
+  const snapshots = useMemo(() => allSnapshots.filter((s) => s.season_year === season), [allSnapshots, season]);
+  const players = useMemo(() => {
+    const out: typeof allPlayers = {};
+    Object.entries(allPlayers).forEach(([k, v]) => { if (v.season_year === season) out[k] = v; });
+    return out;
+  }, [allPlayers, season]);
 
   // Aggregate per upload_date per section
   const byDate = useMemo(() => {
