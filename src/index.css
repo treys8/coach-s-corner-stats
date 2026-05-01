@@ -1,105 +1,121 @@
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
+/* Starkville Academy Varsity Volunteers — design system
+   Official school colors: orange #FF4A00, blue #0021A5, grey #A7A8AA
+   All colors HSL.
 */
 
 @layer base {
   :root {
+    /* Brand */
+    --sa-orange: 16 100% 50%;        /* #FF4A00 */
+    --sa-orange-glow: 18 100% 58%;
+    --sa-blue: 224 100% 32%;         /* #0021A5 */
+    --sa-blue-deep: 224 100% 18%;
+    --sa-grey: 220 2% 66%;           /* #A7A8AA */
+    --sa-grey-soft: 220 10% 94%;
+
+    /* Semantic tokens */
     --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --foreground: 224 60% 12%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 224 60% 12%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover: 224 100% 18%;
+    --popover-foreground: 0 0% 98%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 224 100% 32%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 16 100% 50%;
+    --secondary-foreground: 0 0% 100%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 10% 40%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 16 100% 50%;
+    --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 84% 55%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 220 14% 88%;
+    --input: 220 14% 90%;
+    --ring: 224 100% 32%;
 
-    --radius: 0.5rem;
+    --radius: 0.625rem;
+
+    /* Gradients */
+    --gradient-hero: linear-gradient(135deg, hsl(var(--sa-blue-deep)) 0%, hsl(var(--sa-blue)) 60%, hsl(var(--sa-orange)) 140%);
+    --gradient-orange: linear-gradient(135deg, hsl(var(--sa-orange)) 0%, hsl(var(--sa-orange-glow)) 100%);
+    --gradient-blue: linear-gradient(135deg, hsl(var(--sa-blue-deep)) 0%, hsl(var(--sa-blue)) 100%);
+
+    /* Shadows */
+    --shadow-card: 0 1px 2px hsl(224 100% 18% / 0.06), 0 4px 16px hsl(224 100% 18% / 0.06);
+    --shadow-elevated: 0 8px 32px hsl(224 100% 18% / 0.12);
+    --shadow-orange: 0 8px 24px hsl(16 100% 50% / 0.28);
 
     --sidebar-background: 0 0% 98%;
-
     --sidebar-foreground: 240 5.3% 26.1%;
-
     --sidebar-primary: 240 5.9% 10%;
-
     --sidebar-primary-foreground: 0 0% 98%;
-
     --sidebar-accent: 240 4.8% 95.9%;
-
     --sidebar-accent-foreground: 240 5.9% 10%;
-
     --sidebar-border: 220 13% 91%;
-
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --background: 224 60% 6%;
+    --foreground: 0 0% 98%;
+    --card: 224 50% 9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 224 50% 9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 16 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 224 100% 32%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 224 30% 14%;
+    --muted-foreground: 220 10% 70%;
+    --accent: 16 100% 50%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 224 30% 18%;
+    --input: 224 30% 18%;
+    --ring: 16 100% 50%;
   }
 }
 
 @layer base {
-  * {
-    @apply border-border;
-  }
-
+  * { @apply border-border; }
   body {
     @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-feature-settings: "cv02","cv03","cv04","cv11";
   }
+  h1, h2, h3, .font-display {
+    font-family: 'Bebas Neue', 'Inter', sans-serif;
+    letter-spacing: 0.01em;
+  }
+  .font-mono-stat {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .bg-gradient-hero { background: var(--gradient-hero); }
+  .bg-gradient-orange { background: var(--gradient-orange); }
+  .bg-gradient-blue { background: var(--gradient-blue); }
+  .shadow-card { box-shadow: var(--shadow-card); }
+  .shadow-elevated { box-shadow: var(--shadow-elevated); }
+  .shadow-orange { box-shadow: var(--shadow-orange); }
+  .text-balance { text-wrap: balance; }
 }
