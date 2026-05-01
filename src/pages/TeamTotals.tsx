@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
+import { GLOSSARY } from "@/lib/glossary";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 type SectionStats = Record<string, string | number>;
@@ -39,12 +44,23 @@ const sectionOf = (snap: Snapshot, section: Section): SectionStats => snap.stats
 
 const TeamTotals = () => {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [players, setPlayers] = useState<Record<string, { id: string; first_name: string; last_name: string; jersey_number: string }>>({});
   const [loading, setLoading] = useState(true);
+
+  // Leaderboard state per section
+  const [leaderStat, setLeaderStat] = useState<Record<Section, string>>({ batting: "AVG", pitching: "ERA", fielding: "FPCT" });
+  const [leaderDir, setLeaderDir] = useState<Record<Section, "desc" | "asc">>({ batting: "desc", pitching: "asc", fielding: "desc" });
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase.from("stat_snapshots").select("player_id, upload_date, stats").order("upload_date", { ascending: true });
-      setSnapshots((data ?? []) as unknown as Snapshot[]);
+      const [{ data: snaps }, { data: pls }] = await Promise.all([
+        supabase.from("stat_snapshots").select("player_id, upload_date, stats").order("upload_date", { ascending: true }),
+        supabase.from("players").select("id, first_name, last_name, jersey_number"),
+      ]);
+      setSnapshots((snaps ?? []) as unknown as Snapshot[]);
+      const pmap: Record<string, { id: string; first_name: string; last_name: string; jersey_number: string }> = {};
+      (pls ?? []).forEach((p: { id: string; first_name: string; last_name: string; jersey_number: string }) => { pmap[p.id] = p; });
+      setPlayers(pmap);
       setLoading(false);
     };
     load();
@@ -88,6 +104,37 @@ const TeamTotals = () => {
   }, [snapshots]);
 
   const latest = byDate[byDate.length - 1]?.agg;
+  const latestDate = byDate[byDate.length - 1]?.date;
+
+  // Latest snapshot per player, plus the union of available stat keys per section
+  const { latestByPlayer, statKeys } = useMemo(() => {
+    const latestByPlayer: Record<string, Snapshot> = {};
+    for (const s of snapshots) {
+      const prev = latestByPlayer[s.player_id];
+      if (!prev || prev.upload_date < s.upload_date) latestByPlayer[s.player_id] = s;
+    }
+    const statKeys: Record<Section, string[]> = { batting: [], pitching: [], fielding: [] };
+    const sets: Record<Section, Set<string>> = { batting: new Set(), pitching: new Set(), fielding: new Set() };
+    (["batting","pitching","fielding"] as Section[]).forEach((sec) => {
+      for (const snap of Object.values(latestByPlayer)) {
+        const block = sectionOf(snap, sec);
+        for (const [k, v] of Object.entries(block)) {
+          if (typeof v === "number" && Number.isFinite(v)) sets[sec].add(k);
+        }
+      }
+      statKeys[sec] = Array.from(sets[sec]).sort();
+    });
+    return { latestByPlayer, statKeys };
+  }, [snapshots]);
+
+  const buildLeaderboard = (section: Section, stat: string) => {
+    const rows: { player_id: string; value: number }[] = [];
+    for (const [pid, snap] of Object.entries(latestByPlayer)) {
+      const v = sectionOf(snap, section)[stat];
+      if (typeof v === "number" && Number.isFinite(v)) rows.push({ player_id: pid, value: v });
+    }
+    return rows;
+  };
 
   if (loading) return <div className="container mx-auto px-6 py-10"><Skeleton className="h-96" /></div>;
 
@@ -140,29 +187,99 @@ const TeamTotals = () => {
             <TabsTrigger value="fielding">Fielding</TabsTrigger>
           </TabsList>
 
-          {(["batting","pitching","fielding"] as Section[]).map((sec) => (
+          {(["batting","pitching","fielding"] as Section[]).map((sec) => {
+            const stat = leaderStat[sec];
+            const dir = leaderDir[sec];
+            const available = statKeys[sec];
+            const activeStat = available.includes(stat) ? stat : (available[0] ?? "");
+            const board = activeStat ? buildLeaderboard(sec, activeStat) : [];
+            board.sort((a, b) => dir === "desc" ? b.value - a.value : a.value - b.value);
+            return (
             <TabsContent key={sec} value={sec} className="space-y-6 mt-6">
               <Card className="p-6">
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4 capitalize">{sec} Totals</h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-1.5">
                   {KEY_DISPLAY[sec].map((k) => (
-                    <div key={k} className="bg-muted/40 rounded-md p-3 border border-border">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                    <div key={k} className="group relative bg-muted/30 hover:bg-muted/60 rounded-md px-2 py-1.5 border border-border/70 transition-colors flex items-baseline justify-between gap-2">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-none">
                         <StatLabel abbr={k} />
                       </div>
-                      <div className="font-mono-stat text-xl font-bold text-sa-blue-deep">
+                      <div className="font-mono-stat text-sm font-bold text-sa-blue-deep leading-none">
                         {formatStat(latest?.[sec]?.[k])}
                       </div>
                     </div>
                   ))}
                 </div>
               </Card>
+
+              <Card className="p-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <h3 className="font-display text-2xl text-sa-blue-deep">Stat Leaders</h3>
+                  <div className="flex items-center gap-2">
+                    <Select value={activeStat} onValueChange={(v) => setLeaderStat((s) => ({ ...s, [sec]: v }))}>
+                      <SelectTrigger className="w-[180px] h-9">
+                        <SelectValue placeholder="Pick a stat" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-72">
+                        {available.map((k) => (
+                          <SelectItem key={k} value={k}>
+                            <span className="font-mono-stat text-xs mr-2">{k}</span>
+                            <span className="text-muted-foreground text-xs">{GLOSSARY[k] ?? ""}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      onClick={() => setLeaderDir((d) => ({ ...d, [sec]: d[sec] === "desc" ? "asc" : "desc" }))}
+                    >
+                      {dir === "desc" ? <ArrowDown className="w-4 h-4 mr-1" /> : <ArrowUp className="w-4 h-4 mr-1" />}
+                      {dir === "desc" ? "High → Low" : "Low → High"}
+                    </Button>
+                  </div>
+                </div>
+
+                {board.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">No data for this stat yet.</p>
+                ) : (
+                  <div className="divide-y divide-border border border-border rounded-md overflow-hidden">
+                    {board.map((row, i) => {
+                      const p = players[row.player_id];
+                      const name = p ? `${p.first_name} ${p.last_name}` : "Unknown";
+                      const isTop = i === 0;
+                      return (
+                        <Link
+                          to={p ? `/player/${p.id}` : "#"}
+                          key={row.player_id}
+                          className={`flex items-center gap-3 px-3 py-2 hover:bg-muted/60 transition-colors ${isTop ? "bg-sa-orange/5" : ""}`}
+                        >
+                          <span className={`font-mono-stat text-xs w-6 text-center font-bold ${isTop ? "text-sa-orange" : "text-muted-foreground"}`}>
+                            {i + 1}
+                          </span>
+                          <span className="font-mono-stat text-xs text-sa-blue w-8">#{p?.jersey_number ?? "—"}</span>
+                          <span className="flex-1 text-sm font-medium text-sa-blue-deep truncate">{name}</span>
+                          <span className="font-mono-stat text-base font-bold text-sa-blue-deep">{formatStat(row.value)}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {latestDate && (
+                  <p className="text-[11px] text-muted-foreground mt-3">
+                    Based on each player's latest snapshot · most recent {new Date(latestDate).toLocaleDateString()}
+                  </p>
+                )}
+              </Card>
+
               <Card className="p-6">
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
                 {renderTrend(sec, sec === "batting" ? ["H","HR","RBI","R"] : sec === "pitching" ? ["SO","BB","H","ER"] : ["TC","PO","A","E"])}
               </Card>
             </TabsContent>
-          ))}
+            );
+          })}
         </Tabs>
       )}
     </div>
