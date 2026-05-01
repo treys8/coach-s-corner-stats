@@ -328,9 +328,10 @@ const TeamTotals = () => {
                     })}
                   </div>
                 )}
-                {latestDate && (
+                {(latestDate || qualifierNote(sec, activeStat)) && (
                   <p className="text-[11px] text-muted-foreground mt-3">
-                    Based on each player's latest snapshot · most recent {new Date(latestDate).toLocaleDateString()}
+                    {qualifierNote(sec, activeStat) && <span className="font-semibold text-sa-orange">{qualifierNote(sec, activeStat)} · </span>}
+                    {latestDate && <>Based on each player's latest snapshot · most recent {new Date(latestDate).toLocaleDateString()}</>}
                   </p>
                 )}
               </Card>
