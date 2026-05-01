@@ -44,12 +44,23 @@ const sectionOf = (snap: Snapshot, section: Section): SectionStats => snap.stats
 
 const TeamTotals = () => {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [players, setPlayers] = useState<Record<string, { id: string; first_name: string; last_name: string; jersey_number: string }>>({});
   const [loading, setLoading] = useState(true);
+
+  // Leaderboard state per section
+  const [leaderStat, setLeaderStat] = useState<Record<Section, string>>({ batting: "AVG", pitching: "ERA", fielding: "FPCT" });
+  const [leaderDir, setLeaderDir] = useState<Record<Section, "desc" | "asc">>({ batting: "desc", pitching: "asc", fielding: "desc" });
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase.from("stat_snapshots").select("player_id, upload_date, stats").order("upload_date", { ascending: true });
-      setSnapshots((data ?? []) as unknown as Snapshot[]);
+      const [{ data: snaps }, { data: pls }] = await Promise.all([
+        supabase.from("stat_snapshots").select("player_id, upload_date, stats").order("upload_date", { ascending: true }),
+        supabase.from("players").select("id, first_name, last_name, jersey_number"),
+      ]);
+      setSnapshots((snaps ?? []) as unknown as Snapshot[]);
+      const pmap: Record<string, { id: string; first_name: string; last_name: string; jersey_number: string }> = {};
+      (pls ?? []).forEach((p: { id: string; first_name: string; last_name: string; jersey_number: string }) => { pmap[p.id] = p; });
+      setPlayers(pmap);
       setLoading(false);
     };
     load();
