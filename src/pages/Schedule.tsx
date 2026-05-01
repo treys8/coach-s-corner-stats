@@ -138,11 +138,25 @@ const Schedule = () => {
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Schedule</p>
           <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">Season Slate</h2>
+          {closed && (
+            <p className="text-xs uppercase tracking-wider text-sa-orange font-bold mt-2">
+              {seasonLabel(season)} · Archived (closed May 31)
+            </p>
+          )}
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange">
-              <Plus className="w-4 h-4 mr-1" /> Add Game
+        <div className="flex items-center gap-2">
+          <Select value={String(season)} onValueChange={(v) => setSeason(Number(v))}>
+            <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {seasons.map((y) => (
+                <SelectItem key={y} value={String(y)}>{seasonLabel(y)}{isSeasonClosed(y) ? " (closed)" : ""}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button disabled={closed} className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange disabled:opacity-50">
+                <Plus className="w-4 h-4 mr-1" /> Add Game
             </Button>
           </DialogTrigger>
           <DialogContent>
