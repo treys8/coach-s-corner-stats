@@ -104,6 +104,7 @@ const TeamTotals = () => {
   }, [snapshots]);
 
   const latest = byDate[byDate.length - 1]?.agg;
+  const latestDate = byDate[byDate.length - 1]?.date;
 
   // Latest snapshot per player, plus the union of available stat keys per section
   const { latestByPlayer, statKeys } = useMemo(() => {
