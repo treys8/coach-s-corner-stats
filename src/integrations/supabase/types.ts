@@ -14,7 +14,161 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      csv_uploads: {
+        Row: {
+          created_at: string
+          filename: string | null
+          id: string
+          notes: string | null
+          player_count: number
+          upload_date: string
+        }
+        Insert: {
+          created_at?: string
+          filename?: string | null
+          id?: string
+          notes?: string | null
+          player_count?: number
+          upload_date: string
+        }
+        Update: {
+          created_at?: string
+          filename?: string | null
+          id?: string
+          notes?: string | null
+          player_count?: number
+          upload_date?: string
+        }
+        Relationships: []
+      }
+      games: {
+        Row: {
+          created_at: string
+          game_date: string
+          game_time: string | null
+          id: string
+          location: string
+          notes: string | null
+          opponent: string
+          opponent_score: number | null
+          result: string | null
+          team_score: number | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          game_date: string
+          game_time?: string | null
+          id?: string
+          location?: string
+          notes?: string | null
+          opponent: string
+          opponent_score?: number | null
+          result?: string | null
+          team_score?: number | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          game_date?: string
+          game_time?: string | null
+          id?: string
+          location?: string
+          notes?: string | null
+          opponent?: string
+          opponent_score?: number | null
+          result?: string | null
+          team_score?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      glossary: {
+        Row: {
+          abbreviation: string
+          category: string | null
+          created_at: string
+          definition: string
+          id: string
+        }
+        Insert: {
+          abbreviation: string
+          category?: string | null
+          created_at?: string
+          definition: string
+          id?: string
+        }
+        Update: {
+          abbreviation?: string
+          category?: string | null
+          created_at?: string
+          definition?: string
+          id?: string
+        }
+        Relationships: []
+      }
+      players: {
+        Row: {
+          created_at: string
+          first_name: string
+          id: string
+          jersey_number: string
+          last_name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          first_name: string
+          id?: string
+          jersey_number: string
+          last_name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          first_name?: string
+          id?: string
+          jersey_number?: string
+          last_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      stat_snapshots: {
+        Row: {
+          created_at: string
+          id: string
+          player_id: string
+          stats: Json
+          upload_date: string
+          upload_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          player_id: string
+          stats: Json
+          upload_date: string
+          upload_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          player_id?: string
+          stats?: Json
+          upload_date?: string
+          upload_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stat_snapshots_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
