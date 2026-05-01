@@ -186,29 +186,99 @@ const TeamTotals = () => {
             <TabsTrigger value="fielding">Fielding</TabsTrigger>
           </TabsList>
 
-          {(["batting","pitching","fielding"] as Section[]).map((sec) => (
+          {(["batting","pitching","fielding"] as Section[]).map((sec) => {
+            const stat = leaderStat[sec];
+            const dir = leaderDir[sec];
+            const available = statKeys[sec];
+            const activeStat = available.includes(stat) ? stat : (available[0] ?? "");
+            const board = activeStat ? buildLeaderboard(sec, activeStat) : [];
+            board.sort((a, b) => dir === "desc" ? b.value - a.value : a.value - b.value);
+            return (
             <TabsContent key={sec} value={sec} className="space-y-6 mt-6">
               <Card className="p-6">
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4 capitalize">{sec} Totals</h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-1.5">
                   {KEY_DISPLAY[sec].map((k) => (
-                    <div key={k} className="bg-muted/40 rounded-md p-3 border border-border">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                    <div key={k} className="group relative bg-muted/30 hover:bg-muted/60 rounded-md px-2 py-1.5 border border-border/70 transition-colors flex items-baseline justify-between gap-2">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-none">
                         <StatLabel abbr={k} />
                       </div>
-                      <div className="font-mono-stat text-xl font-bold text-sa-blue-deep">
+                      <div className="font-mono-stat text-sm font-bold text-sa-blue-deep leading-none">
                         {formatStat(latest?.[sec]?.[k])}
                       </div>
                     </div>
                   ))}
                 </div>
               </Card>
+
+              <Card className="p-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <h3 className="font-display text-2xl text-sa-blue-deep">Stat Leaders</h3>
+                  <div className="flex items-center gap-2">
+                    <Select value={activeStat} onValueChange={(v) => setLeaderStat((s) => ({ ...s, [sec]: v }))}>
+                      <SelectTrigger className="w-[180px] h-9">
+                        <SelectValue placeholder="Pick a stat" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-72">
+                        {available.map((k) => (
+                          <SelectItem key={k} value={k}>
+                            <span className="font-mono-stat text-xs mr-2">{k}</span>
+                            <span className="text-muted-foreground text-xs">{GLOSSARY[k] ?? ""}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      onClick={() => setLeaderDir((d) => ({ ...d, [sec]: d[sec] === "desc" ? "asc" : "desc" }))}
+                    >
+                      {dir === "desc" ? <ArrowDown className="w-4 h-4 mr-1" /> : <ArrowUp className="w-4 h-4 mr-1" />}
+                      {dir === "desc" ? "High → Low" : "Low → High"}
+                    </Button>
+                  </div>
+                </div>
+
+                {board.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">No data for this stat yet.</p>
+                ) : (
+                  <div className="divide-y divide-border border border-border rounded-md overflow-hidden">
+                    {board.map((row, i) => {
+                      const p = players[row.player_id];
+                      const name = p ? `${p.first_name} ${p.last_name}` : "Unknown";
+                      const isTop = i === 0;
+                      return (
+                        <Link
+                          to={p ? `/player/${p.id}` : "#"}
+                          key={row.player_id}
+                          className={`flex items-center gap-3 px-3 py-2 hover:bg-muted/60 transition-colors ${isTop ? "bg-sa-orange/5" : ""}`}
+                        >
+                          <span className={`font-mono-stat text-xs w-6 text-center font-bold ${isTop ? "text-sa-orange" : "text-muted-foreground"}`}>
+                            {i + 1}
+                          </span>
+                          <span className="font-mono-stat text-xs text-sa-blue w-8">#{p?.jersey_number ?? "—"}</span>
+                          <span className="flex-1 text-sm font-medium text-sa-blue-deep truncate">{name}</span>
+                          <span className="font-mono-stat text-base font-bold text-sa-blue-deep">{formatStat(row.value)}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {latestDate && (
+                  <p className="text-[11px] text-muted-foreground mt-3">
+                    Based on each player's latest snapshot · most recent {new Date(latestDate).toLocaleDateString()}
+                  </p>
+                )}
+              </Card>
+
               <Card className="p-6">
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
                 {renderTrend(sec, sec === "batting" ? ["H","HR","RBI","R"] : sec === "pitching" ? ["SO","BB","H","ER"] : ["TC","PO","A","E"])}
               </Card>
             </TabsContent>
-          ))}
+            );
+          })}
         </Tabs>
       )}
     </div>
