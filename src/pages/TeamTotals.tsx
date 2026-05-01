@@ -149,12 +149,32 @@ const TeamTotals = () => {
   }, [snapshots]);
 
   const buildLeaderboard = (section: Section, stat: string) => {
+    const isBattingRate = section === "batting" && RATE.batting.includes(stat);
+    const isPitchingRate = section === "pitching" && RATE.pitching.includes(stat);
     const rows: { player_id: string; value: number }[] = [];
     for (const [pid, snap] of Object.entries(latestByPlayer)) {
-      const v = sectionOf(snap, section)[stat];
-      if (typeof v === "number" && Number.isFinite(v)) rows.push({ player_id: pid, value: v });
+      const block = sectionOf(snap, section);
+      const v = block[stat];
+      if (typeof v !== "number" || !Number.isFinite(v)) continue;
+
+      // Min-qualifier rules
+      if (isBattingRate) {
+        const ab = sectionOf(snap, "batting")["AB"];
+        if (typeof ab !== "number" || ab < MIN_AB) continue;
+      }
+      if (isPitchingRate) {
+        const ip = sectionOf(snap, "pitching")["IP"];
+        if (typeof ip !== "number" || ip < MIN_IP) continue;
+      }
+      rows.push({ player_id: pid, value: v });
     }
     return rows;
+  };
+
+  const qualifierNote = (section: Section, stat: string): string | null => {
+    if (section === "batting" && RATE.batting.includes(stat)) return `Min ${MIN_AB} AB to qualify`;
+    if (section === "pitching" && RATE.pitching.includes(stat)) return `Min ${MIN_IP} IP to qualify`;
+    return null;
   };
 
   if (loading) return <div className="container mx-auto px-6 py-10"><Skeleton className="h-96" /></div>;
@@ -188,11 +208,32 @@ const TeamTotals = () => {
 
   return (
     <div className="container mx-auto px-6 py-10">
-      <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Team</p>
-      <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep mb-2">Total Volunteers</h2>
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-2">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Team</p>
+          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">Total Volunteers</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          {closed && (
+            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-sa-orange bg-sa-orange/10 px-2 py-1 rounded">
+              <Lock className="w-3 h-3" /> Archived
+            </span>
+          )}
+          <Select value={String(season)} onValueChange={(v) => setSeason(Number(v))}>
+            <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {seasons.map((y) => (
+                <SelectItem key={y} value={String(y)}>
+                  {seasonLabel(y)}{isSeasonClosed(y) ? " (closed)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
       <p className="text-sm text-muted-foreground mb-8">
         {byDate.length === 0
-          ? "Upload a stats CSV to see team totals."
+          ? `No stats uploaded for the ${season} season yet.`
           : `Aggregated across ${snapshots.filter((s) => s.upload_date === byDate[byDate.length - 1].date).length} players · latest ${new Date(byDate[byDate.length - 1].date).toLocaleDateString()}`}
       </p>
 
