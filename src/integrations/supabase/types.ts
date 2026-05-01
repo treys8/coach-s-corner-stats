@@ -21,6 +21,7 @@ export type Database = {
           id: string
           notes: string | null
           player_count: number
+          season_year: number
           upload_date: string
         }
         Insert: {
@@ -29,6 +30,7 @@ export type Database = {
           id?: string
           notes?: string | null
           player_count?: number
+          season_year: number
           upload_date: string
         }
         Update: {
@@ -37,6 +39,7 @@ export type Database = {
           id?: string
           notes?: string | null
           player_count?: number
+          season_year?: number
           upload_date?: string
         }
         Relationships: []
@@ -52,6 +55,7 @@ export type Database = {
           opponent: string
           opponent_score: number | null
           result: string | null
+          season_year: number
           team_score: number | null
           updated_at: string
         }
@@ -65,6 +69,7 @@ export type Database = {
           opponent: string
           opponent_score?: number | null
           result?: string | null
+          season_year: number
           team_score?: number | null
           updated_at?: string
         }
@@ -78,6 +83,7 @@ export type Database = {
           opponent?: string
           opponent_score?: number | null
           result?: string | null
+          season_year?: number
           team_score?: number | null
           updated_at?: string
         }
@@ -114,6 +120,7 @@ export type Database = {
           id: string
           jersey_number: string
           last_name: string
+          season_year: number
           updated_at: string
         }
         Insert: {
@@ -122,6 +129,7 @@ export type Database = {
           id?: string
           jersey_number: string
           last_name: string
+          season_year: number
           updated_at?: string
         }
         Update: {
@@ -130,6 +138,7 @@ export type Database = {
           id?: string
           jersey_number?: string
           last_name?: string
+          season_year?: number
           updated_at?: string
         }
         Relationships: []
@@ -139,6 +148,7 @@ export type Database = {
           created_at: string
           id: string
           player_id: string
+          season_year: number
           stats: Json
           upload_date: string
           upload_id: string | null
@@ -147,6 +157,7 @@ export type Database = {
           created_at?: string
           id?: string
           player_id: string
+          season_year: number
           stats: Json
           upload_date: string
           upload_id?: string | null
@@ -155,6 +166,7 @@ export type Database = {
           created_at?: string
           id?: string
           player_id?: string
+          season_year?: number
           stats?: Json
           upload_date?: string
           upload_id?: string | null
@@ -174,7 +186,8 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      is_season_closed: { Args: { yr: number }; Returns: boolean }
+      season_year_for: { Args: { d: string }; Returns: number }
     }
     Enums: {
       [_ in never]: never
