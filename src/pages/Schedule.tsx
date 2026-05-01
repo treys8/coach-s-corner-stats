@@ -196,6 +196,7 @@ const Schedule = () => {
             <DialogFooter><Button onClick={submit} className="bg-sa-blue hover:bg-sa-blue-deep">Save Game</Button></DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {games.length === 0 ? (
