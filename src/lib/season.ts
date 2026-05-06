@@ -1,14 +1,14 @@
 // Season utilities. A season runs Feb 1 – May 31. After May 31 the season is "closed".
-// Dates outside Feb–May are tagged with the nearest preceding season year.
+// Dates outside Feb–May are tagged with the nearest preceding season year:
+// Jun–Dec map to the current calendar year (just-closed season); Jan maps to
+// the prior calendar year (still the same just-closed season — year boundary crossed).
+// Must stay in sync with public.season_year_for(date) in Supabase.
 
 export const seasonYearFor = (date: Date | string): number => {
   const d = typeof date === "string" ? new Date(date) : date;
   const y = d.getFullYear();
   const m = d.getMonth() + 1; // 1-12
-  const day = d.getDate();
-  if (m >= 2 && (m < 6 || (m === 5 && day <= 31))) return y;
-  if (m < 2) return y - 1;
-  return y; // June–Dec: that year's season is already closed
+  return m === 1 ? y - 1 : y;
 };
 
 export const isSeasonClosed = (year: number, today: Date = new Date()): boolean => {

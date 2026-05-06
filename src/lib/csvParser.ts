@@ -12,6 +12,9 @@
 // label or blank name on totals row).
 
 import * as XLSX from "xlsx";
+import { GLOSSARY } from "@/lib/glossary";
+
+const KNOWN_HEADERS = new Set(Object.keys(GLOSSARY));
 
 export interface SectionedStats {
   batting: Record<string, string | number>;
@@ -31,6 +34,8 @@ export interface ParsedWorkbook {
   pitchingHeaders: string[];
   fieldingHeaders: string[];
   players: ParsedPlayer[];
+  /** Headers found in any sheet that aren't in GLOSSARY. Data still ingested. */
+  unknownHeaders: string[];
 }
 
 type Row = (string | number | null | undefined)[];
@@ -69,7 +74,7 @@ const isPlayerRow = (row: Row): boolean => {
 const parseSheet = (
   ws: XLSX.WorkSheet | undefined,
   sheetName: string,
-): { headers: string[]; byKey: Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }> } => {
+): { headers: string[]; unknown: string[]; byKey: Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }> } => {
   if (!ws) throw new Error(`Workbook is missing the "${sheetName}" sheet.`);
   const rows = XLSX.utils.sheet_to_json<Row>(ws, { header: 1, blankrows: false, defval: null });
   if (rows.length === 0) throw new Error(`"${sheetName}" sheet is empty.`);
@@ -78,8 +83,15 @@ const parseSheet = (
   const headerRow = (rows[headerIdx] ?? []).map((h) => String(h ?? "").trim());
   // Stat columns start at index 3 (after Number/Last/First)
   const headers: string[] = [];
+  const unknown: string[] = [];
   for (let i = 3; i < headerRow.length; i++) {
-    if (headerRow[i]) headers.push(headerRow[i]);
+    const h = headerRow[i];
+    if (!h) continue;
+    headers.push(h);
+    if (!KNOWN_HEADERS.has(h)) unknown.push(h);
+  }
+  if (unknown.length > 0) {
+    console.warn(`[csvParser] "${sheetName}" has unrecognized headers (still ingested): ${unknown.join(", ")}. Add them to GLOSSARY in src/lib/glossary.ts to silence this.`);
   }
 
   const byKey = new Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }>();
@@ -97,7 +109,7 @@ const parseSheet = (
     }
     byKey.set(`${first}|${last}`, { number, first, last, stats });
   }
-  return { headers, byKey };
+  return { headers, unknown, byKey };
 };
 
 /** Parse the team workbook (xlsx) buffer. */
@@ -136,11 +148,14 @@ export function parseStatsWorkbook(data: ArrayBuffer): ParsedWorkbook {
   // Stable sort by last name then first.
   players.sort((a, b) => (a.last + a.first).localeCompare(b.last + b.first));
 
+  const unknownHeaders = Array.from(new Set([...hit.unknown, ...pit.unknown, ...fld.unknown]));
+
   return {
     battingHeaders: hit.headers,
     pitchingHeaders: pit.headers,
     fieldingHeaders: fld.headers,
     players,
+    unknownHeaders,
   };
 }
 

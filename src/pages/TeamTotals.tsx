@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,41 +12,25 @@ import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
 import { GLOSSARY } from "@/lib/glossary";
 import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
+import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
+import { aggregateByDate, RATE_STATS } from "@/lib/aggregate";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
-type SectionStats = Record<string, string | number>;
 interface Snapshot {
   player_id: string;
   upload_date: string;
   season_year: number;
-  stats: { batting?: SectionStats; pitching?: SectionStats; fielding?: SectionStats };
+  stats: SnapshotStats;
 }
 
 const MIN_AB = 5;
 const MIN_IP = 3;
-
-type Section = "batting" | "pitching" | "fielding";
-
-// Counting stats per section — summed across roster
-const SUM: Record<Section, Set<string>> = {
-  batting: new Set(["GP","PA","AB","H","1B","2B","3B","HR","RBI","R","BB","SO","K-L","HBP","SAC","SF","ROE","FC","SB","CS","PIK","QAB","HHB","LOB","2OUTRBI","XBH","TB","PS","2S+3","6+","GIDP","GITP","CI"]),
-  pitching: new Set(["GP","GS","BF","#P","W","L","SV","SVO","BS","H","R","ER","BB","SO","K-L","HBP","LOB","BK","PIK","CS","SB","WP","LOO","1ST2OUT","123INN","<13","BBS","LOBB","LOBBS","HR","FB","FBS","CB","CBS","CT","CTS","SL","SLS","CH","CHS","OS","OSS"]),
-  fielding: new Set(["TC","A","PO","E","DP","TP","PB","SB","SBATT","CS","PIK","CI","P","C","1B","2B","3B","SS","LF","CF","RF","SF","Total"]),
-};
-// Rate stats — averaged across roster (rough team avg)
-const RATE: Record<Section, string[]> = {
-  batting: ["AVG","OBP","SLG","OPS","BABIP","BA/RISP","SB%","QAB%","C%","BB/K","LD%","FB%","GB%"],
-  pitching: ["ERA","WHIP","BAA","SV%","P/IP","P/BF","FIP","S%","FPS%","SM%","K/BF","K/BB","WEAK%","HHB%","GO/AO","BABIP","BA/RISP","SB%","FBS%","FBSW%","FBSM%","CBS%","CTS%","SLS%","CHS%","OSS%"],
-  fielding: ["FPCT","CS%"],
-};
 
 const KEY_DISPLAY: Record<Section, string[]> = {
   batting: ["GP","H","HR","RBI","R","BB","SO","SB","AVG","OBP","SLG","OPS"],
   pitching: ["IP","W","L","SV","SO","BB","ERA","WHIP","BAA","K/BB","BF"],
   fielding: ["TC","PO","A","E","FPCT","DP"],
 };
-
-const sectionOf = (snap: Snapshot, section: Section): SectionStats => snap.stats?.[section] ?? {};
 
 const TeamTotals = () => {
   const [allSnapshots, setAllSnapshots] = useState<Snapshot[]>([]);
@@ -59,11 +44,20 @@ const TeamTotals = () => {
 
   useEffect(() => {
     const load = async () => {
-      const [{ data: snaps }, { data: pls }] = await Promise.all([
+      const [{ data: snaps, error: sErr }, { data: pls, error: pErr }] = await Promise.all([
         supabase.from("stat_snapshots").select("player_id, upload_date, season_year, stats").order("upload_date", { ascending: true }),
         supabase.from("players").select("id, first_name, last_name, jersey_number, season_year"),
       ]);
-      setAllSnapshots((snaps ?? []) as unknown as Snapshot[]);
+      if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
+      if (pErr) toast.error(`Couldn't load players: ${pErr.message}`);
+      setAllSnapshots(
+        (snaps ?? []).map((s) => ({
+          player_id: s.player_id,
+          upload_date: s.upload_date,
+          season_year: s.season_year,
+          stats: parseSnapshotStats(s.stats),
+        })),
+      );
       const pmap: Record<string, { id: string; first_name: string; last_name: string; jersey_number: string; season_year: number }> = {};
       (pls ?? []).forEach((p) => { pmap[p.id] = p; });
       setAllPlayers(pmap);
@@ -87,42 +81,7 @@ const TeamTotals = () => {
     return out;
   }, [allPlayers, season]);
 
-  // Aggregate per upload_date per section
-  const byDate = useMemo(() => {
-    const map = new Map<string, Snapshot[]>();
-    for (const s of snapshots) {
-      if (!map.has(s.upload_date)) map.set(s.upload_date, []);
-      map.get(s.upload_date)!.push(s);
-    }
-    type Agg = Record<Section, Record<string, number>>;
-    const result: { date: string; agg: Agg }[] = [];
-    for (const [date, list] of Array.from(map.entries()).sort()) {
-      const agg: Agg = { batting: {}, pitching: {}, fielding: {} };
-      const rateCounts: Record<Section, Record<string, number>> = { batting: {}, pitching: {}, fielding: {} };
-      const sections: Section[] = ["batting", "pitching", "fielding"];
-      for (const snap of list) {
-        for (const sec of sections) {
-          const block = sectionOf(snap, sec);
-          for (const [k, v] of Object.entries(block)) {
-            if (typeof v !== "number" || !Number.isFinite(v)) continue;
-            if (SUM[sec].has(k)) {
-              agg[sec][k] = (agg[sec][k] ?? 0) + v;
-            } else if (RATE[sec].includes(k)) {
-              agg[sec][k] = (agg[sec][k] ?? 0) + v;
-              rateCounts[sec][k] = (rateCounts[sec][k] ?? 0) + 1;
-            }
-          }
-        }
-      }
-      for (const sec of sections) {
-        for (const k of RATE[sec]) {
-          if (rateCounts[sec][k]) agg[sec][k] = agg[sec][k] / rateCounts[sec][k];
-        }
-      }
-      result.push({ date, agg });
-    }
-    return result;
-  }, [snapshots]);
+  const byDate = useMemo(() => aggregateByDate(snapshots), [snapshots]);
 
   const latest = byDate[byDate.length - 1]?.agg;
   const latestDate = byDate[byDate.length - 1]?.date;
@@ -138,7 +97,7 @@ const TeamTotals = () => {
     const sets: Record<Section, Set<string>> = { batting: new Set(), pitching: new Set(), fielding: new Set() };
     (["batting","pitching","fielding"] as Section[]).forEach((sec) => {
       for (const snap of Object.values(latestByPlayer)) {
-        const block = sectionOf(snap, sec);
+        const block = sectionOf(snap.stats, sec);
         for (const [k, v] of Object.entries(block)) {
           if (typeof v === "number" && Number.isFinite(v)) sets[sec].add(k);
         }
@@ -149,21 +108,21 @@ const TeamTotals = () => {
   }, [snapshots]);
 
   const buildLeaderboard = (section: Section, stat: string) => {
-    const isBattingRate = section === "batting" && RATE.batting.includes(stat);
-    const isPitchingRate = section === "pitching" && RATE.pitching.includes(stat);
+    const isBattingRate = section === "batting" && RATE_STATS.batting.includes(stat);
+    const isPitchingRate = section === "pitching" && RATE_STATS.pitching.includes(stat);
     const rows: { player_id: string; value: number }[] = [];
     for (const [pid, snap] of Object.entries(latestByPlayer)) {
-      const block = sectionOf(snap, section);
+      const block = sectionOf(snap.stats, section);
       const v = block[stat];
       if (typeof v !== "number" || !Number.isFinite(v)) continue;
 
       // Min-qualifier rules
       if (isBattingRate) {
-        const ab = sectionOf(snap, "batting")["AB"];
+        const ab = sectionOf(snap.stats, "batting")["AB"];
         if (typeof ab !== "number" || ab < MIN_AB) continue;
       }
       if (isPitchingRate) {
-        const ip = sectionOf(snap, "pitching")["IP"];
+        const ip = sectionOf(snap.stats, "pitching")["IP"];
         if (typeof ip !== "number" || ip < MIN_IP) continue;
       }
       rows.push({ player_id: pid, value: v });
@@ -172,8 +131,8 @@ const TeamTotals = () => {
   };
 
   const qualifierNote = (section: Section, stat: string): string | null => {
-    if (section === "batting" && RATE.batting.includes(stat)) return `Min ${MIN_AB} AB to qualify`;
-    if (section === "pitching" && RATE.pitching.includes(stat)) return `Min ${MIN_IP} IP to qualify`;
+    if (section === "batting" && RATE_STATS.batting.includes(stat)) return `Min ${MIN_AB} AB to qualify`;
+    if (section === "pitching" && RATE_STATS.pitching.includes(stat)) return `Min ${MIN_IP} IP to qualify`;
     return null;
   };
 

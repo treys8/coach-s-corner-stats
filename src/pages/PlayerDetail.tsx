@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -9,28 +10,16 @@ import { ArrowLeft, ChevronDown, ChevronUp } from "lucide-react";
 import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
 import { KEY_BATTING, KEY_PITCHING, KEY_FIELDING } from "@/lib/glossary";
+import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 interface Player { id: string; jersey_number: string; first_name: string; last_name: string }
-type SectionStats = Record<string, string | number>;
-interface Snapshot {
-  upload_date: string;
-  stats: { batting?: SectionStats; pitching?: SectionStats; fielding?: SectionStats } | SectionStats;
-}
-
-type Section = "batting" | "pitching" | "fielding";
+interface Snapshot { upload_date: string; stats: SnapshotStats }
 
 const TREND: Record<Section, string[]> = {
   batting: ["AVG", "OBP", "SLG", "OPS", "H", "HR", "RBI"],
   pitching: ["ERA", "WHIP", "SO", "BB", "IP"],
   fielding: ["FPCT", "TC", "E"],
-};
-
-/** Returns the section block from a snapshot, regardless of legacy or new shape. */
-const sectionOf = (snap: Snapshot, section: Section): SectionStats => {
-  const s = snap.stats as { batting?: SectionStats; pitching?: SectionStats; fielding?: SectionStats };
-  if (s && (s.batting || s.pitching || s.fielding)) return s[section] ?? {};
-  return {};
 };
 
 const PlayerDetail = () => {
@@ -43,12 +32,16 @@ const PlayerDetail = () => {
   useEffect(() => {
     if (!id) return;
     const load = async () => {
-      const [{ data: pl }, { data: snaps }] = await Promise.all([
+      const [{ data: pl, error: pErr }, { data: snaps, error: sErr }] = await Promise.all([
         supabase.from("players").select("*").eq("id", id).maybeSingle(),
         supabase.from("stat_snapshots").select("upload_date, stats").eq("player_id", id).order("upload_date", { ascending: true }),
       ]);
-      setPlayer(pl as Player);
-      setSnapshots((snaps ?? []) as unknown as Snapshot[]);
+      if (pErr) toast.error(`Couldn't load player: ${pErr.message}`);
+      if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
+      setPlayer((pl as Player | null) ?? null);
+      setSnapshots(
+        (snaps ?? []).map((s) => ({ upload_date: s.upload_date, stats: parseSnapshotStats(s.stats) })),
+      );
       setLoading(false);
     };
     load();
@@ -69,7 +62,7 @@ const PlayerDetail = () => {
   }
 
   const renderStatGrid = (section: Section, keyStats: string[]) => {
-    const latest = latestSnap ? sectionOf(latestSnap, section) : {};
+    const latest = sectionOf(latestSnap?.stats, section);
     const allKeys = Object.keys(latest);
     if (allKeys.length === 0) {
       return <p className="text-sm text-muted-foreground italic">No {section} stats yet — upload a CSV to populate.</p>;
@@ -108,7 +101,7 @@ const PlayerDetail = () => {
     }
     const keys = TREND[section];
     const data = snapshots.map((s) => {
-      const block = sectionOf(s, section);
+      const block = sectionOf(s.stats, section);
       const row: Record<string, string | number> = {
         date: new Date(s.upload_date).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
       };

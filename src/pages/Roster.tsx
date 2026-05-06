@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,10 +24,12 @@ const Roster = () => {
 
   useEffect(() => {
     const load = async () => {
-      const [{ data: p }, { data: u }] = await Promise.all([
+      const [{ data: p, error: pErr }, { data: u, error: uErr }] = await Promise.all([
         supabase.from("players").select("id, jersey_number, first_name, last_name, season_year"),
         supabase.from("csv_uploads").select("upload_date, season_year").order("upload_date", { ascending: false }),
       ]);
+      if (pErr) toast.error(`Couldn't load roster: ${pErr.message}`);
+      if (uErr) toast.error(`Couldn't load upload history: ${uErr.message}`);
       setAllPlayers((p ?? []) as PlayerRow[]);
       setLatestUpload(u?.[0]?.upload_date ?? null);
       setLoading(false);

@@ -23,8 +23,14 @@ const UploadStats = () => {
     setResult(null);
     try {
       const buf = await file.arrayBuffer();
-      const { players } = parseStatsWorkbook(buf);
+      const { players, unknownHeaders } = parseStatsWorkbook(buf);
       if (players.length === 0) throw new Error("No players found in workbook");
+      if (unknownHeaders.length > 0) {
+        toast.warning(
+          `Unrecognized stat columns ingested: ${unknownHeaders.slice(0, 6).join(", ")}${unknownHeaders.length > 6 ? "…" : ""}. Update the glossary if these are real stats.`,
+          { duration: 8000 },
+        );
+      }
 
       const season_year = seasonYearFor(uploadDate);
       if (isSeasonClosed(season_year)) {

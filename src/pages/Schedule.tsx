@@ -47,7 +47,8 @@ const Schedule = () => {
   });
 
   const load = async () => {
-    const { data } = await supabase.from("games").select("*").order("game_date", { ascending: true });
+    const { data, error } = await supabase.from("games").select("*").order("game_date", { ascending: true });
+    if (error) { toast.error(`Couldn't load schedule: ${error.message}`); return; }
     const all = (data ?? []) as Game[];
     setGames(all);
     const yrs = Array.from(new Set([currentSeasonYear(), ...all.map((g) => g.season_year)])).sort((a, b) => b - a);

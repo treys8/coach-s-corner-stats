@@ -1,6 +1,8 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { LogOut } from "lucide-react";
 import logo from "@/assets/sa-logo.png";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/auth";
 
 const nav = [
   { to: "/", label: "Roster", end: true },
@@ -10,6 +12,7 @@ const nav = [
 ];
 
 const Layout = () => {
+  const { user, signOut } = useAuth();
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="bg-gradient-blue text-primary-foreground border-b-4 border-sa-orange">
@@ -39,6 +42,15 @@ const Layout = () => {
                 {n.label}
               </NavLink>
             ))}
+            <button
+              type="button"
+              onClick={signOut}
+              title={user?.email ? `Signed in as ${user.email}` : "Sign out"}
+              className="ml-2 px-3 py-2 rounded-md text-xs font-semibold uppercase tracking-wider text-white/80 hover:text-white hover:bg-white/10 inline-flex items-center gap-1.5"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign out
+            </button>
           </nav>
         </div>
         {/* Mobile nav */}
@@ -58,6 +70,14 @@ const Layout = () => {
               {n.label}
             </NavLink>
           ))}
+          <button
+            type="button"
+            onClick={signOut}
+            className="ml-auto px-3 py-1.5 rounded text-xs font-semibold uppercase tracking-wider whitespace-nowrap text-white/80 inline-flex items-center gap-1.5"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Sign out
+          </button>
         </nav>
       </header>
       <main className="flex-1">
