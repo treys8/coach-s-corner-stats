@@ -6,6 +6,10 @@ import { ShieldAlert } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
 
 const ProtectedRoute = ({ children }: { children: ReactNode }) => {
+  // AUTH BYPASS (temporary) — re-enable by restoring the gate below.
+  return <>{children}</>;
+
+  // eslint-disable-next-line no-unreachable
   const { session, isCoach, loading, signOut } = useAuth();
 
   if (loading) {
