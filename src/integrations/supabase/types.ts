@@ -186,7 +186,6 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      is_coach: { Args: Record<string, never>; Returns: boolean }
       is_season_closed: { Args: { yr: number }; Returns: boolean }
       season_year_for: { Args: { d: string }; Returns: number }
     }
