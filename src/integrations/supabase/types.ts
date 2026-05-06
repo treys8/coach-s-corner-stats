@@ -14,6 +14,21 @@ export type Database = {
   }
   public: {
     Tables: {
+      coaches: {
+        Row: {
+          created_at: string
+          email: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+        }
+        Relationships: []
+      }
       csv_uploads: {
         Row: {
           created_at: string
@@ -186,6 +201,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      is_coach: { Args: never; Returns: boolean }
       is_season_closed: { Args: { yr: number }; Returns: boolean }
       season_year_for: { Args: { d: string }; Returns: number }
     }
