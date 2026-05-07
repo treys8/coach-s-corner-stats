@@ -112,7 +112,10 @@ export function Layout({
       <main className="flex-1">{children}</main>
       <footer className="border-t bg-muted/40 py-6 mt-12">
         <div className="container mx-auto px-6 text-center text-xs text-muted-foreground">
-          Statly
+          Statly ·{" "}
+          <Link href="/scores" className="hover:text-sa-orange">
+            Public Scores
+          </Link>
         </div>
       </footer>
     </div>

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Plus, Trash2, MapPin, Calendar } from "lucide-react";
+import { Plus, Trash2, MapPin, Calendar, CheckCircle2, Globe } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { seasonYearFor, isSeasonClosed, currentSeasonYear, seasonLabel } from "@/lib/season";
@@ -120,6 +120,26 @@ export default function SchedulePage() {
     load();
   };
 
+  const setFinal = async (g: Game, isFinal: boolean) => {
+    if (isFinal) {
+      if (g.team_score === null || g.opponent_score === null || !g.result) {
+        toast.error("Add the score and result before marking final.");
+        return;
+      }
+      if (!confirm("Mark this game final? It'll appear on the public Scores page.")) return;
+    }
+    const { error } = await supabase
+      .from("games")
+      .update({ is_final: isFinal, finalized_at: isFinal ? new Date().toISOString() : null })
+      .eq("id", g.id);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success(isFinal ? "Game finalized" : "Game un-finalized");
+    load();
+  };
+
   const today = new Date().toISOString().slice(0, 10);
   const seasonGames = games.filter((g) => g.season_year === season);
   const upcoming = closed ? [] : seasonGames.filter((g) => g.game_date >= today);
@@ -147,12 +167,42 @@ export default function SchedulePage() {
           <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
             {g.game_time && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{g.game_time.slice(0, 5)}</span>}
             <span className="flex items-center gap-1 capitalize"><MapPin className="w-3 h-3" />{g.location}</span>
+            {g.is_final && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-sa-blue">
+                <Globe className="w-3 h-3" /> On public Scores
+              </span>
+            )}
           </div>
           {g.notes && <p className="text-xs text-muted-foreground mt-1 italic truncate">{g.notes}</p>}
         </div>
-        <Button variant="ghost" size="icon" className="opacity-0 group-hover:opacity-100" onClick={() => remove(g.id)}>
-          <Trash2 className="w-4 h-4 text-destructive" />
-        </Button>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {isPast && g.result && g.team_score !== null && g.opponent_score !== null && (
+            g.is_final ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-sa-blue hover:text-sa-blue-deep"
+                onClick={() => setFinal(g, false)}
+                title="Remove from public Scores"
+              >
+                Un-finalize
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-sa-blue hover:text-sa-blue-deep"
+                onClick={() => setFinal(g, true)}
+                title="Publish to public Scores page"
+              >
+                <CheckCircle2 className="w-4 h-4 mr-1" /> Mark Final
+              </Button>
+            )
+          )}
+          <Button variant="ghost" size="icon" onClick={() => remove(g.id)}>
+            <Trash2 className="w-4 h-4 text-destructive" />
+          </Button>
+        </div>
       </div>
     );
   };
