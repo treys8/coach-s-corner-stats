@@ -1,5 +1,7 @@
-import { useState, type FormEvent } from "react";
-import { Navigate } from "react-router-dom";
+"use client";
+
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,13 +9,16 @@ import { Label } from "@/components/ui/label";
 import { Mail, CheckCircle2, AlertCircle } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
 
-const Login = () => {
+export default function LoginPage() {
   const { session, signInWithEmail, loading } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  if (!loading && session) return <Navigate to="/" replace />;
+  useEffect(() => {
+    if (!loading && session) router.replace("/");
+  }, [loading, session, router]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -23,9 +28,7 @@ const Login = () => {
     const { error } = await signInWithEmail(email.trim());
     setBusy(false);
     setResult(
-      error
-        ? { ok: false, msg: error }
-        : { ok: true, msg: `Check ${email} for a sign-in link.` }
+      error ? { ok: false, msg: error } : { ok: true, msg: `Check ${email} for a sign-in link.` },
     );
   };
 
@@ -59,10 +62,16 @@ const Login = () => {
             {busy ? "Sending…" : "Send magic link"}
           </Button>
           {result && (
-            <div className={`flex items-start gap-3 p-4 rounded-md ${result.ok ? "bg-sa-blue/5 border border-sa-blue/20" : "bg-destructive/5 border border-destructive/20"}`}>
-              {result.ok
-                ? <CheckCircle2 className="w-5 h-5 text-sa-blue flex-shrink-0 mt-0.5" />
-                : <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />}
+            <div
+              className={`flex items-start gap-3 p-4 rounded-md ${
+                result.ok ? "bg-sa-blue/5 border border-sa-blue/20" : "bg-destructive/5 border border-destructive/20"
+              }`}
+            >
+              {result.ok ? (
+                <CheckCircle2 className="w-5 h-5 text-sa-blue flex-shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+              )}
               <p className="text-sm">{result.msg}</p>
             </div>
           )}
@@ -70,6 +79,4 @@ const Login = () => {
       </Card>
     </div>
   );
-};
-
-export default Login;
+}

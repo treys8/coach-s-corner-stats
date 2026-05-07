@@ -1,7 +1,9 @@
+"use client";
+
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,13 +34,14 @@ const KEY_DISPLAY: Record<Section, string[]> = {
   fielding: ["TC","PO","A","E","FPCT","DP"],
 };
 
-const TeamTotals = () => {
+const supabase = createClient();
+
+export default function TeamTotalsPage() {
   const [allSnapshots, setAllSnapshots] = useState<Snapshot[]>([]);
   const [allPlayers, setAllPlayers] = useState<Record<string, { id: string; first_name: string; last_name: string; jersey_number: string; season_year: number }>>({});
   const [loading, setLoading] = useState(true);
   const [season, setSeason] = useState<number>(currentSeasonYear());
 
-  // Leaderboard state per section
   const [leaderStat, setLeaderStat] = useState<Record<Section, string>>({ batting: "AVG", pitching: "ERA", fielding: "FPCT" });
   const [leaderDir, setLeaderDir] = useState<Record<Section, "desc" | "asc">>({ batting: "desc", pitching: "asc", fielding: "desc" });
 
@@ -86,7 +89,6 @@ const TeamTotals = () => {
   const latest = byDate[byDate.length - 1]?.agg;
   const latestDate = byDate[byDate.length - 1]?.date;
 
-  // Latest snapshot per player, plus the union of available stat keys per section
   const { latestByPlayer, statKeys } = useMemo(() => {
     const latestByPlayer: Record<string, Snapshot> = {};
     for (const s of snapshots) {
@@ -116,7 +118,6 @@ const TeamTotals = () => {
       const v = block[stat];
       if (typeof v !== "number" || !Number.isFinite(v)) continue;
 
-      // Min-qualifier rules
       if (isBattingRate) {
         const ab = sectionOf(snap.stats, "batting")["AB"];
         if (typeof ab !== "number" || ab < MIN_AB) continue;
@@ -170,7 +171,7 @@ const TeamTotals = () => {
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-2">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Team</p>
-          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">Total Volunteers</h2>
+          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">Team Totals</h2>
         </div>
         <div className="flex items-center gap-2">
           {closed && (
@@ -272,7 +273,7 @@ const TeamTotals = () => {
                       const isTop = i === 0;
                       return (
                         <Link
-                          to={p ? `/player/${p.id}` : "#"}
+                          href={p ? `/player/${p.id}` : "#"}
                           key={row.player_id}
                           className={`flex items-center gap-3 px-3 py-2 hover:bg-muted/60 transition-colors ${isTop ? "bg-sa-orange/5" : ""}`}
                         >
@@ -306,6 +307,4 @@ const TeamTotals = () => {
       )}
     </div>
   );
-};
-
-export default TeamTotals;
+}

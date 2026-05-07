@@ -1,5 +1,7 @@
+"use client";
+
 import { useState, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +11,9 @@ import { toast } from "sonner";
 import { parseStatsWorkbook } from "@/lib/csvParser";
 import { seasonYearFor, isSeasonClosed } from "@/lib/season";
 
-const UploadStats = () => {
+const supabase = createClient();
+
+export default function UploadStatsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [uploadDate, setUploadDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
@@ -17,8 +21,14 @@ const UploadStats = () => {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async () => {
-    if (!file) { toast.error("Choose an Excel file"); return; }
-    if (!uploadDate) { toast.error("Pick an upload date"); return; }
+    if (!file) {
+      toast.error("Choose an Excel file");
+      return;
+    }
+    if (!uploadDate) {
+      toast.error("Pick an upload date");
+      return;
+    }
     setBusy(true);
     setResult(null);
     try {
@@ -37,7 +47,6 @@ const UploadStats = () => {
         throw new Error(`The ${season_year} season is closed (ended May 31). Pick a date inside an open season window (Feb 1 – May 31).`);
       }
 
-      // 1. Upsert players for THIS season (rosters are per-season)
       const playerRows = players.map((p) => ({
         first_name: p.first,
         last_name: p.last,
@@ -49,7 +58,6 @@ const UploadStats = () => {
         .upsert(playerRows, { onConflict: "season_year,first_name,last_name" });
       if (playerErr) throw playerErr;
 
-      // 2. Fetch IDs scoped to this season
       const { data: playerRecords, error: fetchErr } = await supabase
         .from("players")
         .select("id, first_name, last_name")
@@ -58,7 +66,6 @@ const UploadStats = () => {
       const idByName = new Map<string, string>();
       (playerRecords ?? []).forEach((r) => idByName.set(`${r.first_name}|${r.last_name}`, r.id));
 
-      // 3. Insert audit row
       const { data: uploadRow, error: upErr } = await supabase
         .from("csv_uploads")
         .insert({ upload_date: uploadDate, filename: file.name, player_count: players.length, season_year })
@@ -66,7 +73,6 @@ const UploadStats = () => {
         .single();
       if (upErr) throw upErr;
 
-      // 4. Upsert snapshots — stats stored split by section
       const snapshots = players
         .map((p) => {
           const pid = idByName.get(`${p.first}|${p.last}`);
@@ -75,7 +81,7 @@ const UploadStats = () => {
             player_id: pid,
             upload_date: uploadDate,
             upload_id: uploadRow.id,
-            stats: p.stats, // { batting, pitching, fielding }
+            stats: p.stats,
             season_year,
           };
         })
@@ -143,10 +149,16 @@ const UploadStats = () => {
           </Button>
 
           {result && (
-            <div className={`flex items-start gap-3 p-4 rounded-md ${result.ok ? "bg-sa-blue/5 border border-sa-blue/20" : "bg-destructive/5 border border-destructive/20"}`}>
-              {result.ok
-                ? <CheckCircle2 className="w-5 h-5 text-sa-blue flex-shrink-0 mt-0.5" />
-                : <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />}
+            <div
+              className={`flex items-start gap-3 p-4 rounded-md ${
+                result.ok ? "bg-sa-blue/5 border border-sa-blue/20" : "bg-destructive/5 border border-destructive/20"
+              }`}
+            >
+              {result.ok ? (
+                <CheckCircle2 className="w-5 h-5 text-sa-blue flex-shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+              )}
               <p className="text-sm">{result.msg}</p>
             </div>
           )}
@@ -164,6 +176,4 @@ const UploadStats = () => {
       </Card>
     </div>
   );
-};
-
-export default UploadStats;
+}

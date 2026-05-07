@@ -4,19 +4,19 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Starkville Academy Varsity Volunteers — design system
-   Official school colors: orange #FF4A00, blue #0021A5, grey #A7A8AA
+/* Generic accent tokens. Reserved for per-school theming later — for now they
+   carry the orange/blue/grey palette inherited from the original prototype.
    All colors HSL.
 */
 
 @layer base {
   :root {
     /* Brand */
-    --sa-orange: 16 100% 50%;        /* #FF4A00 */
+    --sa-orange: 16 100% 50%;
     --sa-orange-glow: 18 100% 58%;
-    --sa-blue: 224 100% 32%;         /* #0021A5 */
+    --sa-blue: 224 100% 32%;
     --sa-blue-deep: 224 100% 18%;
-    --sa-grey: 220 2% 66%;           /* #A7A8AA */
+    --sa-grey: 220 2% 66%;
     --sa-grey-soft: 220 10% 94%;
 
     /* Semantic tokens */
@@ -59,15 +59,6 @@
     --shadow-card: 0 1px 2px hsl(224 100% 18% / 0.06), 0 4px 16px hsl(224 100% 18% / 0.06);
     --shadow-elevated: 0 8px 32px hsl(224 100% 18% / 0.12);
     --shadow-orange: 0 8px 24px hsl(16 100% 50% / 0.28);
-
-    --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 240 5.9% 10%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 4.8% 95.9%;
-    --sidebar-accent-foreground: 240 5.9% 10%;
-    --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
   .dark {

@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+"use client";
+
+import { useEffect, useState, use } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -22,8 +24,10 @@ const TREND: Record<Section, string[]> = {
   fielding: ["FPCT", "TC", "E"],
 };
 
-const PlayerDetail = () => {
-  const { id } = useParams<{ id: string }>();
+const supabase = createClient();
+
+export default function PlayerDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
   const [player, setPlayer] = useState<Player | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +38,11 @@ const PlayerDetail = () => {
     const load = async () => {
       const [{ data: pl, error: pErr }, { data: snaps, error: sErr }] = await Promise.all([
         supabase.from("players").select("*").eq("id", id).maybeSingle(),
-        supabase.from("stat_snapshots").select("upload_date, stats").eq("player_id", id).order("upload_date", { ascending: true }),
+        supabase
+          .from("stat_snapshots")
+          .select("upload_date, stats")
+          .eq("player_id", id)
+          .order("upload_date", { ascending: true }),
       ]);
       if (pErr) toast.error(`Couldn't load player: ${pErr.message}`);
       if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
@@ -50,13 +58,18 @@ const PlayerDetail = () => {
   const latestSnap = snapshots[snapshots.length - 1];
 
   if (loading) {
-    return <div className="container mx-auto px-6 py-10"><Skeleton className="h-32 mb-6" /><Skeleton className="h-96" /></div>;
+    return (
+      <div className="container mx-auto px-6 py-10">
+        <Skeleton className="h-32 mb-6" />
+        <Skeleton className="h-96" />
+      </div>
+    );
   }
   if (!player) {
     return (
       <div className="container mx-auto px-6 py-10 text-center">
         <p className="text-muted-foreground">Player not found.</p>
-        <Link to="/" className="text-sa-orange underline">Back to roster</Link>
+        <Link href="/" className="text-sa-orange underline">Back to roster</Link>
       </div>
     );
   }
@@ -65,7 +78,7 @@ const PlayerDetail = () => {
     const latest = sectionOf(latestSnap?.stats, section);
     const allKeys = Object.keys(latest);
     if (allKeys.length === 0) {
-      return <p className="text-sm text-muted-foreground italic">No {section} stats yet — upload a CSV to populate.</p>;
+      return <p className="text-sm text-muted-foreground italic">No {section} stats yet — upload a workbook to populate.</p>;
     }
     const expanded = showAll[section];
     const visible = expanded ? allKeys : keyStats.filter((k) => k in latest);
@@ -87,8 +100,17 @@ const PlayerDetail = () => {
           ))}
         </div>
         {allKeys.length > visible.length || expanded ? (
-          <Button variant="ghost" size="sm" className="mt-4 text-sa-blue hover:text-sa-orange" onClick={() => setShowAll((s) => ({ ...s, [section]: !s[section] }))}>
-            {expanded ? <><ChevronUp className="w-4 h-4 mr-1" /> Show key stats</> : <><ChevronDown className="w-4 h-4 mr-1" /> Show all {allKeys.length} stats</>}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-4 text-sa-blue hover:text-sa-orange"
+            onClick={() => setShowAll((s) => ({ ...s, [section]: !s[section] }))}
+          >
+            {expanded ? (
+              <><ChevronUp className="w-4 h-4 mr-1" /> Show key stats</>
+            ) : (
+              <><ChevronDown className="w-4 h-4 mr-1" /> Show all {allKeys.length} stats</>
+            )}
           </Button>
         ) : null}
       </>
@@ -131,7 +153,7 @@ const PlayerDetail = () => {
 
   return (
     <div className="container mx-auto px-6 py-10">
-      <Link to="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-sa-orange mb-6">
+      <Link href="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-sa-orange mb-6">
         <ArrowLeft className="w-4 h-4 mr-1" /> Back to roster
       </Link>
 
@@ -143,7 +165,8 @@ const PlayerDetail = () => {
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold mb-1">#{player.jersey_number}</p>
           <h2 className="font-display text-6xl md:text-7xl">{player.first_name} {player.last_name}</h2>
           <p className="text-white/70 mt-2 text-sm">
-            {snapshots.length} weekly snapshot{snapshots.length === 1 ? "" : "s"} · latest {latestSnap ? new Date(latestSnap.upload_date).toLocaleDateString() : "—"}
+            {snapshots.length} weekly snapshot{snapshots.length === 1 ? "" : "s"} · latest{" "}
+            {latestSnap ? new Date(latestSnap.upload_date).toLocaleDateString() : "—"}
           </p>
         </div>
       </div>
@@ -173,6 +196,4 @@ const PlayerDetail = () => {
       </Tabs>
     </div>
   );
-};
-
-export default PlayerDetail;
+}

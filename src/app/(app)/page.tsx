@@ -1,7 +1,9 @@
+"use client";
+
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -16,7 +18,9 @@ interface PlayerRow {
   season_year: number;
 }
 
-const Roster = () => {
+const supabase = createClient();
+
+export default function RosterPage() {
   const [allPlayers, setAllPlayers] = useState<PlayerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [latestUpload, setLatestUpload] = useState<string | null>(null);
@@ -57,11 +61,14 @@ const Roster = () => {
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Roster</p>
-          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">The Volunteers</h2>
+          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">The Team</h2>
           <div className="flex items-center gap-3 mt-2 flex-wrap">
             {latestUpload && (
               <p className="text-sm text-muted-foreground">
-                Stats current through <span className="font-semibold text-foreground">{new Date(latestUpload).toLocaleDateString()}</span>
+                Stats current through{" "}
+                <span className="font-semibold text-foreground">
+                  {new Date(latestUpload).toLocaleDateString()}
+                </span>
               </p>
             )}
             {closed && (
@@ -106,7 +113,7 @@ const Roster = () => {
           </p>
           {!closed && (
             <Link
-              to="/upload"
+              href="/upload"
               className="inline-flex items-center gap-2 bg-sa-orange text-white px-6 py-3 rounded-md font-semibold uppercase tracking-wider text-sm shadow-orange hover:bg-sa-orange-glow transition-colors"
             >
               <Upload className="w-4 h-4" /> Upload Stats
@@ -118,7 +125,7 @@ const Roster = () => {
           {players.map((p) => (
             <Link
               key={p.id}
-              to={`/player/${p.id}`}
+              href={`/player/${p.id}`}
               className="group relative bg-card border border-border rounded-lg overflow-hidden shadow-card hover:shadow-elevated hover:-translate-y-0.5 transition-all"
             >
               <div className="bg-gradient-blue h-2" />
@@ -141,6 +148,4 @@ const Roster = () => {
       )}
     </div>
   );
-};
-
-export default Roster;
+}
