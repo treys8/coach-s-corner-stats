@@ -46,20 +46,26 @@ export default function HomePage() {
     };
   }, [loading, session, router]);
 
-  if (loading || schools === null) {
+  if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
-        Loading…
+      <div className="min-h-screen flex items-center justify-center px-6">
+        <Card className="p-8 max-w-md w-full text-center space-y-3">
+          <p className="text-xs uppercase tracking-[0.2em] text-destructive font-bold">
+            Database error
+          </p>
+          <p className="text-sm text-destructive break-words">{error}</p>
+          <p className="text-xs text-muted-foreground">
+            If this is a fresh setup, the schema migration may not have been applied yet.
+          </p>
+        </Card>
       </div>
     );
   }
 
-  if (error) {
+  if (loading || schools === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-6">
-        <Card className="p-8 max-w-md w-full text-center">
-          <p className="text-sm text-destructive">{error}</p>
-        </Card>
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+        Loading…
       </div>
     );
   }
