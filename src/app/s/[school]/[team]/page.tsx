@@ -138,15 +138,23 @@ export default function RosterPage() {
           <p className="text-muted-foreground mb-6 max-w-md mx-auto">
             {closed
               ? `The ${season} season has no roster on record.`
-              : "Upload your first weekly stats workbook to populate this season's roster."}
+              : "Upload your roster to set jersey numbers up front, or upload a stats workbook to populate it from there."}
           </p>
           {!closed && (
-            <Link
-              href={`/s/${school.slug}/${team.slug}/upload`}
-              className="inline-flex items-center gap-2 bg-sa-orange text-white px-6 py-3 rounded-md font-semibold uppercase tracking-wider text-sm shadow-orange hover:bg-sa-orange-glow transition-colors"
-            >
-              <Upload className="w-4 h-4" /> Upload Stats
-            </Link>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <Link
+                href={`/s/${school.slug}/${team.slug}/roster`}
+                className="inline-flex items-center gap-2 bg-sa-orange text-white px-6 py-3 rounded-md font-semibold uppercase tracking-wider text-sm shadow-orange hover:bg-sa-orange-glow transition-colors"
+              >
+                <Upload className="w-4 h-4" /> Upload Roster
+              </Link>
+              <Link
+                href={`/s/${school.slug}/${team.slug}/upload`}
+                className="inline-flex items-center gap-2 border border-sa-blue text-sa-blue px-6 py-3 rounded-md font-semibold uppercase tracking-wider text-sm hover:bg-sa-blue/5 transition-colors"
+              >
+                <Upload className="w-4 h-4" /> Upload Stats
+              </Link>
+            </div>
           )}
         </Card>
       ) : (
