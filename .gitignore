@@ -32,3 +32,4 @@ tsconfig.tsbuildinfo
 *.njsproj
 *.sln
 *.sw?
+tsconfig.tsbuildinfo

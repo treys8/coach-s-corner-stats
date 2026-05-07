@@ -36,6 +36,7 @@ export function Layout({
     { href: base, label: "Roster", exact: true },
     { href: `${base}/team`, label: "Team Totals" },
     { href: `${base}/schedule`, label: "Schedule" },
+    { href: `${base}/roster`, label: "Upload Roster" },
     { href: `${base}/upload`, label: "Upload Stats" },
   ];
 
