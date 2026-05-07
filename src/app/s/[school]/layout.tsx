@@ -1,12 +1,30 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState, use, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/contexts/auth";
 import { SchoolProvider, type School } from "@/lib/contexts/school";
+import { hexToHsl, lightenHsl } from "@/lib/colors";
 
 const supabase = createClient();
+
+const buildBrandStyle = (school: School): CSSProperties => {
+  const style: Record<string, string> = {};
+  const primary = hexToHsl(school.primary_color);
+  const secondary = hexToHsl(school.secondary_color);
+  if (primary) {
+    // Header gradient runs from --sa-blue-deep → --sa-blue. Make the deep
+    // value the user's primary, derive a slightly lighter end for the gradient.
+    style["--sa-blue-deep"] = primary;
+    style["--sa-blue"] = lightenHsl(primary, 12);
+  }
+  if (secondary) {
+    style["--sa-orange"] = secondary;
+    style["--sa-orange-glow"] = lightenHsl(secondary, 8);
+  }
+  return style as CSSProperties;
+};
 
 export default function SchoolLayout({
   children,
@@ -33,7 +51,7 @@ export default function SchoolLayout({
     (async () => {
       const { data, error } = await supabase
         .from("schools")
-        .select("id, slug, name, short_name, primary_color, secondary_color")
+        .select("id, slug, name, short_name, logo_url, primary_color, secondary_color")
         .eq("slug", schoolSlug)
         .maybeSingle();
       if (!active) return;
@@ -69,12 +87,18 @@ export default function SchoolLayout({
         <div>
           <p className="font-display text-3xl text-sa-blue-deep mb-2">School not found</p>
           <p className="text-sm text-muted-foreground">
-            Either the school doesn't exist or you don't have access.
+            Either the school doesn&apos;t exist or you don&apos;t have access.
           </p>
         </div>
       </div>
     );
   }
 
-  return <SchoolProvider value={{ school: school!, isAdmin }}>{children}</SchoolProvider>;
+  return (
+    <SchoolProvider value={{ school: school!, isAdmin }}>
+      <div style={buildBrandStyle(school!)} className="min-h-screen">
+        {children}
+      </div>
+    </SchoolProvider>
+  );
 }

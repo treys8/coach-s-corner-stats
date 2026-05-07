@@ -67,6 +67,8 @@ export default function TeamLayout({
       <Layout
         schoolSlug={school.slug}
         schoolName={school.name}
+        schoolShortName={school.short_name}
+        schoolLogoUrl={school.logo_url}
         teamSlug={team!.slug}
         teamName={team!.name}
       >

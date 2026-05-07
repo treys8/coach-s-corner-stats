@@ -10,6 +10,8 @@ interface LayoutProps {
   children: React.ReactNode;
   schoolSlug: string;
   schoolName: string;
+  schoolShortName?: string | null;
+  schoolLogoUrl?: string | null;
   teamSlug: string;
   teamName: string;
 }
@@ -17,10 +19,19 @@ interface LayoutProps {
 const isActive = (pathname: string, href: string, exact?: boolean) =>
   exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 
-export function Layout({ children, schoolSlug, schoolName, teamSlug, teamName }: LayoutProps) {
+export function Layout({
+  children,
+  schoolSlug,
+  schoolName,
+  schoolShortName,
+  schoolLogoUrl,
+  teamSlug,
+  teamName,
+}: LayoutProps) {
   const { user, signOut } = useAuth();
   const pathname = usePathname();
   const base = `/s/${schoolSlug}/${teamSlug}`;
+  const headerLabel = schoolShortName?.trim() || schoolName;
   const nav = [
     { href: base, label: "Roster", exact: true },
     { href: `${base}/team`, label: "Team Totals" },
@@ -32,14 +43,22 @@ export function Layout({ children, schoolSlug, schoolName, teamSlug, teamName }:
     <div className="min-h-screen bg-background flex flex-col">
       <header className="bg-gradient-blue text-primary-foreground border-b-4 border-sa-orange">
         <div className="container mx-auto px-6 py-5 flex items-center justify-between gap-6">
-          <div className="leading-tight">
-            <Link href={`/s/${schoolSlug}`} className="block">
-              <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-semibold">
-                {schoolName}
+          <Link href={`/s/${schoolSlug}`} className="flex items-center gap-3 leading-tight min-w-0">
+            {schoolLogoUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={schoolLogoUrl}
+                alt={`${schoolName} logo`}
+                className="h-12 w-auto max-w-[64px] object-contain drop-shadow"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-semibold truncate">
+                {headerLabel}
               </p>
-              <h1 className="font-display text-3xl md:text-4xl text-white">{teamName}</h1>
-            </Link>
-          </div>
+              <h1 className="font-display text-3xl md:text-4xl text-white truncate">{teamName}</h1>
+            </div>
+          </Link>
           <nav className="hidden md:flex items-center gap-1">
             {nav.map((n) => (
               <Link

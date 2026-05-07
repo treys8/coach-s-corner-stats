@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Users } from "lucide-react";
+import { Plus, Settings, Users } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
 import type { Sport, TeamLevel } from "@/integrations/supabase/types";
 
@@ -118,7 +118,13 @@ export default function SchoolDashboard() {
           <p className="text-sm text-muted-foreground mt-2">/s/{school.slug}</p>
         </div>
         {isAdmin && (
-          <Dialog open={open} onOpenChange={setOpen}>
+          <div className="flex items-center gap-2">
+            <Link href={`/s/${school.slug}/settings`}>
+              <Button variant="outline" className="gap-1">
+                <Settings className="w-4 h-4" /> Settings
+              </Button>
+            </Link>
+            <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange">
                 <Plus className="w-4 h-4 mr-1" /> Add Team
@@ -192,6 +198,7 @@ export default function SchoolDashboard() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </div>
         )}
       </div>
 
