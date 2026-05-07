@@ -77,9 +77,15 @@ export default function HomePage() {
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Statly</p>
           <h2 className="font-display text-3xl text-sa-blue-deep">No schools yet</h2>
           <p className="text-sm text-muted-foreground">
-            You're not a member of any school. Self-serve school signup is coming soon — for now, ask
-            an admin to add you.
+            Your account isn&apos;t linked to a school yet. Create one to get started, or ask an admin
+            at an existing school to add you.
           </p>
+          <Link
+            href="/signup"
+            className="block w-full bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange font-semibold uppercase tracking-wider rounded-md py-2.5"
+          >
+            Create your school
+          </Link>
           <Button onClick={signOut} variant="outline" className="w-full">
             Sign out
           </Button>
