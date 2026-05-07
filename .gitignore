@@ -15,6 +15,7 @@ dist-ssr
 .next
 out
 next-env.d.ts.bak
+tsconfig.tsbuildinfo
 
 *.local
 .env
