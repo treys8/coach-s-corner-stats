@@ -6,28 +6,39 @@ import { LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth";
 
-const nav = [
-  { href: "/", label: "Roster", exact: true },
-  { href: "/team", label: "Team Totals" },
-  { href: "/schedule", label: "Schedule" },
-  { href: "/upload", label: "Upload Stats" },
-];
+interface LayoutProps {
+  children: React.ReactNode;
+  schoolSlug: string;
+  schoolName: string;
+  teamSlug: string;
+  teamName: string;
+}
 
 const isActive = (pathname: string, href: string, exact?: boolean) =>
   exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export function Layout({ children, schoolSlug, schoolName, teamSlug, teamName }: LayoutProps) {
   const { user, signOut } = useAuth();
   const pathname = usePathname();
+  const base = `/s/${schoolSlug}/${teamSlug}`;
+  const nav = [
+    { href: base, label: "Roster", exact: true },
+    { href: `${base}/team`, label: "Team Totals" },
+    { href: `${base}/schedule`, label: "Schedule" },
+    { href: `${base}/upload`, label: "Upload Stats" },
+  ];
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="bg-gradient-blue text-primary-foreground border-b-4 border-sa-orange">
         <div className="container mx-auto px-6 py-5 flex items-center justify-between gap-6">
           <div className="leading-tight">
-            <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-semibold">
-              Coach's Corner
-            </p>
-            <h1 className="font-display text-3xl md:text-4xl text-white">Stats</h1>
+            <Link href={`/s/${schoolSlug}`} className="block">
+              <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-semibold">
+                {schoolName}
+              </p>
+              <h1 className="font-display text-3xl md:text-4xl text-white">{teamName}</h1>
+            </Link>
           </div>
           <nav className="hidden md:flex items-center gap-1">
             {nav.map((n) => (
@@ -81,7 +92,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <main className="flex-1">{children}</main>
       <footer className="border-t bg-muted/40 py-6 mt-12">
         <div className="container mx-auto px-6 text-center text-xs text-muted-foreground">
-          Coach's Corner Stats
+          Statly
         </div>
       </footer>
     </div>

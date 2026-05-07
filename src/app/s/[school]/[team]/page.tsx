@@ -9,10 +9,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, Users, Lock } from "lucide-react";
 import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
+import { useSchool } from "@/lib/contexts/school";
+import { useTeam } from "@/lib/contexts/team";
 
-interface PlayerRow {
-  id: string;
-  jersey_number: string;
+interface RosterRow {
+  player_id: string;
+  jersey_number: string | null;
   first_name: string;
   last_name: string;
   season_year: number;
@@ -21,38 +23,65 @@ interface PlayerRow {
 const supabase = createClient();
 
 export default function RosterPage() {
-  const [allPlayers, setAllPlayers] = useState<PlayerRow[]>([]);
+  const { school } = useSchool();
+  const { team } = useTeam();
+  const [allEntries, setAllEntries] = useState<RosterRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [latestUpload, setLatestUpload] = useState<string | null>(null);
   const [season, setSeason] = useState<number>(currentSeasonYear());
 
   useEffect(() => {
+    setLoading(true);
     const load = async () => {
-      const [{ data: p, error: pErr }, { data: u, error: uErr }] = await Promise.all([
-        supabase.from("players").select("id, jersey_number, first_name, last_name, season_year"),
-        supabase.from("csv_uploads").select("upload_date, season_year").order("upload_date", { ascending: false }),
+      const [{ data: entries, error: rErr }, { data: uploads, error: uErr }] = await Promise.all([
+        supabase
+          .from("roster_entries")
+          .select("player_id, jersey_number, season_year, players(first_name, last_name)")
+          .eq("team_id", team.id),
+        supabase
+          .from("csv_uploads")
+          .select("upload_date, season_year")
+          .eq("team_id", team.id)
+          .order("upload_date", { ascending: false }),
       ]);
-      if (pErr) toast.error(`Couldn't load roster: ${pErr.message}`);
+      if (rErr) toast.error(`Couldn't load roster: ${rErr.message}`);
       if (uErr) toast.error(`Couldn't load upload history: ${uErr.message}`);
-      setAllPlayers((p ?? []) as PlayerRow[]);
-      setLatestUpload(u?.[0]?.upload_date ?? null);
+      const rows: RosterRow[] = ((entries ?? []) as unknown as Array<{
+        player_id: string;
+        jersey_number: string | null;
+        season_year: number;
+        players: { first_name: string; last_name: string } | null;
+      }>)
+        .filter((e) => e.players)
+        .map((e) => ({
+          player_id: e.player_id,
+          jersey_number: e.jersey_number,
+          season_year: e.season_year,
+          first_name: e.players!.first_name,
+          last_name: e.players!.last_name,
+        }));
+      setAllEntries(rows);
+      setLatestUpload(uploads?.[0]?.upload_date ?? null);
       setLoading(false);
     };
     load();
-  }, []);
+  }, [team.id]);
 
   const seasons = useMemo(() => {
     const yrs = new Set<number>([currentSeasonYear()]);
-    allPlayers.forEach((p) => yrs.add(p.season_year));
+    allEntries.forEach((e) => yrs.add(e.season_year));
     return Array.from(yrs).sort((a, b) => b - a);
-  }, [allPlayers]);
+  }, [allEntries]);
 
   const players = useMemo(() => {
-    return allPlayers
-      .filter((p) => p.season_year === season)
+    return allEntries
+      .filter((e) => e.season_year === season)
       .slice()
-      .sort((a, b) => (parseInt(a.jersey_number) || 999) - (parseInt(b.jersey_number) || 999));
-  }, [allPlayers, season]);
+      .sort(
+        (a, b) =>
+          (parseInt(a.jersey_number ?? "") || 999) - (parseInt(b.jersey_number ?? "") || 999),
+      );
+  }, [allEntries, season]);
 
   const closed = isSeasonClosed(season);
 
@@ -61,7 +90,7 @@ export default function RosterPage() {
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Roster</p>
-          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">The Team</h2>
+          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">{team.name}</h2>
           <div className="flex items-center gap-3 mt-2 flex-wrap">
             {latestUpload && (
               <p className="text-sm text-muted-foreground">
@@ -113,7 +142,7 @@ export default function RosterPage() {
           </p>
           {!closed && (
             <Link
-              href="/upload"
+              href={`/s/${school.slug}/${team.slug}/upload`}
               className="inline-flex items-center gap-2 bg-sa-orange text-white px-6 py-3 rounded-md font-semibold uppercase tracking-wider text-sm shadow-orange hover:bg-sa-orange-glow transition-colors"
             >
               <Upload className="w-4 h-4" /> Upload Stats
@@ -124,8 +153,8 @@ export default function RosterPage() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {players.map((p) => (
             <Link
-              key={p.id}
-              href={`/player/${p.id}`}
+              key={p.player_id}
+              href={`/s/${school.slug}/${team.slug}/player/${p.player_id}`}
               className="group relative bg-card border border-border rounded-lg overflow-hidden shadow-card hover:shadow-elevated hover:-translate-y-0.5 transition-all"
             >
               <div className="bg-gradient-blue h-2" />

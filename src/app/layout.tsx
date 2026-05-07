@@ -3,7 +3,7 @@ import { Providers } from "@/components/Providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Coach's Corner Stats",
+  title: "Statly",
   description: "Statistics, rosters, schedules, and spray charts for high school baseball.",
 };
 

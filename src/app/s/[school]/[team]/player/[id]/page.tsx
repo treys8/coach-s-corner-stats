@@ -14,8 +14,10 @@ import { formatStat } from "@/lib/csvParser";
 import { KEY_BATTING, KEY_PITCHING, KEY_FIELDING } from "@/lib/glossary";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useSchool } from "@/lib/contexts/school";
+import { useTeam } from "@/lib/contexts/team";
 
-interface Player { id: string; jersey_number: string; first_name: string; last_name: string }
+interface Player { id: string; first_name: string; last_name: string }
 interface Snapshot { upload_date: string; stats: SnapshotStats }
 
 const TREND: Record<Section, string[]> = {
@@ -28,7 +30,10 @@ const supabase = createClient();
 
 export default function PlayerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { school } = useSchool();
+  const { team } = useTeam();
   const [player, setPlayer] = useState<Player | null>(null);
+  const [jersey, setJersey] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState({ batting: false, pitching: false, fielding: false });
@@ -36,26 +41,37 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     if (!id) return;
     const load = async () => {
-      const [{ data: pl, error: pErr }, { data: snaps, error: sErr }] = await Promise.all([
-        supabase.from("players").select("*").eq("id", id).maybeSingle(),
-        supabase
-          .from("stat_snapshots")
-          .select("upload_date, stats")
-          .eq("player_id", id)
-          .order("upload_date", { ascending: true }),
-      ]);
+      const [{ data: pl, error: pErr }, { data: snaps, error: sErr }, { data: roster }] =
+        await Promise.all([
+          supabase.from("players").select("id, first_name, last_name").eq("id", id).maybeSingle(),
+          supabase
+            .from("stat_snapshots")
+            .select("upload_date, stats")
+            .eq("team_id", team.id)
+            .eq("player_id", id)
+            .order("upload_date", { ascending: true }),
+          supabase
+            .from("roster_entries")
+            .select("jersey_number, season_year")
+            .eq("team_id", team.id)
+            .eq("player_id", id)
+            .order("season_year", { ascending: false })
+            .limit(1),
+        ]);
       if (pErr) toast.error(`Couldn't load player: ${pErr.message}`);
       if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
       setPlayer((pl as Player | null) ?? null);
+      setJersey(roster?.[0]?.jersey_number ?? null);
       setSnapshots(
         (snaps ?? []).map((s) => ({ upload_date: s.upload_date, stats: parseSnapshotStats(s.stats) })),
       );
       setLoading(false);
     };
     load();
-  }, [id]);
+  }, [id, team.id]);
 
   const latestSnap = snapshots[snapshots.length - 1];
+  const backHref = `/s/${school.slug}/${team.slug}`;
 
   if (loading) {
     return (
@@ -69,7 +85,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
     return (
       <div className="container mx-auto px-6 py-10 text-center">
         <p className="text-muted-foreground">Player not found.</p>
-        <Link href="/" className="text-sa-orange underline">Back to roster</Link>
+        <Link href={backHref} className="text-sa-orange underline">Back to roster</Link>
       </div>
     );
   }
@@ -153,16 +169,16 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
 
   return (
     <div className="container mx-auto px-6 py-10">
-      <Link href="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-sa-orange mb-6">
+      <Link href={backHref} className="inline-flex items-center text-sm text-muted-foreground hover:text-sa-orange mb-6">
         <ArrowLeft className="w-4 h-4 mr-1" /> Back to roster
       </Link>
 
       <div className="bg-gradient-blue text-white rounded-lg p-8 mb-8 shadow-elevated relative overflow-hidden">
         <div className="absolute -right-8 -bottom-12 font-display text-[14rem] leading-none text-sa-orange/20 select-none font-mono-stat">
-          {player.jersey_number || "—"}
+          {jersey || "—"}
         </div>
         <div className="relative">
-          <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold mb-1">#{player.jersey_number}</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold mb-1">#{jersey ?? "—"}</p>
           <h2 className="font-display text-6xl md:text-7xl">{player.first_name} {player.last_name}</h2>
           <p className="text-white/70 mt-2 text-sm">
             {snapshots.length} weekly snapshot{snapshots.length === 1 ? "" : "s"} · latest{" "}

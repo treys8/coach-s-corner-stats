@@ -1,64 +1,39 @@
 -- ============================================================================
--- Statly — fresh-database setup
+-- Multi-tenant schema refactor.
 --
--- Paste this whole file into a NEW Supabase project's SQL Editor and run it.
--- Result: full schema, RLS, helper functions, glossary, and a demo school
--- assigned to treyschill@gmail.com.
+-- Moves from a single-team data model to:
+--   schools  →  teams  →  team_seasons (implicit: season_year on a team)
+--                ↓
+--             roster_entries (player on a team for a season, with jersey)
+--                ↓
+--             players (persistent identity, scoped to a school)
 --
--- For existing projects already running the v1 (single-team) schema, run
--- supabase/migrations/20260507120000_multi_tenant_schema.sql instead — it
--- drops the v1 tables and creates the v2 shape.
+-- Memberships:
+--   school_admins (school-wide access — ADs)
+--   team_members  (per-team access — coaches, scorers)
+--
+-- RLS: replaces global is_coach() with is_team_member(team_id) and
+-- is_school_admin(school_id). Public-read carve-outs come in a later PR
+-- when the public Scores page lands.
+--
+-- Existing data was throwaway — this migration drops the old tables and
+-- recreates with the new shape. The `glossary` content and helper functions
+-- (season_year_for, is_season_closed) are preserved.
 -- ============================================================================
 
--- ---- Helper functions -------------------------------------------------------
+-- ---- Drop old tables (data was throwaway) ----------------------------------
 
-CREATE OR REPLACE FUNCTION public.set_updated_at()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SET search_path = public
-AS $$
-BEGIN NEW.updated_at = now(); RETURN NEW; END;
-$$;
+DROP TABLE IF EXISTS public.stat_snapshots CASCADE;
+DROP TABLE IF EXISTS public.csv_uploads    CASCADE;
+DROP TABLE IF EXISTS public.games          CASCADE;
+DROP TABLE IF EXISTS public.players        CASCADE;
+DROP TABLE IF EXISTS public.coaches        CASCADE;
 
--- Seasons run Feb 1 – May 31. Off-season dates roll back to the most recent
--- season year (Jun–Dec → that calendar year, Jan → prior calendar year).
-CREATE OR REPLACE FUNCTION public.season_year_for(d date)
-RETURNS smallint
-LANGUAGE sql
-IMMUTABLE
-SET search_path = public
-AS $$
-  SELECT CASE
-    WHEN EXTRACT(MONTH FROM d) = 1 THEN (EXTRACT(YEAR FROM d) - 1)::smallint
-    ELSE EXTRACT(YEAR FROM d)::smallint
-  END;
-$$;
+DROP FUNCTION IF EXISTS public.is_coach() CASCADE;
 
-CREATE OR REPLACE FUNCTION public.is_season_closed(yr smallint)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SET search_path = public
-AS $$
-  SELECT (CURRENT_DATE > make_date(yr::int, 5, 31));
-$$;
+-- ---- Tenants ---------------------------------------------------------------
 
--- ---- Glossary (global stat reference) ---------------------------------------
-
-CREATE TABLE IF NOT EXISTS public.glossary (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  abbreviation TEXT NOT NULL UNIQUE,
-  definition   TEXT NOT NULL,
-  category     TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE public.glossary ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "glossary public read" ON public.glossary;
-CREATE POLICY "glossary public read" ON public.glossary FOR SELECT USING (TRUE);
-
--- ---- Tenants ----------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS public.schools (
+CREATE TABLE public.schools (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug            TEXT UNIQUE NOT NULL CHECK (slug ~ '^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$'),
   name            TEXT NOT NULL,
@@ -69,11 +44,10 @@ CREATE TABLE IF NOT EXISTS public.schools (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-DROP TRIGGER IF EXISTS schools_updated_at ON public.schools;
 CREATE TRIGGER schools_updated_at BEFORE UPDATE ON public.schools
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
-CREATE TABLE IF NOT EXISTS public.teams (
+CREATE TABLE public.teams (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school_id   UUID NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
   slug        TEXT NOT NULL CHECK (slug ~ '^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$'),
@@ -84,14 +58,13 @@ CREATE TABLE IF NOT EXISTS public.teams (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (school_id, slug)
 );
-CREATE INDEX IF NOT EXISTS teams_school_idx ON public.teams (school_id);
-DROP TRIGGER IF EXISTS teams_updated_at ON public.teams;
+CREATE INDEX teams_school_idx ON public.teams (school_id);
 CREATE TRIGGER teams_updated_at BEFORE UPDATE ON public.teams
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- ---- Memberships ------------------------------------------------------------
+-- ---- Memberships -----------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS public.school_admins (
+CREATE TABLE public.school_admins (
   school_id  UUID NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
   user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   role       TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('owner', 'admin')),
@@ -99,7 +72,7 @@ CREATE TABLE IF NOT EXISTS public.school_admins (
   PRIMARY KEY (school_id, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS public.team_members (
+CREATE TABLE public.team_members (
   team_id    UUID NOT NULL REFERENCES public.teams(id) ON DELETE CASCADE,
   user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   role       TEXT NOT NULL DEFAULT 'coach' CHECK (role IN ('coach', 'scorer', 'assistant')),
@@ -107,9 +80,9 @@ CREATE TABLE IF NOT EXISTS public.team_members (
   PRIMARY KEY (team_id, user_id)
 );
 
--- ---- Players ----------------------------------------------------------------
+-- ---- Players (persistent identity, school-scoped) --------------------------
 
-CREATE TABLE IF NOT EXISTS public.players (
+CREATE TABLE public.players (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school_id   UUID NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
   first_name  TEXT NOT NULL,
@@ -119,12 +92,15 @@ CREATE TABLE IF NOT EXISTS public.players (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (school_id, first_name, last_name)
 );
-CREATE INDEX IF NOT EXISTS players_school_idx ON public.players (school_id);
-DROP TRIGGER IF EXISTS players_updated_at ON public.players;
+CREATE INDEX players_school_idx ON public.players (school_id);
 CREATE TRIGGER players_updated_at BEFORE UPDATE ON public.players
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
-CREATE TABLE IF NOT EXISTS public.roster_entries (
+-- Roster entry: which team a player is on for a specific season, plus that
+-- season's jersey number. A player can be on multiple teams (varsity + JV
+-- mid-season call-up scenarios) so we don't constrain to one entry per
+-- (player, season).
+CREATE TABLE public.roster_entries (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   player_id     UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
   team_id       UUID NOT NULL REFERENCES public.teams(id) ON DELETE CASCADE,
@@ -134,12 +110,12 @@ CREATE TABLE IF NOT EXISTS public.roster_entries (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (team_id, season_year, player_id)
 );
-CREATE INDEX IF NOT EXISTS roster_entries_team_season_idx ON public.roster_entries (team_id, season_year);
-CREATE INDEX IF NOT EXISTS roster_entries_player_idx      ON public.roster_entries (player_id);
+CREATE INDEX roster_entries_team_season_idx ON public.roster_entries (team_id, season_year);
+CREATE INDEX roster_entries_player_idx      ON public.roster_entries (player_id);
 
--- ---- Stats / games / uploads ------------------------------------------------
+-- ---- Stats / games / uploads (now team-scoped) -----------------------------
 
-CREATE TABLE IF NOT EXISTS public.stat_snapshots (
+CREATE TABLE public.stat_snapshots (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   team_id     UUID NOT NULL REFERENCES public.teams(id) ON DELETE CASCADE,
   player_id   UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
@@ -150,10 +126,10 @@ CREATE TABLE IF NOT EXISTS public.stat_snapshots (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (team_id, player_id, upload_date)
 );
-CREATE INDEX IF NOT EXISTS stat_snapshots_team_season_idx ON public.stat_snapshots (team_id, season_year);
-CREATE INDEX IF NOT EXISTS stat_snapshots_player_idx      ON public.stat_snapshots (player_id, upload_date DESC);
+CREATE INDEX stat_snapshots_team_season_idx ON public.stat_snapshots (team_id, season_year);
+CREATE INDEX stat_snapshots_player_idx      ON public.stat_snapshots (player_id, upload_date DESC);
 
-CREATE TABLE IF NOT EXISTS public.games (
+CREATE TABLE public.games (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   team_id        UUID NOT NULL REFERENCES public.teams(id) ON DELETE CASCADE,
   season_year    SMALLINT NOT NULL,
@@ -165,18 +141,18 @@ CREATE TABLE IF NOT EXISTS public.games (
   opponent_score INTEGER,
   result         TEXT CHECK (result IS NULL OR result IN ('W', 'L', 'T')),
   notes          TEXT,
+  -- Forward-looking fields for the Scores page (PR C):
   is_final       BOOLEAN NOT NULL DEFAULT FALSE,
   finalized_at   TIMESTAMPTZ,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS games_team_date_idx ON public.games (team_id, game_date);
-CREATE INDEX IF NOT EXISTS games_finalized_idx ON public.games (is_final, game_date) WHERE is_final = TRUE;
-DROP TRIGGER IF EXISTS games_updated_at ON public.games;
+CREATE INDEX games_team_date_idx ON public.games (team_id, game_date);
+CREATE INDEX games_finalized_idx ON public.games (is_final, game_date) WHERE is_final = TRUE;
 CREATE TRIGGER games_updated_at BEFORE UPDATE ON public.games
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
-CREATE TABLE IF NOT EXISTS public.csv_uploads (
+CREATE TABLE public.csv_uploads (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   team_id      UUID NOT NULL REFERENCES public.teams(id) ON DELETE CASCADE,
   season_year  SMALLINT NOT NULL,
@@ -186,10 +162,10 @@ CREATE TABLE IF NOT EXISTS public.csv_uploads (
   notes        TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS csv_uploads_team_idx ON public.csv_uploads (team_id, upload_date DESC);
+CREATE INDEX csv_uploads_team_idx ON public.csv_uploads (team_id, upload_date DESC);
 
 -- ============================================================================
--- RLS
+-- RLS policies
 -- ============================================================================
 
 ALTER TABLE public.schools         ENABLE ROW LEVEL SECURITY;
@@ -202,8 +178,15 @@ ALTER TABLE public.stat_snapshots  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.games           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.csv_uploads     ENABLE ROW LEVEL SECURITY;
 
+-- Helper functions (SECURITY DEFINER so RLS doesn't recurse into membership tables)
+
 CREATE OR REPLACE FUNCTION public.is_school_admin(p_school UUID)
-RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.school_admins
     WHERE school_id = p_school AND user_id = auth.uid()
@@ -211,7 +194,12 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_team_member(p_team UUID)
-RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.team_members
     WHERE team_id = p_team AND user_id = auth.uid()
@@ -225,21 +213,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.is_school_admin(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.is_team_member(UUID)  TO anon, authenticated;
 
-DROP POLICY IF EXISTS "schools read by members"       ON public.schools;
-DROP POLICY IF EXISTS "schools write by admins"       ON public.schools;
-DROP POLICY IF EXISTS "teams read by members"         ON public.teams;
-DROP POLICY IF EXISTS "teams write by school admin"   ON public.teams;
-DROP POLICY IF EXISTS "school_admins manage by admins" ON public.school_admins;
-DROP POLICY IF EXISTS "school_admins read own"        ON public.school_admins;
-DROP POLICY IF EXISTS "team_members manage by school admin" ON public.team_members;
-DROP POLICY IF EXISTS "team_members read own team"    ON public.team_members;
-DROP POLICY IF EXISTS "players read by school members" ON public.players;
-DROP POLICY IF EXISTS "players write by school members" ON public.players;
-DROP POLICY IF EXISTS "roster_entries by team member" ON public.roster_entries;
-DROP POLICY IF EXISTS "stat_snapshots by team member" ON public.stat_snapshots;
-DROP POLICY IF EXISTS "games by team member"          ON public.games;
-DROP POLICY IF EXISTS "csv_uploads by team member"    ON public.csv_uploads;
-
+-- schools: members of a school (admins or any team member) can read it; only admins can write.
 CREATE POLICY "schools read by members" ON public.schools
   FOR SELECT USING (
     public.is_school_admin(id)
@@ -252,18 +226,22 @@ CREATE POLICY "schools write by admins" ON public.schools
   FOR ALL USING (public.is_school_admin(id))
   WITH CHECK (public.is_school_admin(id));
 
+-- teams: school admins or team members
 CREATE POLICY "teams read by members" ON public.teams
   FOR SELECT USING (public.is_team_member(id) OR public.is_school_admin(school_id));
 CREATE POLICY "teams write by school admin" ON public.teams
   FOR ALL USING (public.is_school_admin(school_id))
   WITH CHECK (public.is_school_admin(school_id));
 
+-- school_admins: visible to admins of the same school; writable only by existing admins.
 CREATE POLICY "school_admins manage by admins" ON public.school_admins
   FOR ALL USING (public.is_school_admin(school_id))
   WITH CHECK (public.is_school_admin(school_id));
+-- Allow a user to read their own membership rows so the app can discover their schools.
 CREATE POLICY "school_admins read own" ON public.school_admins
   FOR SELECT USING (user_id = auth.uid());
 
+-- team_members: managed by school admins; readable by team members for that team.
 CREATE POLICY "team_members manage by school admin" ON public.team_members
   FOR ALL USING (
     EXISTS (SELECT 1 FROM public.teams t WHERE t.id = team_id AND public.is_school_admin(t.school_id))
@@ -274,6 +252,7 @@ CREATE POLICY "team_members manage by school admin" ON public.team_members
 CREATE POLICY "team_members read own team" ON public.team_members
   FOR SELECT USING (public.is_team_member(team_id) OR user_id = auth.uid());
 
+-- players: scoped to a school; readable/writable by anyone with team access at that school.
 CREATE POLICY "players read by school members" ON public.players
   FOR SELECT USING (
     public.is_school_admin(school_id)
@@ -298,6 +277,7 @@ CREATE POLICY "players write by school members" ON public.players
     )
   );
 
+-- roster_entries / stat_snapshots / games / csv_uploads: scoped to team.
 CREATE POLICY "roster_entries by team member" ON public.roster_entries
   FOR ALL USING (public.is_team_member(team_id))
   WITH CHECK (public.is_team_member(team_id));
@@ -315,9 +295,10 @@ CREATE POLICY "csv_uploads by team member" ON public.csv_uploads
   WITH CHECK (public.is_team_member(team_id));
 
 -- ============================================================================
--- Demo seed: gives treyschill@gmail.com a school + team to start with.
--- Idempotent. Until self-serve signup ships, this is how the dev account
--- gets a working tenant.
+-- Demo seed: gives treyschill@gmail.com a school + team to work in until the
+-- self-serve signup flow lands. Idempotent: re-running this migration won't
+-- duplicate. The user's auth.users.id may not exist yet at migration time —
+-- the seed handles that gracefully (NULL → skip the membership insert).
 -- ============================================================================
 
 DO $$
@@ -328,16 +309,19 @@ DECLARE
 BEGIN
   SELECT id INTO v_user_id FROM auth.users WHERE lower(email) = 'treyschill@gmail.com' LIMIT 1;
 
+  -- Demo school (idempotent on slug).
   INSERT INTO public.schools (slug, name, short_name)
   VALUES ('demo', 'Demo School', 'DS')
   ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
   RETURNING id INTO v_school_id;
 
+  -- Demo team (idempotent on (school, slug)).
   INSERT INTO public.teams (school_id, slug, name, sport, level)
   VALUES (v_school_id, 'varsity-baseball', 'Varsity Baseball', 'baseball', 'varsity')
   ON CONFLICT (school_id, slug) DO UPDATE SET name = EXCLUDED.name
   RETURNING id INTO v_team_id;
 
+  -- Membership rows (only if the user has signed up at least once).
   IF v_user_id IS NOT NULL THEN
     INSERT INTO public.school_admins (school_id, user_id, role)
     VALUES (v_school_id, v_user_id, 'owner')
