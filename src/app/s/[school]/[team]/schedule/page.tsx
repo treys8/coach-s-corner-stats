@@ -13,6 +13,7 @@ import { Plus, Trash2, MapPin, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { seasonYearFor, isSeasonClosed, currentSeasonYear, seasonLabel } from "@/lib/season";
+import { useTeam } from "@/lib/contexts/team";
 
 interface Game {
   id: string;
@@ -25,6 +26,7 @@ interface Game {
   result: string | null;
   notes: string | null;
   season_year: number;
+  is_final: boolean;
 }
 
 const gameSchema = z.object({
@@ -41,6 +43,7 @@ const gameSchema = z.object({
 const supabase = createClient();
 
 export default function SchedulePage() {
+  const { team } = useTeam();
   const [games, setGames] = useState<Game[]>([]);
   const [open, setOpen] = useState(false);
   const [seasons, setSeasons] = useState<number[]>([]);
@@ -51,7 +54,11 @@ export default function SchedulePage() {
   });
 
   const load = async () => {
-    const { data, error } = await supabase.from("games").select("*").order("game_date", { ascending: true });
+    const { data, error } = await supabase
+      .from("games")
+      .select("*")
+      .eq("team_id", team.id)
+      .order("game_date", { ascending: true });
     if (error) {
       toast.error(`Couldn't load schedule: ${error.message}`);
       return;
@@ -63,7 +70,8 @@ export default function SchedulePage() {
   };
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [team.id]);
 
   const closed = isSeasonClosed(season);
 
@@ -79,13 +87,14 @@ export default function SchedulePage() {
       return;
     }
     const payload = {
+      team_id: team.id,
       game_date: form.game_date,
       game_time: form.game_time || null,
       opponent: form.opponent.trim(),
-      location: form.location,
+      location: form.location as "home" | "away" | "neutral",
       team_score: form.team_score === "" ? null : Number(form.team_score),
       opponent_score: form.opponent_score === "" ? null : Number(form.opponent_score),
-      result: form.result || null,
+      result: (form.result || null) as "W" | "L" | "T" | null,
       notes: form.notes || null,
       season_year: yr,
     };

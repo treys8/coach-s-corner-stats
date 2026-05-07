@@ -10,10 +10,14 @@ import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucid
 import { toast } from "sonner";
 import { parseStatsWorkbook } from "@/lib/csvParser";
 import { seasonYearFor, isSeasonClosed } from "@/lib/season";
+import { useSchool } from "@/lib/contexts/school";
+import { useTeam } from "@/lib/contexts/team";
 
 const supabase = createClient();
 
 export default function UploadStatsPage() {
+  const { school } = useSchool();
+  const { team } = useTeam();
   const [file, setFile] = useState<File | null>(null);
   const [uploadDate, setUploadDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
@@ -47,38 +51,60 @@ export default function UploadStatsPage() {
         throw new Error(`The ${season_year} season is closed (ended May 31). Pick a date inside an open season window (Feb 1 – May 31).`);
       }
 
+      // 1. Upsert players (school-scoped, persistent identity).
       const playerRows = players.map((p) => ({
+        school_id: school.id,
         first_name: p.first,
         last_name: p.last,
-        jersey_number: p.number || "",
-        season_year,
       }));
       const { error: playerErr } = await supabase
         .from("players")
-        .upsert(playerRows, { onConflict: "season_year,first_name,last_name" });
+        .upsert(playerRows, { onConflict: "school_id,first_name,last_name" });
       if (playerErr) throw playerErr;
 
+      // 2. Fetch player IDs scoped to this school.
       const { data: playerRecords, error: fetchErr } = await supabase
         .from("players")
         .select("id, first_name, last_name")
-        .eq("season_year", season_year);
+        .eq("school_id", school.id);
       if (fetchErr) throw fetchErr;
       const idByName = new Map<string, string>();
       (playerRecords ?? []).forEach((r) => idByName.set(`${r.first_name}|${r.last_name}`, r.id));
 
+      // 3. Upsert roster_entries for this team-season (carries jersey number).
+      const rosterRows = players
+        .map((p) => {
+          const pid = idByName.get(`${p.first}|${p.last}`);
+          if (!pid) return null;
+          return {
+            player_id: pid,
+            team_id: team.id,
+            season_year,
+            jersey_number: p.number || null,
+          };
+        })
+        .filter(Boolean) as Array<{ player_id: string; team_id: string; season_year: number; jersey_number: string | null }>;
+      const { error: rosterErr } = await supabase
+        .from("roster_entries")
+        .upsert(rosterRows, { onConflict: "team_id,season_year,player_id" });
+      if (rosterErr) throw rosterErr;
+
+      // 4. Insert audit row.
       const { data: uploadRow, error: upErr } = await supabase
         .from("csv_uploads")
-        .insert({ upload_date: uploadDate, filename: file.name, player_count: players.length, season_year })
+        .insert({ team_id: team.id, upload_date: uploadDate, filename: file.name, player_count: players.length, season_year })
         .select("id")
         .single();
       if (upErr) throw upErr;
 
+      // 5. Upsert stat_snapshots (team-scoped, by player_id+upload_date).
       const snapshots = players
         .map((p) => {
           const pid = idByName.get(`${p.first}|${p.last}`);
           if (!pid) return null;
           return {
             player_id: pid,
+            team_id: team.id,
             upload_date: uploadDate,
             upload_id: uploadRow.id,
             stats: p.stats,
@@ -89,7 +115,7 @@ export default function UploadStatsPage() {
 
       const { error: snapErr } = await supabase
         .from("stat_snapshots")
-        .upsert(snapshots as never[], { onConflict: "player_id,upload_date" });
+        .upsert(snapshots as never[], { onConflict: "team_id,player_id,upload_date" });
       if (snapErr) throw snapErr;
 
       setResult({ ok: true, msg: `Imported ${players.length} players for ${new Date(uploadDate).toLocaleDateString()}.` });

@@ -6,7 +6,6 @@ import type { Session, User } from "@supabase/supabase-js";
 export type AuthState = {
   session: Session | null;
   user: User | null;
-  isCoach: boolean | null;
   loading: boolean;
   signInWithEmail: (email: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;

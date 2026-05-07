@@ -17,12 +17,22 @@ import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
 import { aggregateByDate, RATE_STATS } from "@/lib/aggregate";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useSchool } from "@/lib/contexts/school";
+import { useTeam } from "@/lib/contexts/team";
 
 interface Snapshot {
   player_id: string;
   upload_date: string;
   season_year: number;
   stats: SnapshotStats;
+}
+
+interface PlayerInfo {
+  id: string;
+  first_name: string;
+  last_name: string;
+  jersey_number: string | null;
+  season_year: number;
 }
 
 const MIN_AB = 5;
@@ -37,8 +47,10 @@ const KEY_DISPLAY: Record<Section, string[]> = {
 const supabase = createClient();
 
 export default function TeamTotalsPage() {
+  const { school } = useSchool();
+  const { team } = useTeam();
   const [allSnapshots, setAllSnapshots] = useState<Snapshot[]>([]);
-  const [allPlayers, setAllPlayers] = useState<Record<string, { id: string; first_name: string; last_name: string; jersey_number: string; season_year: number }>>({});
+  const [allPlayers, setAllPlayers] = useState<Record<string, PlayerInfo>>({});
   const [loading, setLoading] = useState(true);
   const [season, setSeason] = useState<number>(currentSeasonYear());
 
@@ -46,10 +58,18 @@ export default function TeamTotalsPage() {
   const [leaderDir, setLeaderDir] = useState<Record<Section, "desc" | "asc">>({ batting: "desc", pitching: "asc", fielding: "desc" });
 
   useEffect(() => {
+    setLoading(true);
     const load = async () => {
-      const [{ data: snaps, error: sErr }, { data: pls, error: pErr }] = await Promise.all([
-        supabase.from("stat_snapshots").select("player_id, upload_date, season_year, stats").order("upload_date", { ascending: true }),
-        supabase.from("players").select("id, first_name, last_name, jersey_number, season_year"),
+      const [{ data: snaps, error: sErr }, { data: entries, error: pErr }] = await Promise.all([
+        supabase
+          .from("stat_snapshots")
+          .select("player_id, upload_date, season_year, stats")
+          .eq("team_id", team.id)
+          .order("upload_date", { ascending: true }),
+        supabase
+          .from("roster_entries")
+          .select("player_id, jersey_number, season_year, players(id, first_name, last_name)")
+          .eq("team_id", team.id),
       ]);
       if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
       if (pErr) toast.error(`Couldn't load players: ${pErr.message}`);
@@ -61,13 +81,31 @@ export default function TeamTotalsPage() {
           stats: parseSnapshotStats(s.stats),
         })),
       );
-      const pmap: Record<string, { id: string; first_name: string; last_name: string; jersey_number: string; season_year: number }> = {};
-      (pls ?? []).forEach((p) => { pmap[p.id] = p; });
+      const pmap: Record<string, PlayerInfo> = {};
+      ((entries ?? []) as unknown as Array<{
+        player_id: string;
+        jersey_number: string | null;
+        season_year: number;
+        players: { id: string; first_name: string; last_name: string } | null;
+      }>).forEach((e) => {
+        if (!e.players) return;
+        // Track latest season per player (use the most recent season's jersey)
+        const existing = pmap[e.player_id];
+        if (!existing || e.season_year > existing.season_year) {
+          pmap[e.player_id] = {
+            id: e.players.id,
+            first_name: e.players.first_name,
+            last_name: e.players.last_name,
+            jersey_number: e.jersey_number,
+            season_year: e.season_year,
+          };
+        }
+      });
       setAllPlayers(pmap);
       setLoading(false);
     };
     load();
-  }, []);
+  }, [team.id]);
 
   const seasons = useMemo(() => {
     const yrs = new Set<number>([currentSeasonYear()]);
@@ -78,11 +116,6 @@ export default function TeamTotalsPage() {
 
   const closed = isSeasonClosed(season);
   const snapshots = useMemo(() => allSnapshots.filter((s) => s.season_year === season), [allSnapshots, season]);
-  const players = useMemo(() => {
-    const out: typeof allPlayers = {};
-    Object.entries(allPlayers).forEach(([k, v]) => { if (v.season_year === season) out[k] = v; });
-    return out;
-  }, [allPlayers, season]);
 
   const byDate = useMemo(() => aggregateByDate(snapshots), [snapshots]);
 
@@ -268,12 +301,12 @@ export default function TeamTotalsPage() {
                 ) : (
                   <div className="divide-y divide-border border border-border rounded-md overflow-hidden">
                     {board.map((row, i) => {
-                      const p = players[row.player_id];
+                      const p = allPlayers[row.player_id];
                       const name = p ? `${p.first_name} ${p.last_name}` : "Unknown";
                       const isTop = i === 0;
                       return (
                         <Link
-                          href={p ? `/player/${p.id}` : "#"}
+                          href={p ? `/s/${school.slug}/${team.slug}/player/${p.id}` : "#"}
                           key={row.player_id}
                           className={`flex items-center gap-3 px-3 py-2 hover:bg-muted/60 transition-colors ${isTop ? "bg-sa-orange/5" : ""}`}
                         >

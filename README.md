@@ -1,12 +1,12 @@
-# Coach's Corner Stats
+# Statly
 
-A high-school baseball stats platform — rosters, schedules, statistics, and spray charts.
-Built as a focused alternative to GameChanger, optimized for the high school athletic-department
-workflow rather than club/travel teams.
+A high-school baseball stats platform — rosters, schedules, statistics, and (eventually)
+spray charts and a public Scores feed. Built as a focused alternative to GameChanger,
+optimized for the high school athletic-department workflow rather than club/travel teams.
 
-> Status: early prototype. Single-team, single-season scaffolding inherited from the initial
-> prototype is being refactored into a multi-tenant SaaS (multiple schools, varsity/JV teams,
-> persistent player records across seasons). See `memory/` notes for product direction.
+> Status: multi-tenant SaaS shape is now live (schools → teams → seasons). Self-serve
+> school signup, public Scores page, and the tablet PWA for live in-game stat entry are
+> still upcoming. See `memory/` notes for product direction.
 
 ## Stack
 
@@ -27,39 +27,65 @@ npm run lint
 npm run build          # production bundle
 ```
 
-Copy `.env.example` to `.env.local` and fill in your Supabase project values:
+Copy `.env.example` to `.env` and fill in your Supabase project values:
 
 ```
 NEXT_PUBLIC_SUPABASE_URL="https://<project>.supabase.co"
 NEXT_PUBLIC_SUPABASE_ANON_KEY="<anon key>"
 ```
 
-(Older `VITE_*` names from the Vite-era code no longer work.)
-
 ## Database setup
 
-A consolidated schema script lives at `supabase/setup.sql` — paste it into a fresh Supabase
-project's SQL Editor and run it once. It creates the tables, RLS policies, helper functions,
-and seeds a bootstrap coach email so the first sign-in works.
+For a brand-new Supabase project, paste `supabase/setup.sql` into the project's SQL
+Editor and run it once. It creates the full schema (schools, teams, players, etc.),
+RLS policies, helper functions, glossary, and seeds a demo school for
+`treyschill@gmail.com`.
 
-The script is the concatenation of `supabase/migrations/*.sql` in order; both are kept in
-sync. Use the migrations folder for incremental changes from here on.
+For an existing project upgrading from the v1 (single-team) schema, run
+`supabase/migrations/20260507120000_multi_tenant_schema.sql` instead — it drops the
+v1 tables and creates the v2 shape.
+
+## Tenancy model
+
+Statly is multi-tenant. The hierarchy is:
+
+```
+schools  →  teams (sport, level)  →  team-seasons (year)  →  roster_entries
+                                                              ↓
+players (persistent across seasons, scoped to a school)
+```
+
+A coach belongs to one or more `team_members`. An athletic director belongs to
+`school_admins` and inherits access to every team in the school.
+
+Routing is path-prefixed:
+
+- `/` — smart redirect: login → first school → school picker if multiple
+- `/login` — magic-link sign-in (school-agnostic)
+- `/s/[school]` — school dashboard (list of teams, "Add team" for admins)
+- `/s/[school]/[team]` — roster
+- `/s/[school]/[team]/team` — team totals & leaderboards
+- `/s/[school]/[team]/schedule` — schedule
+- `/s/[school]/[team]/upload` — weekly stats upload
+- `/s/[school]/[team]/player/[id]` — player detail
+- `/auth/callback` — Supabase magic-link handler
 
 ## Auth model
 
-Coach-only access. Sign-in is magic link via Supabase Auth; access is gated by an allow-list
-in `public.coaches` (RLS calls `is_coach()` which checks `auth.jwt() ->> 'email'`).
+Magic-link via Supabase Auth. RLS gates access:
 
-**Adding a new coach:** run in the Supabase SQL Editor:
+- `is_school_admin(school_id)` — true if the user is in `school_admins` for that school
+- `is_team_member(team_id)` — true if the user is in `team_members` for that team OR is
+  an admin of the team's school
 
-```sql
-INSERT INTO public.coaches (email) VALUES ('them@example.com');
-```
+All data-bearing tables (`players`, `roster_entries`, `stat_snapshots`, `games`,
+`csv_uploads`) are gated by `is_team_member()`. The `schools` and `teams` tables are
+visible to any member of the school.
 
-Use lowercase. The function compares case-insensitively but the table is case-sensitive on
-insert.
+Self-serve school signup is the next PR. Until then, schools are seeded via SQL — see
+the `DO $$ ... $$` block at the bottom of `setup.sql`.
 
-## Excel template format (legacy import path)
+## Excel template format
 
 The Upload Stats page expects an `.xlsx` workbook with **three sheets** named (case-
 insensitively) `Hitting`, `Pitching`, and `Fielding`. If any sheet is missing, the upload
@@ -89,7 +115,7 @@ If a stat column header isn't in `src/lib/glossary.ts`, the upload still ingests
 see a warning toast and a console warning.
 
 > The xlsx import path is preserved for now as a migration-friendly bulk-load route. Live
-> in-game stat entry from a tablet PWA is the eventual primary input — see roadmap notes.
+> in-game stat entry from a tablet PWA is the eventual primary input.
 
 ## Seasons
 
@@ -102,62 +128,67 @@ and the matching `season_year_for(date)` SQL function — keep them in sync.
 
 ```
 src/
-├── app/                          # Next.js App Router
-│   ├── layout.tsx                # root layout, Providers, fonts, globals.css
+├── app/                                # Next.js App Router
+│   ├── layout.tsx                      # root layout, providers
 │   ├── globals.css
-│   ├── (app)/                    # protected route group
-│   │   ├── layout.tsx            # auth gate + chrome (header/footer)
-│   │   ├── page.tsx              # / Roster
-│   │   ├── player/[id]/page.tsx
-│   │   ├── team/page.tsx
-│   │   ├── schedule/page.tsx
-│   │   └── upload/page.tsx
+│   ├── page.tsx                        # / smart redirect / school picker
+│   ├── s/[school]/                     # school-scoped routes
+│   │   ├── layout.tsx                  # validates school access, provides SchoolContext
+│   │   ├── page.tsx                    # school dashboard (teams + add)
+│   │   └── [team]/                     # team-scoped routes
+│   │       ├── layout.tsx              # validates team access, renders chrome
+│   │       ├── page.tsx                # roster
+│   │       ├── team/page.tsx           # team totals + leaderboards
+│   │       ├── schedule/page.tsx
+│   │       ├── upload/page.tsx
+│   │       └── player/[id]/page.tsx
 │   ├── login/page.tsx
-│   ├── auth/callback/route.ts    # Supabase magic-link handler
+│   ├── auth/callback/route.ts          # magic-link handler
 │   └── not-found.tsx
-├── middleware.ts                 # refreshes Supabase session cookies
+├── middleware.ts                       # refreshes Supabase session cookies
 ├── components/
-│   ├── Layout.tsx                # header/nav/footer chrome
-│   ├── Providers.tsx             # QueryClient, Auth, Toasters
+│   ├── Layout.tsx                      # team-scoped header/nav/footer chrome
+│   ├── Providers.tsx                   # QueryClient, AuthProvider, toasters
 │   ├── StatTooltip.tsx
-│   └── ui/                       # shadcn primitives
+│   └── ui/                             # shadcn primitives
 ├── contexts/
-│   ├── auth.ts                   # context type + useAuth hook
-│   └── AuthContext.tsx           # AuthProvider component
+│   ├── auth.ts                         # AuthContext + useAuth hook
+│   └── AuthContext.tsx                 # AuthProvider component
 ├── integrations/
-│   └── supabase/types.ts         # generated DB types
+│   └── supabase/types.ts               # hand-maintained Database types
 ├── lib/
-│   ├── aggregate.ts              # team rollups (sum vs rate-average classification)
-│   ├── csvParser.ts              # xlsx → ParsedPlayer[]
-│   ├── glossary.ts               # stat name → description
-│   ├── season.ts                 # Feb–May season logic
-│   ├── snapshots.ts              # Zod schema for JSONB stats — single boundary
+│   ├── aggregate.ts                    # team rollups
+│   ├── csvParser.ts                    # xlsx → ParsedPlayer[]
+│   ├── glossary.ts                     # stat name → description
+│   ├── season.ts                       # Feb–May season logic
+│   ├── snapshots.ts                    # zod schema for JSONB stats
 │   ├── supabase/
-│   │   ├── client.ts             # browser Supabase client
-│   │   ├── server.ts             # server Supabase client
-│   │   └── middleware.ts         # cookie-refresh helper for middleware
+│   │   ├── client.ts                   # browser client
+│   │   ├── server.ts                   # server client
+│   │   └── middleware.ts               # cookie-refresh helper
+│   ├── contexts/
+│   │   ├── school.tsx                  # SchoolContext + useSchool
+│   │   └── team.tsx                    # TeamContext + useTeam
 │   └── utils.ts
-└── test/                         # vitest, jsdom env
-    ├── aggregate.test.ts
-    ├── csvParser.test.ts
-    ├── season.test.ts
-    └── setup.ts
+└── test/                               # vitest
 ```
 
-## Database tables (current)
+## Database tables
 
-| Table            | Purpose                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| `players`        | Per-season roster. Unique `(season_year, first_name, last_name)`.  |
-| `stat_snapshots` | One row per `(player_id, upload_date)` with JSONB stats.           |
-| `csv_uploads`    | Audit log: filename, player count, date.                           |
-| `games`          | Schedule + results.                                                |
-| `glossary`       | Stat abbreviation reference.                                       |
-| `coaches`        | Email allowlist for `is_coach()` RLS check.                        |
-
-All data tables enable RLS and use a single `FOR ALL USING (public.is_coach())` policy.
+| Table            | Purpose                                                                  |
+| ---------------- | ------------------------------------------------------------------------ |
+| `schools`        | Top-level tenant. Owns branding, slug, name.                             |
+| `teams`          | Per-school team. Sport (baseball/softball), level (varsity/JV/etc.).     |
+| `school_admins`  | School-wide membership (AD-level access).                                |
+| `team_members`   | Per-team membership (coach, scorer, assistant).                          |
+| `players`        | Persistent player identity, scoped to a school.                          |
+| `roster_entries` | Player-on-team-for-a-season, with jersey number.                         |
+| `stat_snapshots` | Weekly cumulative stats for a player on a team.                          |
+| `games`          | Schedule + results, per team. `is_final` will gate the public Scores feed.|
+| `csv_uploads`    | Audit log of weekly xlsx uploads.                                        |
+| `glossary`       | Stat abbreviation reference (global, public-readable).                   |
 
 ## Deployment
 
-Hosted on **Vercel**. Push to `main` → auto-deploy. Environment variables are configured in
-the Vercel project settings (NOT in the repo).
+Hosted on **Vercel**. Push to `main` → auto-deploy. Environment variables are configured
+in the Vercel project settings (NOT in the repo).
