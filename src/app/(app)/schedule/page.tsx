@@ -1,5 +1,7 @@
+"use client";
+
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,25 +38,32 @@ const gameSchema = z.object({
   notes: z.string().max(500).optional(),
 });
 
-const Schedule = () => {
+const supabase = createClient();
+
+export default function SchedulePage() {
   const [games, setGames] = useState<Game[]>([]);
   const [open, setOpen] = useState(false);
   const [seasons, setSeasons] = useState<number[]>([]);
   const [season, setSeason] = useState<number>(currentSeasonYear());
   const [form, setForm] = useState({
     game_date: "", game_time: "", opponent: "", location: "home",
-    team_score: "", opponent_score: "", result: "", notes: ""
+    team_score: "", opponent_score: "", result: "", notes: "",
   });
 
   const load = async () => {
     const { data, error } = await supabase.from("games").select("*").order("game_date", { ascending: true });
-    if (error) { toast.error(`Couldn't load schedule: ${error.message}`); return; }
+    if (error) {
+      toast.error(`Couldn't load schedule: ${error.message}`);
+      return;
+    }
     const all = (data ?? []) as Game[];
     setGames(all);
     const yrs = Array.from(new Set([currentSeasonYear(), ...all.map((g) => g.season_year)])).sort((a, b) => b - a);
     setSeasons(yrs);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   const closed = isSeasonClosed(season);
 
@@ -81,7 +90,10 @@ const Schedule = () => {
       season_year: yr,
     };
     const { error } = await supabase.from("games").insert(payload);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     toast.success("Game added");
     setOpen(false);
     setForm({ game_date: "", game_time: "", opponent: "", location: "home", team_score: "", opponent_score: "", result: "", notes: "" });
@@ -91,7 +103,10 @@ const Schedule = () => {
   const remove = async (id: string) => {
     if (!confirm("Delete this game?")) return;
     const { error } = await supabase.from("games").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     toast.success("Game removed");
     load();
   };
@@ -121,7 +136,7 @@ const Schedule = () => {
             )}
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
-            {g.game_time && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{g.game_time.slice(0,5)}</span>}
+            {g.game_time && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{g.game_time.slice(0, 5)}</span>}
             <span className="flex items-center gap-1 capitalize"><MapPin className="w-3 h-3" />{g.location}</span>
           </div>
           {g.notes && <p className="text-xs text-muted-foreground mt-1 italic truncate">{g.notes}</p>}
@@ -158,45 +173,47 @@ const Schedule = () => {
             <DialogTrigger asChild>
               <Button disabled={closed} className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange disabled:opacity-50">
                 <Plus className="w-4 h-4 mr-1" /> Add Game
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle className="font-display text-2xl">Add Game</DialogTitle></DialogHeader>
-            <div className="grid gap-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label>Date</Label><Input type="date" value={form.game_date} onChange={(e) => setForm({...form, game_date: e.target.value})} /></div>
-                <div><Label>Time</Label><Input type="time" value={form.game_time} onChange={(e) => setForm({...form, game_time: e.target.value})} /></div>
-              </div>
-              <div><Label>Opponent</Label><Input value={form.opponent} onChange={(e) => setForm({...form, opponent: e.target.value})} placeholder="Magnolia Heights" /></div>
-              <div><Label>Location</Label>
-                <Select value={form.location} onValueChange={(v) => setForm({...form, location: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="home">Home</SelectItem>
-                    <SelectItem value="away">Away</SelectItem>
-                    <SelectItem value="neutral">Neutral</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div><Label>Result</Label>
-                  <Select value={form.result} onValueChange={(v) => setForm({...form, result: v})}>
-                    <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader><DialogTitle className="font-display text-2xl">Add Game</DialogTitle></DialogHeader>
+              <div className="grid gap-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Date</Label><Input type="date" value={form.game_date} onChange={(e) => setForm({ ...form, game_date: e.target.value })} /></div>
+                  <div><Label>Time</Label><Input type="time" value={form.game_time} onChange={(e) => setForm({ ...form, game_time: e.target.value })} /></div>
+                </div>
+                <div><Label>Opponent</Label><Input value={form.opponent} onChange={(e) => setForm({ ...form, opponent: e.target.value })} placeholder="Magnolia Heights" /></div>
+                <div>
+                  <Label>Location</Label>
+                  <Select value={form.location} onValueChange={(v) => setForm({ ...form, location: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="W">Win</SelectItem>
-                      <SelectItem value="L">Loss</SelectItem>
-                      <SelectItem value="T">Tie</SelectItem>
+                      <SelectItem value="home">Home</SelectItem>
+                      <SelectItem value="away">Away</SelectItem>
+                      <SelectItem value="neutral">Neutral</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <div><Label>Our score</Label><Input type="number" value={form.team_score} onChange={(e) => setForm({...form, team_score: e.target.value})} /></div>
-                <div><Label>Their score</Label><Input type="number" value={form.opponent_score} onChange={(e) => setForm({...form, opponent_score: e.target.value})} /></div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label>Result</Label>
+                    <Select value={form.result} onValueChange={(v) => setForm({ ...form, result: v })}>
+                      <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="W">Win</SelectItem>
+                        <SelectItem value="L">Loss</SelectItem>
+                        <SelectItem value="T">Tie</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div><Label>Our score</Label><Input type="number" value={form.team_score} onChange={(e) => setForm({ ...form, team_score: e.target.value })} /></div>
+                  <div><Label>Their score</Label><Input type="number" value={form.opponent_score} onChange={(e) => setForm({ ...form, opponent_score: e.target.value })} /></div>
+                </div>
+                <div><Label>Notes</Label><Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} maxLength={500} rows={2} /></div>
               </div>
-              <div><Label>Notes</Label><Textarea value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} maxLength={500} rows={2} /></div>
-            </div>
-            <DialogFooter><Button onClick={submit} className="bg-sa-blue hover:bg-sa-blue-deep">Save Game</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
+              <DialogFooter><Button onClick={submit} className="bg-sa-blue hover:bg-sa-blue-deep">Save Game</Button></DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 
@@ -224,6 +241,4 @@ const Schedule = () => {
       )}
     </div>
   );
-};
-
-export default Schedule;
+}
