@@ -240,20 +240,18 @@ DROP POLICY IF EXISTS "stat_snapshots by team member" ON public.stat_snapshots;
 DROP POLICY IF EXISTS "games by team member"          ON public.games;
 DROP POLICY IF EXISTS "csv_uploads by team member"    ON public.csv_uploads;
 
-CREATE POLICY "schools read by members" ON public.schools
-  FOR SELECT USING (
-    public.is_school_admin(id)
-    OR EXISTS (
-      SELECT 1 FROM public.teams t JOIN public.team_members tm ON tm.team_id = t.id
-      WHERE t.school_id = public.schools.id AND tm.user_id = auth.uid()
-    )
-  );
+-- Schools and teams are publicly readable so the public Scores page (and
+-- eventually a school directory) can render names/colors without auth.
+-- Sensitive tables — school_admins, team_members, players, stat_snapshots —
+-- stay member-gated below.
+DROP POLICY IF EXISTS "schools public read" ON public.schools;
+CREATE POLICY "schools public read" ON public.schools FOR SELECT USING (TRUE);
 CREATE POLICY "schools write by admins" ON public.schools
   FOR ALL USING (public.is_school_admin(id))
   WITH CHECK (public.is_school_admin(id));
 
-CREATE POLICY "teams read by members" ON public.teams
-  FOR SELECT USING (public.is_team_member(id) OR public.is_school_admin(school_id));
+DROP POLICY IF EXISTS "teams public read" ON public.teams;
+CREATE POLICY "teams public read" ON public.teams FOR SELECT USING (TRUE);
 CREATE POLICY "teams write by school admin" ON public.teams
   FOR ALL USING (public.is_school_admin(school_id))
   WITH CHECK (public.is_school_admin(school_id));
@@ -309,6 +307,9 @@ CREATE POLICY "stat_snapshots by team member" ON public.stat_snapshots
 CREATE POLICY "games by team member" ON public.games
   FOR ALL USING (public.is_team_member(team_id))
   WITH CHECK (public.is_team_member(team_id));
+DROP POLICY IF EXISTS "games public read finalized" ON public.games;
+CREATE POLICY "games public read finalized" ON public.games
+  FOR SELECT USING (is_final = TRUE);
 
 CREATE POLICY "csv_uploads by team member" ON public.csv_uploads
   FOR ALL USING (public.is_team_member(team_id))
