@@ -227,6 +227,10 @@ export type Database = {
       is_team_member: { Args: { p_team: string }; Returns: boolean };
       is_season_closed: { Args: { yr: number }; Returns: boolean };
       season_year_for: { Args: { d: string }; Returns: number };
+      create_school: {
+        Args: { p_slug: string; p_name: string };
+        Returns: Database["public"]["Tables"]["schools"]["Row"];
+      };
     };
     Enums: { [_ in never]: never };
   };

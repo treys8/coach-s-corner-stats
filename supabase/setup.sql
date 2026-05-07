@@ -315,6 +315,39 @@ CREATE POLICY "csv_uploads by team member" ON public.csv_uploads
   WITH CHECK (public.is_team_member(team_id));
 
 -- ============================================================================
+-- Self-serve signup helper: creates a school + admin row in one transaction
+-- as the calling auth.uid(). SECURITY DEFINER so it bypasses RLS on the
+-- bootstrap (the user isn't an admin yet at the moment of creation).
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.create_school(p_slug TEXT, p_name TEXT)
+RETURNS public.schools
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID := auth.uid();
+  v_school public.schools;
+BEGIN
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'authentication required';
+  END IF;
+
+  INSERT INTO public.schools (slug, name)
+  VALUES (p_slug, p_name)
+  RETURNING * INTO v_school;
+
+  INSERT INTO public.school_admins (school_id, user_id, role)
+  VALUES (v_school.id, v_user_id, 'owner');
+
+  RETURN v_school;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.create_school(TEXT, TEXT) TO authenticated;
+
+-- ============================================================================
 -- Demo seed: gives treyschill@gmail.com a school + team to start with.
 -- Idempotent. Until self-serve signup ships, this is how the dev account
 -- gets a working tenant.
