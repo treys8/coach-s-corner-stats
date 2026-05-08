@@ -27,6 +27,8 @@ import { INITIAL_STATE } from "@/lib/scoring/types";
 import type {
   AtBatPayload,
   AtBatResult,
+  CorrectionPayload,
+  DerivedAtBat,
   GameEventRecord,
   PitchingChangePayload,
   ReplayState,
@@ -95,6 +97,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
   const names = useMemo(() => nameById(roster), [roster]);
 
@@ -243,6 +246,76 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     await refresh();
   };
 
+  // Edit the most recent at-bat by issuing a correction event. Recomputes
+  // runner advances against the bases as they were before that play, so a
+  // 1B → 2B edit (etc.) updates scoring/outs/bases consistently after replay.
+  const editLastPlay = async (newResult: AtBatResult) => {
+    if (submitting) return;
+    const last = state.at_bats[state.at_bats.length - 1];
+    if (!last) return;
+    setSubmitting(true);
+
+    const { data, error } = await supabase
+      .from("game_events")
+      .select("*")
+      .eq("game_id", gameId)
+      .order("sequence_number", { ascending: true });
+    if (error) {
+      setSubmitting(false);
+      toast.error(`Couldn't load events: ${error.message}`);
+      return;
+    }
+    const events = (data ?? []) as unknown as GameEventRecord[];
+    const target = events.find((e) => e.id === last.event_id);
+    if (!target) {
+      setSubmitting(false);
+      toast.error("Couldn't find the original event to correct.");
+      return;
+    }
+    const before = events.filter((e) => e.sequence_number < target.sequence_number);
+    const stateBefore = replay(before);
+    const newAdvances = defaultAdvances(stateBefore.bases, last.batter_id, newResult);
+    const rbi = newAdvances.filter((a) => a.to === "home").length;
+
+    const correctedAtBat: AtBatPayload = {
+      inning: last.inning,
+      half: last.half,
+      batter_id: last.batter_id,
+      pitcher_id: last.pitcher_id,
+      opponent_pitcher_id: last.opponent_pitcher_id,
+      batting_order: last.batting_order,
+      result: newResult,
+      rbi,
+      pitch_count: last.pitch_count,
+      balls: last.balls,
+      strikes: last.strikes,
+      spray_x: last.spray_x,
+      spray_y: last.spray_y,
+      fielder_position: last.fielder_position,
+      runner_advances: newAdvances,
+      description: describePlay(newResult, rbi, last.batter_id, names),
+    };
+
+    const correction: CorrectionPayload = {
+      superseded_event_id: target.id,
+      corrected_event_type: "at_bat",
+      corrected_payload: correctedAtBat,
+    };
+
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `corr-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: "correction",
+      payload: correction,
+    });
+    setSubmitting(false);
+    setEditOpen(false);
+    if (!ok) return;
+    toast.success("Last play updated");
+    await refresh();
+  };
+
   const finalize = async () => {
     if (submitting) return;
     setSubmitting(true);
@@ -328,9 +401,11 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
             onEndHalf={endHalfInning}
             onPitchingChange={() => setPitchChangeOpen(true)}
             onSubstitution={() => setSubOpen(true)}
+            onEditLastPlay={() => setEditOpen(true)}
             onFinalize={() => setConfirmFinalize(true)}
             disabled={submitting}
             outs={state.outs}
+            canEdit={state.at_bats.length > 0}
           />
           {state.last_play_text && (
             <Card className="p-3 bg-muted/40 text-sm">
@@ -362,6 +437,13 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
         roster={roster}
         names={names}
         onSubmit={submitSubstitution}
+        disabled={submitting}
+      />
+      <EditLastPlayDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        lastAtBat={state.at_bats[state.at_bats.length - 1] ?? null}
+        onPick={editLastPlay}
         disabled={submitting}
       />
       <FinalizeDialog
@@ -534,16 +616,20 @@ function FlowControls({
   onEndHalf,
   onPitchingChange,
   onSubstitution,
+  onEditLastPlay,
   onFinalize,
   disabled,
   outs,
+  canEdit,
 }: {
   onEndHalf: () => void;
   onPitchingChange: () => void;
   onSubstitution: () => void;
+  onEditLastPlay: () => void;
   onFinalize: () => void;
   disabled: boolean;
   outs: number;
+  canEdit: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3 pt-2 border-t">
@@ -555,6 +641,9 @@ function FlowControls({
       </Button>
       <Button variant="outline" disabled={disabled} onClick={onPitchingChange}>
         Pitching change
+      </Button>
+      <Button variant="outline" disabled={disabled || !canEdit} onClick={onEditLastPlay}>
+        Edit last play
       </Button>
       <Button
         variant="outline"
@@ -781,6 +870,66 @@ function SubstitutionDialog({
           </Button>
           <Button disabled={!canSubmit} onClick={handleSubmit} className="bg-sa-orange hover:bg-sa-orange/90">
             Make substitution
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const EDIT_RESULTS: AtBatResult[] = [
+  ...NON_CONTACT,
+  ...HITS,
+  ...OUTS_IN_PLAY,
+];
+
+function EditLastPlayDialog({
+  open,
+  onOpenChange,
+  lastAtBat,
+  onPick,
+  disabled,
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  lastAtBat: DerivedAtBat | null;
+  onPick: (r: AtBatResult) => void;
+  disabled: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit last play</DialogTitle>
+          <DialogDescription>
+            Replace the last at-bat&apos;s result. Bases, outs, and runs re-derive from the
+            new outcome. Spray location and fielder carry forward; re-record the play
+            from scratch if those need to change.
+          </DialogDescription>
+        </DialogHeader>
+        {lastAtBat && (
+          <p className="text-sm text-muted-foreground border-l-2 border-sa-blue pl-3 my-2">
+            Currently: <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[lastAtBat.result] ?? lastAtBat.result}</span>
+            {lastAtBat.description ? <> — {lastAtBat.description}</> : null}
+          </p>
+        )}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 py-2">
+          {EDIT_RESULTS.map((r) => (
+            <Button
+              key={r}
+              variant="outline"
+              disabled={disabled || !lastAtBat || lastAtBat.result === r}
+              onClick={() => onPick(r)}
+              className="h-12 font-bold"
+              title={RESULT_DESC[r] ?? r}
+            >
+              {RESULT_LABEL[r]}
+            </Button>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
+            Cancel
           </Button>
         </DialogFooter>
       </DialogContent>
