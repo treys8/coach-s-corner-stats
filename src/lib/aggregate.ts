@@ -73,6 +73,29 @@ export const aggregateByDate = (snapshots: AggregateInput[]): DateAggregation[] 
       }
     }
 
+    // Recompute the canonical batting rates from summed counts when the
+    // underlying counts are present. This gives a true team rate
+    // (team AVG = team H / team AB) instead of "average of per-player rates",
+    // which is mathematically meaningless across players with different ABs.
+    // Critical for tablet per-game rows; also strictly an improvement for
+    // xlsx cumulative rows. Falls back silently when counts aren't there
+    // (e.g., snapshots carrying only pre-baked rate stats).
+    const b = agg.batting;
+    if (typeof b.AB === "number" && b.AB > 0) {
+      if (typeof b.H === "number") b.AVG = b.H / b.AB;
+      const obpDen = b.AB + (b.BB ?? 0) + (b.HBP ?? 0) + (b.SF ?? 0);
+      if (obpDen > 0 && typeof b.H === "number") {
+        b.OBP = (b.H + (b.BB ?? 0) + (b.HBP ?? 0)) / obpDen;
+      }
+      const tb = typeof b.TB === "number"
+        ? b.TB
+        : ((b["1B"] ?? 0) + 2 * (b["2B"] ?? 0) + 3 * (b["3B"] ?? 0) + 4 * (b.HR ?? 0));
+      if (tb > 0) b.SLG = tb / b.AB;
+      if (typeof b.OBP === "number" && typeof b.SLG === "number") {
+        b.OPS = b.OBP + b.SLG;
+      }
+    }
+
     result.push({ date, agg });
   }
   return result;
