@@ -35,6 +35,7 @@ export function Layout({
   const nav = [
     { href: base, label: "Roster", exact: true },
     { href: `${base}/team`, label: "Team Totals" },
+    { href: `${base}/records`, label: "Records" },
     { href: `${base}/schedule`, label: "Schedule" },
     { href: `${base}/score`, label: "Score" },
     { href: `${base}/roster`, label: "Upload Roster" },

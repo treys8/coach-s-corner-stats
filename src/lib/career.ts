@@ -19,7 +19,17 @@ export interface SeasonSnapshotInput extends CareerSnapshotInput {
   season_year: number;
 }
 
+export interface PlayerSeasonSnapshotInput extends SeasonSnapshotInput {
+  player_id: string;
+}
+
 export interface SeasonAgg {
+  season_year: number;
+  agg: SectionAgg;
+}
+
+export interface PlayerSeasonAgg {
+  player_id: string;
   season_year: number;
   agg: SectionAgg;
 }
@@ -120,4 +130,31 @@ export function aggregateBySeason(
       season_year,
       agg: aggregateCareer(list, section),
     }));
+}
+
+/**
+ * Group snapshots by (player_id, season_year) and aggregate each bucket via
+ * aggregateCareer. One row per player-season — used to rank single-season
+ * performances across all players for season-records leaderboards.
+ */
+export function aggregatePlayerSeasons(
+  snapshots: PlayerSeasonSnapshotInput[],
+  section: Section,
+): PlayerSeasonAgg[] {
+  const buckets = new Map<string, PlayerSeasonSnapshotInput[]>();
+  for (const s of snapshots) {
+    const key = `${s.player_id}|${s.season_year}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(s);
+  }
+  const rows: PlayerSeasonAgg[] = [];
+  for (const [key, list] of buckets) {
+    const [player_id, yearStr] = key.split("|");
+    rows.push({
+      player_id,
+      season_year: Number(yearStr),
+      agg: aggregateCareer(list, section),
+    });
+  }
+  return rows;
 }
