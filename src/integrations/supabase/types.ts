@@ -15,6 +15,25 @@ export type SchoolRole = "owner" | "admin";
 export type TeamRole = "coach" | "scorer" | "assistant";
 export type GameLocation = "home" | "away" | "neutral";
 export type GameResult = "W" | "L" | "T";
+export type GameStatus = "draft" | "in_progress" | "final";
+export type InningHalf = "top" | "bottom";
+
+export type GameEventType =
+  | "at_bat"
+  | "stolen_base"
+  | "caught_stealing"
+  | "pickoff"
+  | "wild_pitch"
+  | "passed_ball"
+  | "balk"
+  | "error_advance"
+  | "substitution"
+  | "pitching_change"
+  | "position_change"
+  | "game_started"
+  | "inning_end"
+  | "game_finalized"
+  | "correction";
 
 export type Database = {
   __InternalSupabase: {
@@ -165,6 +184,7 @@ export type Database = {
           opponent_score: number | null;
           result: GameResult | null;
           notes: string | null;
+          status: GameStatus;
           is_final: boolean;
           finalized_at: string | null;
           created_at: string;
@@ -182,12 +202,123 @@ export type Database = {
           opponent_score?: number | null;
           result?: GameResult | null;
           notes?: string | null;
+          status?: GameStatus;
           is_final?: boolean;
           finalized_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["games"]["Insert"]>;
+        Relationships: [];
+      };
+      game_events: {
+        Row: {
+          id: string;
+          game_id: string;
+          client_event_id: string;
+          sequence_number: number;
+          event_type: GameEventType;
+          payload: Json;
+          supersedes_event_id: string | null;
+          created_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          game_id: string;
+          client_event_id: string;
+          sequence_number: number;
+          event_type: GameEventType;
+          payload: Json;
+          supersedes_event_id?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["game_events"]["Insert"]>;
+        Relationships: [];
+      };
+      at_bats: {
+        Row: {
+          id: string;
+          game_id: string;
+          event_id: string;
+          inning: number;
+          half: InningHalf;
+          batting_order: number | null;
+          batter_id: string | null;
+          pitcher_id: string | null;
+          opponent_pitcher_id: string | null;
+          result: string;
+          rbi: number;
+          pitch_count: number;
+          spray_x: number | null;
+          spray_y: number | null;
+          fielder_position: string | null;
+          runs_scored_on_play: number;
+          outs_recorded: number;
+          description: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          game_id: string;
+          event_id: string;
+          inning: number;
+          half: InningHalf;
+          batting_order?: number | null;
+          batter_id?: string | null;
+          pitcher_id?: string | null;
+          opponent_pitcher_id?: string | null;
+          result: string;
+          rbi?: number;
+          pitch_count?: number;
+          spray_x?: number | null;
+          spray_y?: number | null;
+          fielder_position?: string | null;
+          runs_scored_on_play?: number;
+          outs_recorded?: number;
+          description?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["at_bats"]["Insert"]>;
+        Relationships: [];
+      };
+      game_opponent_pitchers: {
+        Row: { id: string; game_id: string; name: string; created_at: string };
+        Insert: { id?: string; game_id: string; name: string; created_at?: string };
+        Update: Partial<Database["public"]["Tables"]["game_opponent_pitchers"]["Insert"]>;
+        Relationships: [];
+      };
+      game_live_state: {
+        Row: {
+          game_id: string;
+          inning: number;
+          half: InningHalf;
+          outs: number;
+          runner_first: string | null;
+          runner_second: string | null;
+          runner_third: string | null;
+          team_score: number;
+          opponent_score: number;
+          last_play_text: string | null;
+          last_event_at: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          game_id: string;
+          inning?: number;
+          half?: InningHalf;
+          outs?: number;
+          runner_first?: string | null;
+          runner_second?: string | null;
+          runner_third?: string | null;
+          team_score?: number;
+          opponent_score?: number;
+          last_play_text?: string | null;
+          last_event_at?: string | null;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["game_live_state"]["Insert"]>;
         Relationships: [];
       };
       csv_uploads: {
