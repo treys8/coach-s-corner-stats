@@ -23,6 +23,7 @@ import type {
   PitchingChangePayload,
   ReplayState,
 } from "@/lib/scoring/types";
+import { DefensiveDiamond, type FielderPosition } from "@/components/scoring/DefensiveDiamond";
 import { toast } from "sonner";
 
 export interface RosterDisplay {
@@ -48,12 +49,14 @@ function nameById(roster: RosterDisplay[]): Map<string, string> {
 
 const supabase = createClient();
 
-// Outcome buttons grouped for layout. Field-tap (spray + fielder position
-// capture) is deferred to a follow-up commit; this MVP records the result
-// only and infers fielder position from the outcome (e.g., GO → "infield").
+// Non-contact outcomes are one-tap. In-play outcomes arm drag mode on the
+// defensive diamond — the user drags the fielder who made the play to the
+// ball location, and the drop captures spray (x, y) + fielder_position.
 const NON_CONTACT: AtBatResult[] = ["K_swinging", "K_looking", "BB", "HBP"];
 const HITS: AtBatResult[] = ["1B", "2B", "3B", "HR"];
 const OUTS_IN_PLAY: AtBatResult[] = ["FO", "GO", "LO", "PO"];
+const IN_PLAY: AtBatResult[] = [...HITS, ...OUTS_IN_PLAY];
+const isInPlay = (r: AtBatResult) => (IN_PLAY as AtBatResult[]).includes(r);
 
 const RESULT_LABEL: Record<AtBatResult, string> = {
   K_swinging: "K↘", K_looking: "Kᴸ",
@@ -81,6 +84,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [submitting, setSubmitting] = useState(false);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
+  const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
   const names = useMemo(() => nameById(roster), [roster]);
 
   // Load all events for this game and run replay() to get the canonical
@@ -113,7 +117,20 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     [state.our_lineup, state.current_batter_slot],
   );
 
-  const submitAtBat = async (result: AtBatResult) => {
+  const onOutcomePicked = (result: AtBatResult) => {
+    if (submitting) return;
+    if (isInPlay(result)) {
+      // Arm drag mode on the diamond; drop will capture spray + fielder.
+      setArmedResult(result);
+      return;
+    }
+    void submitAtBat(result, null);
+  };
+
+  const submitAtBat = async (
+    result: AtBatResult,
+    spray: { x: number; y: number; fielder: FielderPosition } | null,
+  ) => {
     if (submitting) return;
     setSubmitting(true);
     const advances = defaultAdvances(state.bases, weAreBatting ? currentSlot?.player_id ?? null : null, result);
@@ -132,9 +149,9 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       pitch_count: finalBalls + finalStrikes,
       balls: finalBalls,
       strikes: finalStrikes,
-      spray_x: null,
-      spray_y: null,
-      fielder_position: null,
+      spray_x: spray?.x ?? null,
+      spray_y: spray?.y ?? null,
+      fielder_position: spray?.fielder ?? null,
       runner_advances: advances,
       description: describePlay(result, runs, currentSlot?.player_id ?? null, names),
     };
@@ -152,7 +169,13 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
 
     setBalls(0);
     setStrikes(0);
+    setArmedResult(null);
     await refresh();
+  };
+
+  const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
+    if (!armedResult) return;
+    void submitAtBat(armedResult, { x, y, fielder });
   };
 
   const endHalfInning = async () => {
@@ -228,6 +251,27 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   return (
     <div className="space-y-4">
       <TopBar state={state} weAreBatting={weAreBatting} />
+      <Card className="p-3">
+        {armedResult && (
+          <div className="mb-2 flex items-center justify-between flex-wrap gap-2 text-sm">
+            <span>
+              <span className="text-muted-foreground">Recording </span>
+              <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
+              <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
+            </span>
+            <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
+              Cancel
+            </Button>
+          </div>
+        )}
+        <DefensiveDiamond
+          state={state}
+          names={names}
+          weAreBatting={weAreBatting}
+          dragMode={!!armedResult && !submitting}
+          onFielderDrop={onFielderDrop}
+        />
+      </Card>
       <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
       <BallStrikeCounter
         balls={balls}
@@ -235,7 +279,11 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
         onBalls={setBalls}
         onStrikes={setStrikes}
       />
-      <OutcomeGrid disabled={submitting || state.outs >= 3} onPick={submitAtBat} />
+      <OutcomeGrid
+        disabled={submitting || state.outs >= 3}
+        onPick={onOutcomePicked}
+        armedResult={armedResult}
+      />
       <FlowControls
         onEndHalf={endHalfInning}
         onPitchingChange={() => setPitchChangeOpen(true)}
@@ -286,27 +334,8 @@ function TopBar({ state, weAreBatting }: { state: ReplayState; weAreBatting: boo
         <div className="text-sm text-sa-blue uppercase tracking-wider font-semibold">
           {state.half === "top" ? "Top" : "Bot"} {state.inning} · {state.outs} out{state.outs === 1 ? "" : "s"} · {teamLabel}
         </div>
-        <Diamond bases={state.bases} />
       </div>
     </Card>
-  );
-}
-
-function Diamond({ bases }: { bases: ReplayState["bases"] }) {
-  const Base = ({ filled, label }: { filled: boolean; label: string }) => (
-    <span
-      title={`${label}: ${filled ? "occupied" : "empty"}`}
-      className={`inline-block h-4 w-4 border border-sa-blue-deep rotate-45 ${
-        filled ? "bg-sa-orange" : "bg-transparent"
-      }`}
-    />
-  );
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <Base filled={bases.third !== null} label="3rd" />
-      <Base filled={bases.second !== null} label="2nd" />
-      <Base filled={bases.first !== null} label="1st" />
-    </div>
   );
 }
 
@@ -389,15 +418,17 @@ function Counter({
 function OutcomeGrid({
   disabled,
   onPick,
+  armedResult,
 }: {
   disabled: boolean;
   onPick: (r: AtBatResult) => void;
+  armedResult: AtBatResult | null;
 }) {
   return (
     <div className="space-y-2">
-      <ButtonRow disabled={disabled} onPick={onPick} results={NON_CONTACT} variant="default" />
-      <ButtonRow disabled={disabled} onPick={onPick} results={HITS} variant="hit" />
-      <ButtonRow disabled={disabled} onPick={onPick} results={OUTS_IN_PLAY} variant="out" />
+      <ButtonRow disabled={disabled} onPick={onPick} results={NON_CONTACT} variant="default" armedResult={armedResult} />
+      <ButtonRow disabled={disabled} onPick={onPick} results={HITS} variant="hit" armedResult={armedResult} />
+      <ButtonRow disabled={disabled} onPick={onPick} results={OUTS_IN_PLAY} variant="out" armedResult={armedResult} />
     </div>
   );
 }
@@ -407,11 +438,13 @@ function ButtonRow({
   onPick,
   results,
   variant,
+  armedResult,
 }: {
   disabled: boolean;
   onPick: (r: AtBatResult) => void;
   results: AtBatResult[];
   variant: "default" | "hit" | "out";
+  armedResult: AtBatResult | null;
 }) {
   const cls =
     variant === "hit"
@@ -421,17 +454,20 @@ function ButtonRow({
         : "bg-sa-blue hover:bg-sa-blue/90 text-white";
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-      {results.map((r) => (
-        <Button
-          key={r}
-          disabled={disabled}
-          onClick={() => onPick(r)}
-          className={`h-16 text-lg font-bold ${cls}`}
-          title={RESULT_DESC[r] ?? r}
-        >
-          {RESULT_LABEL[r]}
-        </Button>
-      ))}
+      {results.map((r) => {
+        const isArmed = armedResult === r;
+        return (
+          <Button
+            key={r}
+            disabled={disabled || (armedResult !== null && !isArmed)}
+            onClick={() => onPick(r)}
+            className={`h-16 text-lg font-bold ${cls} ${isArmed ? "ring-4 ring-sa-blue-deep ring-offset-2" : ""}`}
+            title={RESULT_DESC[r] ?? r}
+          >
+            {RESULT_LABEL[r]}
+          </Button>
+        );
+      })}
     </div>
   );
 }
