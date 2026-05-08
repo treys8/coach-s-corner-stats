@@ -16,6 +16,7 @@ import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from 
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
+import { PlayerSprayChart, type SprayMarker } from "@/components/spray/PlayerSprayChart";
 
 interface Player { id: string; first_name: string; last_name: string }
 interface Snapshot { upload_date: string; stats: SnapshotStats }
@@ -35,35 +36,55 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
   const [player, setPlayer] = useState<Player | null>(null);
   const [jersey, setJersey] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [sprayMarkers, setSprayMarkers] = useState<SprayMarker[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState({ batting: false, pitching: false, fielding: false });
 
   useEffect(() => {
     if (!id) return;
     const load = async () => {
-      const [{ data: pl, error: pErr }, { data: snaps, error: sErr }, { data: roster }] =
-        await Promise.all([
-          supabase.from("players").select("id, first_name, last_name").eq("id", id).maybeSingle(),
-          supabase
-            .from("stat_snapshots")
-            .select("upload_date, stats")
-            .eq("team_id", team.id)
-            .eq("player_id", id)
-            .order("upload_date", { ascending: true }),
-          supabase
-            .from("roster_entries")
-            .select("jersey_number, season_year")
-            .eq("team_id", team.id)
-            .eq("player_id", id)
-            .order("season_year", { ascending: false })
-            .limit(1),
-        ]);
+      const [
+        { data: pl, error: pErr },
+        { data: snaps, error: sErr },
+        { data: roster },
+        { data: abs, error: abErr },
+      ] = await Promise.all([
+        supabase.from("players").select("id, first_name, last_name").eq("id", id).maybeSingle(),
+        supabase
+          .from("stat_snapshots")
+          .select("upload_date, stats")
+          .eq("team_id", team.id)
+          .eq("player_id", id)
+          .order("upload_date", { ascending: true }),
+        supabase
+          .from("roster_entries")
+          .select("jersey_number, season_year")
+          .eq("team_id", team.id)
+          .eq("player_id", id)
+          .order("season_year", { ascending: false })
+          .limit(1),
+        supabase
+          .from("at_bats")
+          .select("event_id, result, spray_x, spray_y, description")
+          .eq("batter_id", id)
+          .not("spray_x", "is", null),
+      ]);
       if (pErr) toast.error(`Couldn't load player: ${pErr.message}`);
       if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
+      if (abErr) toast.error(`Couldn't load batted-ball data: ${abErr.message}`);
       setPlayer((pl as Player | null) ?? null);
       setJersey(roster?.[0]?.jersey_number ?? null);
       setSnapshots(
         (snaps ?? []).map((s) => ({ upload_date: s.upload_date, stats: parseSnapshotStats(s.stats) })),
+      );
+      setSprayMarkers(
+        (abs ?? []).map((r) => ({
+          id: r.event_id as string,
+          result: r.result as string,
+          spray_x: (r.spray_x as number | null) ?? null,
+          spray_y: (r.spray_y as number | null) ?? null,
+          description: (r.description as string | null) ?? null,
+        })),
       );
       setLoading(false);
     };
@@ -206,6 +227,12 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
                 {renderTrend(sec)}
               </Card>
+              {sec === "batting" && (
+                <Card className="p-6">
+                  <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Spray Chart</h3>
+                  <PlayerSprayChart markers={sprayMarkers} />
+                </Card>
+              )}
             </TabsContent>
           );
         })}
