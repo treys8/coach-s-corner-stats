@@ -130,7 +130,7 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
           onStarted={() => setGame({ ...game, status: "in_progress" })}
         />
       )}
-      {game.status === "in_progress" && <LiveScoring gameId={game.id} />}
+      {game.status === "in_progress" && <LiveScoring gameId={game.id} roster={roster} />}
       {game.status === "final" && <FinalStub game={game} />}
     </main>
   );

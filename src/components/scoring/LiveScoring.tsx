@@ -24,8 +24,25 @@ import type {
 } from "@/lib/scoring/types";
 import { toast } from "sonner";
 
+export interface RosterDisplay {
+  id: string;
+  first_name: string;
+  last_name: string;
+  jersey_number: string | null;
+}
+
 interface LiveScoringProps {
   gameId: string;
+  roster: RosterDisplay[];
+}
+
+function nameById(roster: RosterDisplay[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const p of roster) {
+    const num = p.jersey_number ? `#${p.jersey_number} ` : "";
+    m.set(p.id, `${num}${p.first_name} ${p.last_name}`);
+  }
+  return m;
 }
 
 const supabase = createClient();
@@ -53,7 +70,7 @@ const RESULT_DESC: Partial<Record<AtBatResult, string>> = {
   FO: "Flyout", GO: "Groundout", LO: "Lineout", PO: "Popout",
 };
 
-export function LiveScoring({ gameId }: LiveScoringProps) {
+export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const router = useRouter();
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
   const [lastSeq, setLastSeq] = useState(0);
@@ -61,6 +78,7 @@ export function LiveScoring({ gameId }: LiveScoringProps) {
   const [pitchCount, setPitchCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const names = useMemo(() => nameById(roster), [roster]);
 
   // Load all events for this game and run replay() to get the canonical
   // live state. Cheap — Phase 1 has at most a few hundred events per game.
@@ -112,7 +130,7 @@ export function LiveScoring({ gameId }: LiveScoringProps) {
       spray_y: null,
       fielder_position: null,
       runner_advances: advances,
-      description: describePlay(result, runs, currentSlot?.player_id ?? null),
+      description: describePlay(result, runs, currentSlot?.player_id ?? null, names),
     };
 
     const nextSeq = lastSeq + 1;
@@ -181,7 +199,7 @@ export function LiveScoring({ gameId }: LiveScoringProps) {
   return (
     <div className="space-y-4">
       <TopBar state={state} weAreBatting={weAreBatting} />
-      <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} />
+      <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
       <PitchCounter value={pitchCount} onChange={setPitchCount} />
       <OutcomeGrid disabled={submitting || state.outs >= 3} onPick={submitAtBat} />
       <FlowControls
@@ -252,26 +270,30 @@ function BatterCard({
   state,
   weAreBatting,
   currentSlot,
+  names,
 }: {
   state: ReplayState;
   weAreBatting: boolean;
   currentSlot: ReplayState["our_lineup"][number] | null;
+  names: Map<string, string>;
 }) {
   if (!weAreBatting) {
+    const pitcherName = state.current_pitcher_id ? names.get(state.current_pitcher_id) : null;
     return (
       <Card className="p-4">
         <p className="text-xs uppercase tracking-wider text-muted-foreground">Opponent at bat</p>
         <p className="font-display text-xl text-sa-blue-deep">
-          Pitching: {state.current_pitcher_id ? "our P" : "(no pitcher set)"}
+          Pitching: {pitcherName ?? "(no pitcher set)"}
         </p>
       </Card>
     );
   }
+  const batterName = currentSlot?.player_id ? names.get(currentSlot.player_id) : null;
   return (
     <Card className="p-4">
       <p className="text-xs uppercase tracking-wider text-muted-foreground">At bat — slot {state.current_batter_slot}</p>
       <p className="font-display text-xl text-sa-blue-deep">
-        {currentSlot?.player_id ? `Player ${currentSlot.player_id.slice(0, 8)}…` : "(empty slot)"}
+        {batterName ?? "(empty slot)"}
         {currentSlot?.position ? <span className="text-muted-foreground text-sm ml-2">{currentSlot.position}</span> : null}
       </p>
     </Card>
@@ -446,9 +468,16 @@ async function postEvent(gameId: string, body: PostBody): Promise<boolean> {
   return true;
 }
 
-function describePlay(result: AtBatResult, runs: number, batterId: string | null): string {
+function describePlay(
+  result: AtBatResult,
+  runs: number,
+  batterId: string | null,
+  names: Map<string, string>,
+): string {
   const base = RESULT_DESC[result] ?? result;
-  const who = batterId ? "" : " (opp)";
+  const who = batterId
+    ? ` by ${names.get(batterId) ?? "us"}`
+    : " (opp)";
   if (runs === 0) return `${base}${who}`;
   return `${base}${who} — ${runs} run${runs === 1 ? "" : "s"}`;
 }
