@@ -24,6 +24,7 @@ import type {
   ReplayState,
 } from "@/lib/scoring/types";
 import { DefensiveDiamond, type FielderPosition } from "@/components/scoring/DefensiveDiamond";
+import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
 import { toast } from "sonner";
 
 export interface RosterDisplay {
@@ -251,62 +252,72 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   return (
     <div className="space-y-4">
       <TopBar state={state} weAreBatting={weAreBatting} />
-      <Card className="p-3">
-        {armedResult && (
-          <div className="mb-2 flex items-center justify-between flex-wrap gap-2 text-sm">
-            <span>
-              <span className="text-muted-foreground">Recording </span>
-              <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
-              <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void submitAtBat(armedResult, null)}
-                disabled={submitting}
-              >
-                Skip location
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-        <DefensiveDiamond
-          state={state}
-          names={names}
-          weAreBatting={weAreBatting}
-          dragMode={!!armedResult && !submitting}
-          onFielderDrop={onFielderDrop}
-        />
-      </Card>
-      <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
-      <BallStrikeCounter
-        balls={balls}
-        strikes={strikes}
-        onBalls={setBalls}
-        onStrikes={setStrikes}
-      />
-      <OutcomeGrid
-        disabled={submitting || state.outs >= 3}
-        onPick={onOutcomePicked}
-        armedResult={armedResult}
-      />
-      <FlowControls
-        onEndHalf={endHalfInning}
-        onPitchingChange={() => setPitchChangeOpen(true)}
-        onFinalize={() => setConfirmFinalize(true)}
-        disabled={submitting}
-        outs={state.outs}
-      />
-      {state.last_play_text && (
-        <Card className="p-3 bg-muted/40 text-sm">
-          <span className="text-muted-foreground">Last play: </span>
-          {state.last_play_text}
-        </Card>
-      )}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
+        <div className="space-y-4">
+          <Card className="p-3">
+            {armedResult && (
+              <div className="mb-2 flex items-center justify-between flex-wrap gap-2 text-sm">
+                <span>
+                  <span className="text-muted-foreground">Recording </span>
+                  <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
+                  <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void submitAtBat(armedResult, null)}
+                    disabled={submitting}
+                  >
+                    Skip location
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+            <DefensiveDiamond
+              state={state}
+              names={names}
+              weAreBatting={weAreBatting}
+              dragMode={!!armedResult && !submitting}
+              onFielderDrop={onFielderDrop}
+            />
+          </Card>
+          <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
+          <BallStrikeCounter
+            balls={balls}
+            strikes={strikes}
+            onBalls={setBalls}
+            onStrikes={setStrikes}
+          />
+          <OutcomeGrid
+            disabled={submitting || state.outs >= 3}
+            onPick={onOutcomePicked}
+            armedResult={armedResult}
+          />
+          <FlowControls
+            onEndHalf={endHalfInning}
+            onPitchingChange={() => setPitchChangeOpen(true)}
+            onFinalize={() => setConfirmFinalize(true)}
+            disabled={submitting}
+            outs={state.outs}
+          />
+          {state.last_play_text && (
+            <Card className="p-3 bg-muted/40 text-sm">
+              <span className="text-muted-foreground">Last play: </span>
+              {state.last_play_text}
+            </Card>
+          )}
+        </div>
+        <aside className="lg:sticky lg:top-4 lg:self-start space-y-4">
+          <Card className="p-3">
+            <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
+            <LiveSprayChart state={state} />
+          </Card>
+        </aside>
+      </div>
       <PitchingChangeDialog
         open={pitchChangeOpen}
         onOpenChange={setPitchChangeOpen}
