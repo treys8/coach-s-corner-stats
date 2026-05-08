@@ -20,6 +20,7 @@ import type {
   AtBatPayload,
   AtBatResult,
   GameEventRecord,
+  PitchingChangePayload,
   ReplayState,
 } from "@/lib/scoring/types";
 import { toast } from "sonner";
@@ -79,6 +80,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [strikes, setStrikes] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
   const names = useMemo(() => nameById(roster), [roster]);
 
   // Load all events for this game and run replay() to get the canonical
@@ -168,6 +170,28 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     await refresh();
   };
 
+  const submitPitchingChange = async (newPitcherId: string) => {
+    if (submitting) return;
+    if (newPitcherId === state.current_pitcher_id) return;
+    setSubmitting(true);
+    const payload: PitchingChangePayload = {
+      out_pitcher_id: state.current_pitcher_id,
+      in_pitcher_id: newPitcherId,
+    };
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `pc-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: "pitching_change",
+      payload,
+    });
+    setSubmitting(false);
+    setPitchChangeOpen(false);
+    if (!ok) return;
+    toast.success(`Pitcher: ${names.get(newPitcherId) ?? "updated"}`);
+    await refresh();
+  };
+
   const finalize = async () => {
     if (submitting) return;
     setSubmitting(true);
@@ -214,6 +238,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       <OutcomeGrid disabled={submitting || state.outs >= 3} onPick={submitAtBat} />
       <FlowControls
         onEndHalf={endHalfInning}
+        onPitchingChange={() => setPitchChangeOpen(true)}
         onFinalize={() => setConfirmFinalize(true)}
         disabled={submitting}
         outs={state.outs}
@@ -224,6 +249,15 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
           {state.last_play_text}
         </Card>
       )}
+      <PitchingChangeDialog
+        open={pitchChangeOpen}
+        onOpenChange={setPitchChangeOpen}
+        roster={roster}
+        currentPitcherId={state.current_pitcher_id}
+        names={names}
+        onPick={submitPitchingChange}
+        disabled={submitting}
+      />
       <FinalizeDialog
         open={confirmFinalize}
         onOpenChange={setConfirmFinalize}
@@ -404,11 +438,13 @@ function ButtonRow({
 
 function FlowControls({
   onEndHalf,
+  onPitchingChange,
   onFinalize,
   disabled,
   outs,
 }: {
   onEndHalf: () => void;
+  onPitchingChange: () => void;
   onFinalize: () => void;
   disabled: boolean;
   outs: number;
@@ -417,6 +453,9 @@ function FlowControls({
     <div className="flex flex-wrap items-center gap-3 pt-2 border-t">
       <Button variant="outline" disabled={disabled} onClick={onEndHalf}>
         End ½ inning
+      </Button>
+      <Button variant="outline" disabled={disabled} onClick={onPitchingChange}>
+        Pitching change
       </Button>
       <Button
         variant="outline"
@@ -432,6 +471,68 @@ function FlowControls({
         </span>
       )}
     </div>
+  );
+}
+
+function PitchingChangeDialog({
+  open,
+  onOpenChange,
+  roster,
+  currentPitcherId,
+  names,
+  onPick,
+  disabled,
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  roster: RosterDisplay[];
+  currentPitcherId: string | null;
+  names: Map<string, string>;
+  onPick: (id: string) => void;
+  disabled: boolean;
+}) {
+  const currentName = currentPitcherId ? names.get(currentPitcherId) : null;
+  const candidates = roster.filter((p) => p.id !== currentPitcherId);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Pitching change</DialogTitle>
+          <DialogDescription>
+            {currentName ? <>Currently on the mound: <span className="font-semibold">{currentName}</span>. Tap a player to bring them in.</> : <>Tap a player to put them on the mound.</>}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[60vh] overflow-y-auto -mx-2 px-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {candidates.map((p) => {
+              const num = p.jersey_number ? `#${p.jersey_number} ` : "";
+              return (
+                <Button
+                  key={p.id}
+                  variant="outline"
+                  disabled={disabled}
+                  onClick={() => onPick(p.id)}
+                  className="h-14 justify-start text-left"
+                >
+                  <span className="font-mono-stat text-sa-blue-deep mr-2">{num}</span>
+                  <span>{p.first_name} {p.last_name}</span>
+                </Button>
+              );
+            })}
+          </div>
+          {candidates.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-6">
+              No other players on the roster.
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
