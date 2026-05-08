@@ -15,7 +15,6 @@ import type { GameEventType } from "@/integrations/supabase/types";
 // Accepts any of the project's Supabase clients (server/SSR/admin) without
 // pinning to a specific generic instantiation, which varies between
 // @supabase/ssr and @supabase/supabase-js.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = any;
 
 export interface IncomingEvent {
