@@ -97,7 +97,9 @@ export default function UploadStatsPage() {
         .single();
       if (upErr) throw upErr;
 
-      // 5. Upsert stat_snapshots (team-scoped, by player_id+upload_date).
+      // 5. Upsert stat_snapshots (team-scoped, by player_id+upload_date+game_id).
+      // game_id is NULL for xlsx rows; NULLS NOT DISTINCT on the unique constraint
+      // makes the (team, player, date, NULL) tuple collide on re-upload.
       const snapshots = players
         .map((p) => {
           const pid = idByName.get(`${p.first}|${p.last}`);
@@ -109,13 +111,15 @@ export default function UploadStatsPage() {
             upload_id: uploadRow.id,
             stats: p.stats,
             season_year,
+            source: "xlsx",
+            game_id: null,
           };
         })
         .filter(Boolean);
 
       const { error: snapErr } = await supabase
         .from("stat_snapshots")
-        .upsert(snapshots as never[], { onConflict: "team_id,player_id,upload_date" });
+        .upsert(snapshots as never[], { onConflict: "team_id,player_id,upload_date,game_id" });
       if (snapErr) throw snapErr;
 
       setResult({ ok: true, msg: `Imported ${players.length} players for ${new Date(uploadDate).toLocaleDateString()}.` });
