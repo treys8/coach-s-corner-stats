@@ -103,8 +103,14 @@ function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
 // ---- Handlers --------------------------------------------------------------
 
 function applyGameStarted(state: ReplayState, p: GameStartedPayload): ReplayState {
+  // game_started flips draft → in_progress so the UI can move from the
+  // pre-game form into the scoring screen the moment the lineup is set,
+  // without waiting for a first pitch. The design doc described this as
+  // "first scoring event flips status" — in practice users expect the
+  // scoring screen as soon as they start the game.
   return {
     ...state,
+    status: "in_progress",
     we_are_home: p.we_are_home,
     use_dh: p.use_dh,
     our_lineup: p.starting_lineup.map((s) => ({ ...s })),

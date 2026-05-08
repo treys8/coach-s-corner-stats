@@ -52,7 +52,7 @@ const atBat = (p: Partial<AtBatPayload>): AtBatPayload => ({
 describe("replay()", () => {
   beforeEach(() => { seq = 0; });
 
-  it("game_started initializes lineup, pitchers, and resets state", () => {
+  it("game_started initializes lineup, pitchers, and flips status to in_progress", () => {
     const state = replay([startGame()]);
     expect(state.our_lineup).toHaveLength(9);
     expect(state.current_pitcher_id).toBe("pitcher_us");
@@ -63,7 +63,7 @@ describe("replay()", () => {
     expect(state.half).toBe("top");
     expect(state.outs).toBe(0);
     expect(state.bases).toEqual({ first: null, second: null, third: null });
-    expect(state.status).toBe("draft");
+    expect(state.status).toBe("in_progress");
   });
 
   it("our at-bats advance current_batter_slot; opponent at-bats don't", () => {

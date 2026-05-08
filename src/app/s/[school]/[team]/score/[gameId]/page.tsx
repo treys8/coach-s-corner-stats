@@ -2,7 +2,6 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useTeam } from "@/lib/contexts/team";
 import { useSchool } from "@/lib/contexts/school";
@@ -50,7 +49,6 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
   const { gameId } = use(params);
   const { team } = useTeam();
   const { school } = useSchool();
-  const router = useRouter();
   const base = `/s/${school.slug}/${team.slug}/score`;
 
   const [game, setGame] = useState<GameRow | null>(null);
@@ -126,7 +124,11 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
     <main className="container mx-auto px-6 py-8 space-y-6">
       <GameHeader game={game} backHref={base} />
       {game.status === "draft" && (
-        <PreGameForm game={game} roster={roster} onStarted={() => router.refresh()} />
+        <PreGameForm
+          game={game}
+          roster={roster}
+          onStarted={() => setGame({ ...game, status: "in_progress" })}
+        />
       )}
       {game.status === "in_progress" && <LiveScoring gameId={game.id} />}
       {game.status === "final" && <FinalStub game={game} />}
