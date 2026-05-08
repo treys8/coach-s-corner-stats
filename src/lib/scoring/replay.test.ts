@@ -225,4 +225,20 @@ describe("replay()", () => {
     expect(state.opponent_score).toBe(0);
     expect(state.outs).toBe(1);
   });
+
+  it("void correction (null event_type/payload) un-finalizes the game", () => {
+    const start = startGame();
+    const ab = evt("at_bat", atBat({ half: "top", result: "K_swinging" }));
+    const finalized = evt("game_finalized", {}, "evt-final");
+    const finalState = replay([start, ab, finalized]);
+    expect(finalState.status).toBe("final");
+
+    const voidCorrection = evt("correction", {
+      superseded_event_id: "evt-final",
+      corrected_event_type: null,
+      corrected_payload: null,
+    });
+    const restored = replay([start, ab, finalized, voidCorrection]);
+    expect(restored.status).toBe("in_progress");
+  });
 });

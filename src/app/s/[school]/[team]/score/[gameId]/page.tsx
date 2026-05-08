@@ -28,6 +28,7 @@ interface GameRow {
   status: GameStatus;
   team_score: number | null;
   opponent_score: number | null;
+  finalized_at: string | null;
 }
 
 interface RosterPlayer {
@@ -62,7 +63,7 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
       const [gameRes, rosterRes] = await Promise.all([
         supabase
           .from("games")
-          .select("id, team_id, game_date, game_time, opponent, location, status, team_score, opponent_score")
+          .select("id, team_id, game_date, game_time, opponent, location, status, team_score, opponent_score, finalized_at")
           .eq("id", gameId)
           .maybeSingle(),
         supabase
@@ -131,7 +132,12 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
         />
       )}
       {game.status === "in_progress" && <LiveScoring gameId={game.id} roster={roster} />}
-      {game.status === "final" && <FinalStub game={game} />}
+      {game.status === "final" && (
+        <FinalStub
+          game={game}
+          onUnfinalized={() => setGame({ ...game, status: "in_progress", finalized_at: null })}
+        />
+      )}
     </main>
   );
 }
@@ -362,13 +368,88 @@ function PreGameForm({
   );
 }
 
-function FinalStub({ game }: { game: GameRow }) {
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+function FinalStub({ game, onUnfinalized }: { game: GameRow; onUnfinalized: () => void }) {
+  const [submitting, setSubmitting] = useState(false);
+
+  const finalizedAt = game.finalized_at ? new Date(game.finalized_at) : null;
+  const eligible =
+    finalizedAt !== null && Date.now() - finalizedAt.getTime() < SEVEN_DAYS_MS;
+
+  const handleUnfinalize = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    const eventsRes = await supabase
+      .from("game_events")
+      .select("id, event_type, sequence_number")
+      .eq("game_id", game.id)
+      .order("sequence_number", { ascending: false });
+    if (eventsRes.error) {
+      setSubmitting(false);
+      toast.error(`Couldn't load events: ${eventsRes.error.message}`);
+      return;
+    }
+    const events = (eventsRes.data ?? []) as Array<{
+      id: string; event_type: string; sequence_number: number;
+    }>;
+    const finalizeEvent = events.find((e) => e.event_type === "game_finalized");
+    if (!finalizeEvent) {
+      setSubmitting(false);
+      toast.error("Couldn't find the finalize event for this game.");
+      return;
+    }
+    const nextSeq = (events[0]?.sequence_number ?? 0) + 1;
+    const res = await fetch(`/api/games/${game.id}/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_event_id: `unfinal-${nextSeq}`,
+        sequence_number: nextSeq,
+        event_type: "correction",
+        payload: {
+          superseded_event_id: finalizeEvent.id,
+          corrected_event_type: null,
+          corrected_payload: null,
+        },
+      }),
+    });
+    setSubmitting(false);
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      toast.error(`Couldn't un-finalize: ${detail.error ?? res.statusText}`);
+      return;
+    }
+    toast.success("Game un-finalized");
+    onUnfinalized();
+  };
+
   return (
-    <Card className="p-6 space-y-2">
+    <Card className="p-6 space-y-3">
       <h3 className="font-display text-xl text-sa-blue-deep">Game complete</h3>
       <p className="font-mono-stat text-3xl text-sa-blue-deep">
         {game.team_score ?? "—"} <span className="text-muted-foreground">–</span> {game.opponent_score ?? "—"}
       </p>
+      {finalizedAt && (
+        <p className="text-xs text-muted-foreground">
+          Finalized {finalizedAt.toLocaleString()}
+        </p>
+      )}
+      <div className="pt-2 border-t flex items-center gap-3 flex-wrap">
+        <Button
+          variant="outline"
+          disabled={submitting || !eligible}
+          onClick={handleUnfinalize}
+          className="border-sa-orange text-sa-orange hover:bg-sa-orange hover:text-white"
+        >
+          {submitting ? "Un-finalizing…" : "Un-finalize game"}
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          {eligible
+            ? "Available for 7 days after finalize. Reopens scoring and clears tablet stat rollups."
+            : "Un-finalize is only available within 7 days of finalize."}
+        </p>
+      </div>
     </Card>
   );
 }
