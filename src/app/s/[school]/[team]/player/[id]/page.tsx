@@ -135,7 +135,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
 
   const renderTrend = (section: Section) => {
     if (snapshots.length < 2) {
-      return <p className="text-sm text-muted-foreground italic">Trends will appear after the second weekly upload.</p>;
+      return <p className="text-sm text-muted-foreground italic">Trends will appear after the second snapshot.</p>;
     }
     const keys = TREND[section];
     const data = snapshots.map((s) => {
@@ -181,7 +181,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold mb-1">#{jersey ?? "—"}</p>
           <h2 className="font-display text-6xl md:text-7xl">{player.first_name} {player.last_name}</h2>
           <p className="text-white/70 mt-2 text-sm">
-            {snapshots.length} weekly snapshot{snapshots.length === 1 ? "" : "s"} · latest{" "}
+            {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} · latest{" "}
             {latestSnap ? new Date(latestSnap.upload_date).toLocaleDateString() : "—"}
           </p>
         </div>
