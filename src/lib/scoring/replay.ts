@@ -88,6 +88,11 @@ function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
       return { ...next, status: "final" };
     case "correction": {
       const p = event.payload as CorrectionPayload;
+      // Void correction: original is in `superseded` and skipped; nothing to
+      // apply in its place (un-finalize takes this path).
+      if (p.corrected_event_type === null || p.corrected_payload === null) {
+        return next;
+      }
       return applyEvent(next, {
         ...event,
         event_type: p.corrected_event_type,

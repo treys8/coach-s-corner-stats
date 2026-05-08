@@ -86,10 +86,15 @@ export type GameFinalizedPayload = Record<string, never>;
 // Corrections carry the same shape as one of the other payloads, tagged with
 // the event_id they're replacing. The replay engine skips the superseded
 // event and applies this corrected payload in its place.
+//
+// `corrected_event_type` and `corrected_payload` may both be null for a
+// "void" correction — the original event is superseded with no replacement.
+// Used by un-finalize: the prior `game_finalized` event is skipped and
+// nothing is applied in its place, so the game falls back to in_progress.
 export interface CorrectionPayload {
   superseded_event_id: string;
-  corrected_event_type: Exclude<GameEventType, "correction">;
-  corrected_payload: GameEventPayload;
+  corrected_event_type: Exclude<GameEventType, "correction"> | null;
+  corrected_payload: GameEventPayload | null;
 }
 
 export type GameEventPayload =
