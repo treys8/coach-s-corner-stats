@@ -140,6 +140,9 @@ export interface DerivedAtBat {
   fielder_position: string | null;
   runs_scored_on_play: number;
   outs_recorded: number;
+  /** Carried forward from the at-bat payload so the rollup can attribute
+   *  R per scoring runner. Not persisted in the at_bats DB table. */
+  runner_advances: RunnerAdvance[];
   description: string | null;
 }
 
