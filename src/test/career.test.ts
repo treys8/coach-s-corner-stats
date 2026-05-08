@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateBySeason, aggregateCareer } from "@/lib/career";
+import { aggregateBySeason, aggregateCareer, aggregatePlayerSeasons } from "@/lib/career";
 import type { SnapshotStats } from "@/lib/snapshots";
 
 const snap = (
@@ -123,5 +123,36 @@ describe("aggregateBySeason", () => {
     ];
     const seasons = aggregateBySeason(snapshots, "batting");
     expect(seasons.map((s) => s.season_year)).toEqual([2024, 2025, 2026]);
+  });
+});
+
+describe("aggregatePlayerSeasons", () => {
+  const ps = (
+    upload_date: string,
+    player_id: string,
+    season_year: number,
+    stats: SnapshotStats,
+  ) => ({ upload_date, player_id, season_year, stats });
+
+  it("buckets by (player_id, season_year) and recomputes rates per bucket", () => {
+    const snapshots = [
+      // Player A in 2025 across two snapshots
+      ps("2025-04-01", "A", 2025, { batting: { AB: 100, H: 30, BB: 0, HBP: 0, SF: 0, TB: 45 }, pitching: {}, fielding: {} }),
+      ps("2025-05-01", "A", 2025, { batting: { AB: 100, H: 35, BB: 0, HBP: 0, SF: 0, TB: 55 }, pitching: {}, fielding: {} }),
+      // Player A in 2026 — separate bucket
+      ps("2026-04-01", "A", 2026, { batting: { AB: 100, H: 50, BB: 0, HBP: 0, SF: 0, TB: 80 }, pitching: {}, fielding: {} }),
+      // Player B in 2025 — separate bucket
+      ps("2025-04-01", "B", 2025, { batting: { AB: 200, H: 80, BB: 0, HBP: 0, SF: 0, TB: 130 }, pitching: {}, fielding: {} }),
+    ];
+    const rows = aggregatePlayerSeasons(snapshots, "batting");
+    expect(rows).toHaveLength(3);
+    const a2025 = rows.find((r) => r.player_id === "A" && r.season_year === 2025)!;
+    const a2026 = rows.find((r) => r.player_id === "A" && r.season_year === 2026)!;
+    const b2025 = rows.find((r) => r.player_id === "B" && r.season_year === 2025)!;
+    expect(a2025.agg.AB).toBe(200);
+    expect(a2025.agg.H).toBe(65);
+    expect(a2025.agg.AVG).toBeCloseTo(65 / 200, 6);
+    expect(a2026.agg.AVG).toBeCloseTo(50 / 100, 6);
+    expect(b2025.agg.AVG).toBeCloseTo(80 / 200, 6);
   });
 });
