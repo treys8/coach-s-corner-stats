@@ -14,7 +14,9 @@ export const metadata: Metadata = {
 // admin views unaffected.
 export const dynamic = "force-dynamic";
 
-interface FinalizedGame {
+type GameStatus = "in_progress" | "final";
+
+interface ScoreTileGame {
   id: string;
   game_date: string;
   game_time: string | null;
@@ -23,7 +25,15 @@ interface FinalizedGame {
   team_score: number | null;
   opponent_score: number | null;
   result: "W" | "L" | "T" | null;
+  status: GameStatus;
   finalized_at: string | null;
+  game_live_state: {
+    inning: number;
+    half: "top" | "bottom";
+    team_score: number;
+    opponent_score: number;
+    last_event_at: string | null;
+  } | null;
   teams: {
     id: string;
     slug: string;
@@ -35,8 +45,8 @@ interface FinalizedGame {
 
 const SPORT_LABEL: Record<Sport, string> = { baseball: "Baseball", softball: "Softball" };
 
-const groupByDate = (games: FinalizedGame[]) => {
-  const map = new Map<string, FinalizedGame[]>();
+const groupByDate = (games: ScoreTileGame[]) => {
+  const map = new Map<string, ScoreTileGame[]>();
   for (const g of games) {
     const list = map.get(g.game_date) ?? [];
     list.push(g);
@@ -63,9 +73,10 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
   let query = supabase
     .from("games")
     .select(
-      "id, game_date, game_time, opponent, location, team_score, opponent_score, result, finalized_at, teams!inner(id, slug, name, sport, schools!inner(slug, name, short_name))",
+      "id, game_date, game_time, opponent, location, team_score, opponent_score, result, status, finalized_at, game_live_state(inning, half, team_score, opponent_score, last_event_at), teams!inner(id, slug, name, sport, schools!inner(slug, name, short_name))",
     )
-    .eq("is_final", true)
+    .in("status", ["in_progress", "final"])
+    .order("status", { ascending: true })   // in_progress before final
     .order("game_date", { ascending: false })
     .limit(100);
 
@@ -77,8 +88,10 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
   }
 
   const { data, error } = await query;
-  const games = (data ?? []) as unknown as FinalizedGame[];
-  const grouped = groupByDate(games);
+  const games = (data ?? []) as unknown as ScoreTileGame[];
+  const live = games.filter((g) => g.status === "in_progress");
+  const finalGames = games.filter((g) => g.status === "final");
+  const grouped = groupByDate(finalGames);
 
   return (
     <div className="min-h-screen bg-background">
@@ -107,7 +120,7 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
           <div className="rounded-md border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive">
             Couldn&apos;t load scores: {error.message}
           </div>
-        ) : grouped.length === 0 ? (
+        ) : grouped.length === 0 && live.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-muted/30 p-12 text-center">
             <p className="font-display text-2xl text-sa-blue-deep mb-2">No games yet</p>
             <p className="text-sm text-muted-foreground">
@@ -118,6 +131,19 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
           </div>
         ) : (
           <div className="space-y-10">
+            {live.length > 0 && (
+              <section>
+                <h2 className="font-display text-xl text-sa-orange uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-sa-orange animate-pulse" />
+                  Live now
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {live.map((g) => (
+                    <ScoreCard key={g.id} game={g} />
+                  ))}
+                </div>
+              </section>
+            )}
             {grouped.map(([date, gs]) => (
               <section key={date}>
                 <h2 className="font-display text-xl text-sa-blue uppercase tracking-wider mb-3">
@@ -143,17 +169,31 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
   );
 }
 
-function ScoreCard({ game }: { game: FinalizedGame }) {
+function ScoreCard({ game }: { game: ScoreTileGame }) {
   const team = game.teams;
   const school = team?.schools;
   if (!team || !school) return null;
-  const won = game.result === "W";
-  const lost = game.result === "L";
-  const accent = won ? "border-sa-blue/60" : lost ? "border-sa-orange/60" : "border-border";
+  const isLive = game.status === "in_progress";
+  const liveScore = game.game_live_state;
+
+  const teamScore = isLive
+    ? (liveScore?.team_score ?? null)
+    : game.team_score;
+  const opponentScore = isLive
+    ? (liveScore?.opponent_score ?? null)
+    : game.opponent_score;
+
+  const won = !isLive && game.result === "W";
+  const lost = !isLive && game.result === "L";
+  const accent = isLive
+    ? "border-sa-orange shadow-orange"
+    : won ? "border-sa-blue/60" : lost ? "border-sa-orange/60" : "border-border";
+  const inningLabel = liveScore
+    ? `${liveScore.half === "top" ? "Top" : "Bot"} ${liveScore.inning}`
+    : null;
+
   return (
-    <div
-      className={`p-4 bg-card border rounded-lg shadow-card flex items-center gap-4 ${accent}`}
-    >
+    <div className={`p-4 bg-card border rounded-lg shadow-card flex items-center gap-4 ${accent}`}>
       <div className="flex-1 min-w-0">
         <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
           {SPORT_LABEL[team.sport]}
@@ -166,25 +206,43 @@ function ScoreCard({ game }: { game: FinalizedGame }) {
           {game.location === "home" ? "vs" : game.location === "away" ? "@" : "neutral"}{" "}
           <span className="font-semibold text-foreground">{game.opponent}</span>
         </p>
+        {isLive && (
+          <p className="text-[10px] uppercase tracking-wider text-sa-orange font-bold mt-1 flex items-center gap-1">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-sa-orange animate-pulse" />
+            Live · {inningLabel ?? "warming up"}
+            {liveScore?.last_event_at && (
+              <span className="text-muted-foreground font-normal normal-case">
+                · {syncedAgo(liveScore.last_event_at)}
+              </span>
+            )}
+          </p>
+        )}
       </div>
       <div className="text-right">
-        {game.team_score !== null && game.opponent_score !== null ? (
+        {teamScore !== null && opponentScore !== null ? (
           <p className="font-mono-stat text-2xl font-bold text-sa-blue-deep">
-            {game.team_score} <span className="text-muted-foreground">–</span> {game.opponent_score}
+            {teamScore} <span className="text-muted-foreground">–</span> {opponentScore}
           </p>
         ) : (
-          <p className="font-mono-stat text-sm text-muted-foreground">final</p>
+          <p className="font-mono-stat text-sm text-muted-foreground">{isLive ? "starting" : "final"}</p>
         )}
-        {game.result && (
-          <p
-            className={`text-[10px] font-bold uppercase tracking-wider ${
-              won ? "text-sa-blue" : lost ? "text-sa-orange" : "text-muted-foreground"
-            }`}
-          >
+        {!isLive && game.result && (
+          <p className={`text-[10px] font-bold uppercase tracking-wider ${
+            won ? "text-sa-blue" : lost ? "text-sa-orange" : "text-muted-foreground"
+          }`}>
             {game.result}
           </p>
         )}
       </div>
     </div>
   );
+}
+
+function syncedAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.round(ms / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `synced ${min}m ago`;
+  const hr = Math.round(min / 60);
+  return `synced ${hr}h ago`;
 }
