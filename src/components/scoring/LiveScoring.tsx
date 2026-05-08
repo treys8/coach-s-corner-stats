@@ -259,9 +259,19 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
               <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
               <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
             </span>
-            <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
-              Cancel
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void submitAtBat(armedResult, null)}
+                disabled={submitting}
+              >
+                Skip location
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
+                Cancel
+              </Button>
+            </div>
           </div>
         )}
         <DefensiveDiamond
