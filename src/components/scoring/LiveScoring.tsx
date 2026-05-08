@@ -1,8 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { createClient } from "@/lib/supabase/client";
 import { replay } from "@/lib/scoring/replay";
 import { defaultAdvances } from "@/lib/scoring/advances";
@@ -45,11 +54,13 @@ const RESULT_DESC: Partial<Record<AtBatResult, string>> = {
 };
 
 export function LiveScoring({ gameId }: LiveScoringProps) {
+  const router = useRouter();
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [pitchCount, setPitchCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmFinalize, setConfirmFinalize] = useState(false);
 
   // Load all events for this game and run replay() to get the canonical
   // live state. Cheap — Phase 1 has at most a few hundred events per game.
@@ -134,6 +145,24 @@ export function LiveScoring({ gameId }: LiveScoringProps) {
     await refresh();
   };
 
+  const finalize = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `gf-${gameId}`,
+      sequence_number: nextSeq,
+      event_type: "game_finalized",
+      payload: {},
+    });
+    setSubmitting(false);
+    setConfirmFinalize(false);
+    if (!ok) return;
+    toast.success("Game finalized");
+    // Parent page reads game.status from the games table; trigger a refetch.
+    router.refresh();
+  };
+
   const refresh = async () => {
     const { data } = await supabase
       .from("game_events")
@@ -157,6 +186,7 @@ export function LiveScoring({ gameId }: LiveScoringProps) {
       <OutcomeGrid disabled={submitting || state.outs >= 3} onPick={submitAtBat} />
       <FlowControls
         onEndHalf={endHalfInning}
+        onFinalize={() => setConfirmFinalize(true)}
         disabled={submitting}
         outs={state.outs}
       />
@@ -166,6 +196,13 @@ export function LiveScoring({ gameId }: LiveScoringProps) {
           {state.last_play_text}
         </Card>
       )}
+      <FinalizeDialog
+        open={confirmFinalize}
+        onOpenChange={setConfirmFinalize}
+        state={state}
+        onConfirm={finalize}
+        disabled={submitting}
+      />
     </div>
   );
 }
@@ -305,10 +342,12 @@ function ButtonRow({
 
 function FlowControls({
   onEndHalf,
+  onFinalize,
   disabled,
   outs,
 }: {
   onEndHalf: () => void;
+  onFinalize: () => void;
   disabled: boolean;
   outs: number;
 }) {
@@ -317,12 +356,66 @@ function FlowControls({
       <Button variant="outline" disabled={disabled} onClick={onEndHalf}>
         End ½ inning
       </Button>
+      <Button
+        variant="outline"
+        disabled={disabled}
+        onClick={onFinalize}
+        className="border-sa-orange text-sa-orange hover:bg-sa-orange hover:text-white"
+      >
+        Finalize game
+      </Button>
       {outs >= 3 && (
         <span className="text-xs uppercase tracking-wider text-sa-orange font-semibold">
           3 outs — end the half-inning to continue
         </span>
       )}
     </div>
+  );
+}
+
+function FinalizeDialog({
+  open,
+  onOpenChange,
+  state,
+  onConfirm,
+  disabled,
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  state: ReplayState;
+  onConfirm: () => void;
+  disabled: boolean;
+}) {
+  const result =
+    state.team_score > state.opponent_score ? "Win"
+    : state.team_score < state.opponent_score ? "Loss"
+    : "Tie";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Finalize this game?</DialogTitle>
+          <DialogDescription>
+            The game will appear as final on the public scoreboard. You can un-finalize from the
+            schedule page within 7 days if you need to fix something.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="py-4 text-center space-y-1">
+          <p className="font-mono-stat text-4xl text-sa-blue-deep">
+            {state.team_score} <span className="text-muted-foreground">–</span> {state.opponent_score}
+          </p>
+          <p className="text-xs uppercase tracking-wider text-muted-foreground">{result}</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button disabled={disabled} onClick={onConfirm} className="bg-sa-orange hover:bg-sa-orange/90">
+            {disabled ? "Finalizing…" : "Yes, finalize"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

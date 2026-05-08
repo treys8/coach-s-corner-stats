@@ -160,14 +160,28 @@ export async function rederive(gameId: string): Promise<ReplayState> {
   }
 
   // Reflect the game lifecycle on `games.status` so the existing /scores
-  // query (and future LIVE-tile filter) sees the right state.
+  // query (and future LIVE-tile filter) sees the right state. When the
+  // game is finalized via tablet, also write the score and result back
+  // so /scores can read everything from the games table (it falls back
+  // to game_live_state only for in-progress tiles).
   if (state.status !== "draft") {
-    const statusUpdate = await admin
-      .from("games")
-      .update({ status: state.status })
-      .eq("id", gameId);
+    const update: {
+      status: typeof state.status;
+      team_score?: number;
+      opponent_score?: number;
+      result?: "W" | "L" | "T";
+    } = { status: state.status };
+    if (state.status === "final") {
+      update.team_score = state.team_score;
+      update.opponent_score = state.opponent_score;
+      update.result =
+        state.team_score > state.opponent_score ? "W"
+        : state.team_score < state.opponent_score ? "L"
+        : "T";
+    }
+    const statusUpdate = await admin.from("games").update(update).eq("id", gameId);
     if (statusUpdate.error) {
-      throw new Error(`games.status update failed: ${statusUpdate.error.message}`);
+      throw new Error(`games update failed: ${statusUpdate.error.message}`);
     }
   }
 
