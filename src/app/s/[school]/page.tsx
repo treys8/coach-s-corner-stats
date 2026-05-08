@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Settings, Users } from "lucide-react";
+import { Plus, Settings, Trophy, Users } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
 import type { Sport, TeamLevel } from "@/integrations/supabase/types";
 
@@ -117,8 +117,14 @@ export default function SchoolDashboard() {
           <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">{school.name}</h2>
           <p className="text-sm text-muted-foreground mt-2">/s/{school.slug}</p>
         </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link href={`/s/${school.slug}/records`}>
+            <Button variant="outline" className="gap-1">
+              <Trophy className="w-4 h-4" /> Records
+            </Button>
+          </Link>
         {isAdmin && (
-          <div className="flex items-center gap-2">
+          <>
             <Link href={`/s/${school.slug}/settings`}>
               <Button variant="outline" className="gap-1">
                 <Settings className="w-4 h-4" /> Settings
@@ -198,8 +204,9 @@ export default function SchoolDashboard() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          </div>
+          </>
         )}
+        </div>
       </div>
 
       {loading ? (
