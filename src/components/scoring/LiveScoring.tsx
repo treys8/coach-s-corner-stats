@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { replay } from "@/lib/scoring/replay";
 import { defaultAdvances } from "@/lib/scoring/advances";
 import { INITIAL_STATE } from "@/lib/scoring/types";
+import { FieldTap, type SprayHit } from "./FieldTap";
 import type {
   AtBatPayload,
   AtBatResult,
@@ -81,6 +82,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [submitting, setSubmitting] = useState(false);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
+  const [pendingSpray, setPendingSpray] = useState<SprayHit | null>(null);
   const names = useMemo(() => nameById(roster), [roster]);
 
   // Load all events for this game and run replay() to get the canonical
@@ -132,9 +134,9 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       pitch_count: finalBalls + finalStrikes,
       balls: finalBalls,
       strikes: finalStrikes,
-      spray_x: null,
-      spray_y: null,
-      fielder_position: null,
+      spray_x: isInPlay(result) ? pendingSpray?.x ?? null : null,
+      spray_y: isInPlay(result) ? pendingSpray?.y ?? null : null,
+      fielder_position: isInPlay(result) ? pendingSpray?.fielder ?? null : null,
       runner_advances: advances,
       description: describePlay(result, runs, currentSlot?.player_id ?? null, names),
     };
@@ -152,6 +154,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
 
     setBalls(0);
     setStrikes(0);
+    setPendingSpray(null);
     await refresh();
   };
 
@@ -234,6 +237,12 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
         strikes={strikes}
         onBalls={setBalls}
         onStrikes={setStrikes}
+      />
+      <FieldTap
+        pending={pendingSpray}
+        onTap={setPendingSpray}
+        onClear={() => setPendingSpray(null)}
+        disabled={submitting || state.outs >= 3}
       />
       <OutcomeGrid disabled={submitting || state.outs >= 3} onPick={submitAtBat} />
       <FlowControls
@@ -586,6 +595,17 @@ function FinalizeDialog({
 
 function isOurHalf(weAreHome: boolean, half: "top" | "bottom"): boolean {
   return weAreHome ? half === "bottom" : half === "top";
+}
+
+// Spray + fielder are only meaningful for outcomes where the ball was put in
+// play. Strikeouts, walks, HBPs leave them null even if the user happened to
+// tap the field before submitting (defensive — UI clears the tap regardless).
+const NON_CONTACT_RESULTS: ReadonlySet<AtBatResult> = new Set([
+  "K_swinging", "K_looking", "BB", "IBB", "HBP",
+]);
+
+function isInPlay(result: AtBatResult): boolean {
+  return !NON_CONTACT_RESULTS.has(result);
 }
 
 interface PostBody {
