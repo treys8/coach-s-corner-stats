@@ -9,6 +9,7 @@
 
 import { adminClient } from "@/lib/supabase/admin";
 import { replay } from "./replay";
+import { rollupBatting, rollupPitching } from "./rollup";
 import type { GameEventPayload, GameEventRecord, ReplayState } from "./types";
 import type { GameEventType } from "@/integrations/supabase/types";
 
@@ -184,6 +185,59 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     const statusUpdate = await admin.from("games").update(update).eq("id", gameId);
     if (statusUpdate.error) {
       throw new Error(`games update failed: ${statusUpdate.error.message}`);
+    }
+  }
+
+  // Tablet stat rollup. Idempotent: clear any prior tablet rows for this game,
+  // then write fresh rows iff the game is final. Handles re-replay, late
+  // corrections, and (eventually) un-finalize without duplicates.
+  const del = await admin
+    .from("stat_snapshots")
+    .delete()
+    .eq("game_id", gameId)
+    .eq("source", "tablet");
+  if (del.error) {
+    throw new Error(`stat_snapshots tablet delete failed: ${del.error.message}`);
+  }
+
+  if (state.status === "final") {
+    const gameRow = await admin
+      .from("games")
+      .select("team_id, game_date")
+      .eq("id", gameId)
+      .single();
+    if (gameRow.error || !gameRow.data) {
+      throw new Error(
+        `games fetch for rollup failed: ${gameRow.error?.message ?? "missing"}`,
+      );
+    }
+    const team_id = gameRow.data.team_id as string;
+    const game_date = gameRow.data.game_date as string;
+    const season_year = new Date(game_date).getFullYear();
+
+    const batting = rollupBatting(state.at_bats);
+    const pitching = rollupPitching(state.at_bats);
+    const playerIds = new Set<string>([...batting.keys(), ...pitching.keys()]);
+
+    if (playerIds.size > 0) {
+      const rows = [...playerIds].map((player_id) => ({
+        team_id,
+        player_id,
+        season_year,
+        upload_date: game_date,
+        game_id: gameId,
+        source: "tablet" as const,
+        upload_id: null,
+        stats: {
+          batting: batting.get(player_id) ?? {},
+          pitching: pitching.get(player_id) ?? {},
+          fielding: {},
+        },
+      }));
+      const ins = await admin.from("stat_snapshots").insert(rows as never[]);
+      if (ins.error) {
+        throw new Error(`stat_snapshots tablet insert failed: ${ins.error.message}`);
+      }
     }
   }
 

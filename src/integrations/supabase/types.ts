@@ -157,6 +157,8 @@ export type Database = {
           upload_id: string | null;
           stats: Json;
           created_at: string;
+          source: "xlsx" | "tablet";
+          game_id: string | null;
         };
         Insert: {
           id?: string;
@@ -167,6 +169,8 @@ export type Database = {
           upload_id?: string | null;
           stats: Json;
           created_at?: string;
+          source?: "xlsx" | "tablet";
+          game_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["stat_snapshots"]["Insert"]>;
         Relationships: [];
