@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateCareer } from "@/lib/career";
+import { aggregateBySeason, aggregateCareer } from "@/lib/career";
 import type { SnapshotStats } from "@/lib/snapshots";
 
 const snap = (
@@ -76,5 +76,52 @@ describe("aggregateCareer", () => {
   it("returns an empty object when there are no snapshots", () => {
     const career = aggregateCareer([], "batting");
     expect(career).toEqual({});
+  });
+});
+
+describe("aggregateBySeason", () => {
+  const seasonSnap = (
+    upload_date: string,
+    season_year: number,
+    stats: SnapshotStats,
+  ) => ({ upload_date, season_year, stats });
+
+  it("groups snapshots by season_year and recomputes rates per season", () => {
+    const snapshots = [
+      seasonSnap("2025-04-01", 2025, {
+        batting: { AB: 50, H: 15, BB: 5, HBP: 0, SF: 0, TB: 22 },
+        pitching: {},
+        fielding: {},
+      }),
+      seasonSnap("2025-05-01", 2025, {
+        batting: { AB: 50, H: 18, BB: 5, HBP: 0, SF: 0, TB: 28 },
+        pitching: {},
+        fielding: {},
+      }),
+      seasonSnap("2026-04-01", 2026, {
+        batting: { AB: 100, H: 40, BB: 10, HBP: 0, SF: 0, TB: 65 },
+        pitching: {},
+        fielding: {},
+      }),
+    ];
+    const seasons = aggregateBySeason(snapshots, "batting");
+    expect(seasons.map((s) => s.season_year)).toEqual([2025, 2026]);
+    // 2025: AB=100, H=33, AVG=.330
+    expect(seasons[0].agg.AB).toBe(100);
+    expect(seasons[0].agg.H).toBe(33);
+    expect(seasons[0].agg.AVG).toBeCloseTo(0.33, 6);
+    // 2026: AB=100, H=40, AVG=.400
+    expect(seasons[1].agg.AB).toBe(100);
+    expect(seasons[1].agg.AVG).toBeCloseTo(0.4, 6);
+  });
+
+  it("sorts seasons ascending even when input is mixed", () => {
+    const snapshots = [
+      seasonSnap("2026-04-01", 2026, { batting: { AB: 1, H: 0 }, pitching: {}, fielding: {} }),
+      seasonSnap("2024-04-01", 2024, { batting: { AB: 1, H: 0 }, pitching: {}, fielding: {} }),
+      seasonSnap("2025-04-01", 2025, { batting: { AB: 1, H: 0 }, pitching: {}, fielding: {} }),
+    ];
+    const seasons = aggregateBySeason(snapshots, "batting");
+    expect(seasons.map((s) => s.season_year)).toEqual([2024, 2025, 2026]);
   });
 });

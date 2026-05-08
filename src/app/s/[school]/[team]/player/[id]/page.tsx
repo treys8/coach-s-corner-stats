@@ -13,7 +13,7 @@ import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
 import { KEY_BATTING, KEY_PITCHING, KEY_FIELDING } from "@/lib/glossary";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
-import { aggregateCareer } from "@/lib/career";
+import { aggregateBySeason, aggregateCareer } from "@/lib/career";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
@@ -227,7 +227,8 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
         {(["batting", "pitching", "fielding"] as Section[]).map((sec) => {
           const keyStats = sec === "batting" ? KEY_BATTING : sec === "pitching" ? KEY_PITCHING : KEY_FIELDING;
           const career = aggregateCareer(snapshots, sec);
-          const seasonsCount = new Set(snapshots.map((s) => s.season_year)).size;
+          const seasonRows = aggregateBySeason(snapshots, sec);
+          const seasonsCount = seasonRows.length;
           const latest = sectionOf(latestSnap?.stats, sec);
           return (
             <TabsContent key={sec} value={sec} className="space-y-6 mt-6">
@@ -239,6 +240,9 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
                   </p>
                 </div>
                 {renderStatGrid(sec, keyStats, career, `No ${sec} career data yet — uploads or tablet-finalized games will populate this.`)}
+                {seasonRows.length > 1 && (
+                  <SeasonTable section={sec} columns={TREND[sec]} rows={seasonRows} career={career} />
+                )}
               </Card>
               <Card className="p-6">
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Latest snapshot</h3>
@@ -258,6 +262,64 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
           );
         })}
       </Tabs>
+    </div>
+  );
+}
+
+function SeasonTable({
+  section,
+  columns,
+  rows,
+  career,
+}: {
+  section: Section;
+  columns: string[];
+  rows: { season_year: number; agg: Record<string, number> }[];
+  career: Record<string, number>;
+}) {
+  return (
+    <div className="mt-6 -mx-6 px-6 overflow-x-auto">
+      <table className="w-full text-sm border-collapse min-w-[480px]">
+        <thead>
+          <tr className="border-b border-border">
+            <th className="text-left text-xs uppercase tracking-wider text-muted-foreground py-2 pr-4 font-semibold">
+              Season
+            </th>
+            {columns.map((k) => (
+              <th key={k} className="text-right text-xs uppercase tracking-wider text-muted-foreground py-2 px-2 font-semibold">
+                <StatLabel abbr={k} />
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.season_year} className="border-b border-border/50">
+              <td className="py-2 pr-4 font-mono-stat text-sa-blue-deep">{r.season_year}</td>
+              {columns.map((k) => (
+                <td key={k} className="text-right py-2 px-2 font-mono-stat">
+                  {k in r.agg ? formatStat(r.agg[k]) : "—"}
+                </td>
+              ))}
+            </tr>
+          ))}
+          <tr className="border-t-2 border-sa-blue-deep bg-muted/40">
+            <td className="py-2 pr-4 font-display font-bold text-sa-blue-deep uppercase tracking-wider text-xs">
+              Career
+            </td>
+            {columns.map((k) => (
+              <td key={k} className="text-right py-2 px-2 font-mono-stat font-bold text-sa-blue-deep">
+                {k in career ? formatStat(career[k]) : "—"}
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+      {section !== "batting" && rows.length > 1 && (
+        <p className="text-xs text-muted-foreground italic mt-2">
+          Career row recomputes rate stats from summed counters; per-season rows do the same within each year.
+        </p>
+      )}
     </div>
   );
 }

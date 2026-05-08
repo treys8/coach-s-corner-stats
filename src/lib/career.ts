@@ -15,6 +15,15 @@ export interface CareerSnapshotInput {
   stats: SnapshotStats;
 }
 
+export interface SeasonSnapshotInput extends CareerSnapshotInput {
+  season_year: number;
+}
+
+export interface SeasonAgg {
+  season_year: number;
+  agg: SectionAgg;
+}
+
 function ipToOuts(ip: number): number {
   if (!Number.isFinite(ip) || ip < 0) return 0;
   const whole = Math.floor(ip);
@@ -90,4 +99,25 @@ export function aggregateCareer(
   }
 
   return summed;
+}
+
+/**
+ * Group snapshots by season_year and aggregate each season independently
+ * via aggregateCareer. Returns rows sorted by season ascending.
+ */
+export function aggregateBySeason(
+  snapshots: SeasonSnapshotInput[],
+  section: Section,
+): SeasonAgg[] {
+  const byYear = new Map<number, SeasonSnapshotInput[]>();
+  for (const s of snapshots) {
+    if (!byYear.has(s.season_year)) byYear.set(s.season_year, []);
+    byYear.get(s.season_year)!.push(s);
+  }
+  return [...byYear.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([season_year, list]) => ({
+      season_year,
+      agg: aggregateCareer(list, section),
+    }));
 }
