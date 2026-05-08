@@ -13,13 +13,14 @@ import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
 import { KEY_BATTING, KEY_PITCHING, KEY_FIELDING } from "@/lib/glossary";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
+import { aggregateCareer } from "@/lib/career";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
 import { PlayerSprayChart, type SprayMarker } from "@/components/spray/PlayerSprayChart";
 
 interface Player { id: string; first_name: string; last_name: string }
-interface Snapshot { upload_date: string; stats: SnapshotStats }
+interface Snapshot { upload_date: string; stats: SnapshotStats; season_year: number }
 
 const TREND: Record<Section, string[]> = {
   batting: ["AVG", "OBP", "SLG", "OPS", "H", "HR", "RBI"],
@@ -52,7 +53,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
         supabase.from("players").select("id, first_name, last_name").eq("id", id).maybeSingle(),
         supabase
           .from("stat_snapshots")
-          .select("upload_date, stats")
+          .select("upload_date, stats, season_year")
           .eq("team_id", team.id)
           .eq("player_id", id)
           .order("upload_date", { ascending: true }),
@@ -75,7 +76,11 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
       setPlayer((pl as Player | null) ?? null);
       setJersey(roster?.[0]?.jersey_number ?? null);
       setSnapshots(
-        (snaps ?? []).map((s) => ({ upload_date: s.upload_date, stats: parseSnapshotStats(s.stats) })),
+        (snaps ?? []).map((s) => ({
+          upload_date: s.upload_date as string,
+          stats: parseSnapshotStats(s.stats),
+          season_year: (s.season_year as number | null) ?? new Date(s.upload_date as string).getFullYear(),
+        })),
       );
       setSprayMarkers(
         (abs ?? []).map((r) => ({
@@ -111,14 +116,18 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
     );
   }
 
-  const renderStatGrid = (section: Section, keyStats: string[]) => {
-    const latest = sectionOf(latestSnap?.stats, section);
-    const allKeys = Object.keys(latest);
+  const renderStatGrid = (
+    section: Section,
+    keyStats: string[],
+    block: Record<string, number | string>,
+    emptyHint: string,
+  ) => {
+    const allKeys = Object.keys(block);
     if (allKeys.length === 0) {
-      return <p className="text-sm text-muted-foreground italic">No {section} stats yet — upload a workbook to populate.</p>;
+      return <p className="text-sm text-muted-foreground italic">{emptyHint}</p>;
     }
     const expanded = showAll[section];
-    const visible = expanded ? allKeys : keyStats.filter((k) => k in latest);
+    const visible = expanded ? allKeys : keyStats.filter((k) => k in block);
     return (
       <>
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-1.5">
@@ -131,7 +140,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
                 <StatLabel abbr={k} />
               </div>
               <div className="font-mono-stat text-sm font-bold text-sa-blue-deep leading-none">
-                {formatStat(latest[k])}
+                {formatStat(block[k])}
               </div>
             </div>
           ))}
@@ -217,11 +226,23 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
 
         {(["batting", "pitching", "fielding"] as Section[]).map((sec) => {
           const keyStats = sec === "batting" ? KEY_BATTING : sec === "pitching" ? KEY_PITCHING : KEY_FIELDING;
+          const career = aggregateCareer(snapshots, sec);
+          const seasonsCount = new Set(snapshots.map((s) => s.season_year)).size;
+          const latest = sectionOf(latestSnap?.stats, sec);
           return (
             <TabsContent key={sec} value={sec} className="space-y-6 mt-6">
               <Card className="p-6">
-                <h3 className="font-display text-2xl text-sa-blue-deep mb-4 capitalize">{sec} Stats</h3>
-                {renderStatGrid(sec, keyStats)}
+                <div className="flex items-baseline justify-between flex-wrap gap-2 mb-4">
+                  <h3 className="font-display text-2xl text-sa-blue-deep capitalize">{sec} Career</h3>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                    {seasonsCount} season{seasonsCount === 1 ? "" : "s"} · {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+                {renderStatGrid(sec, keyStats, career, `No ${sec} career data yet — uploads or tablet-finalized games will populate this.`)}
+              </Card>
+              <Card className="p-6">
+                <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Latest snapshot</h3>
+                {renderStatGrid(sec, keyStats, latest, `No ${sec} stats yet — upload a workbook to populate.`)}
               </Card>
               <Card className="p-6">
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4">Trends Over Time</h3>
