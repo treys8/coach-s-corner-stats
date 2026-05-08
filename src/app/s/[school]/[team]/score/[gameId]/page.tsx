@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { currentSeasonYear } from "@/lib/season";
 import type { GameStatus, GameLocation } from "@/integrations/supabase/types";
 import type { GameStartedPayload, LineupSlot } from "@/lib/scoring/types";
+import { LiveScoring } from "@/components/scoring/LiveScoring";
 
 interface GameRow {
   id: string;
@@ -127,7 +128,7 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
       {game.status === "draft" && (
         <PreGameForm game={game} roster={roster} onStarted={() => router.refresh()} />
       )}
-      {game.status === "in_progress" && <LiveStub gameId={game.id} />}
+      {game.status === "in_progress" && <LiveScoring gameId={game.id} />}
       {game.status === "final" && <FinalStub game={game} />}
     </main>
   );
@@ -355,19 +356,6 @@ function PreGameForm({
           {weAreHome ? "We bat in the bottom of each inning." : "We bat in the top of each inning."}
         </p>
       </div>
-    </Card>
-  );
-}
-
-function LiveStub({ gameId }: { gameId: string }) {
-  return (
-    <Card className="p-6 space-y-2">
-      <h3 className="font-display text-xl text-sa-blue-deep">Game in progress</h3>
-      <p className="text-sm text-muted-foreground">
-        The live scoring screen lands in the next session of Phase 1. The game has events recorded
-        and shows on the public scoreboard.
-      </p>
-      <p className="text-xs text-muted-foreground">Game ID: {gameId}</p>
     </Card>
   );
 }

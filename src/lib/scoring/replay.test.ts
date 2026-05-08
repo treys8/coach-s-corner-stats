@@ -57,12 +57,34 @@ describe("replay()", () => {
     expect(state.our_lineup).toHaveLength(9);
     expect(state.current_pitcher_id).toBe("pitcher_us");
     expect(state.current_opponent_pitcher_id).toBe("opp_pitch_1");
+    expect(state.current_batter_slot).toBe(1);
     expect(state.we_are_home).toBe(true);
     expect(state.inning).toBe(1);
     expect(state.half).toBe("top");
     expect(state.outs).toBe(0);
     expect(state.bases).toEqual({ first: null, second: null, third: null });
     expect(state.status).toBe("draft");
+  });
+
+  it("our at-bats advance current_batter_slot; opponent at-bats don't", () => {
+    // We are visitors → we bat in the top.
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("at_bat", atBat({ half: "top", result: "K_swinging" })),  // our slot 1 → 2
+      evt("at_bat", atBat({ half: "top", result: "K_swinging" })),  // our slot 2 → 3
+      evt<InningEndPayload>("inning_end", { inning: 1, half: "top" }),
+      evt("at_bat", atBat({ half: "bottom", result: "K_swinging" })), // opponent batting; slot stays at 3
+    ]);
+    expect(state.current_batter_slot).toBe(3);
+  });
+
+  it("current_batter_slot wraps from 9 back to 1", () => {
+    const events = [startGame({ we_are_home: false })];
+    for (let i = 0; i < 9; i++) {
+      events.push(evt("at_bat", atBat({ half: "top", result: "K_swinging" })));
+    }
+    const state = replay(events);
+    expect(state.current_batter_slot).toBe(1);
   });
 
   it("first at_bat flips status draft → in_progress", () => {

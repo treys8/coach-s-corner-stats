@@ -110,6 +110,7 @@ function applyGameStarted(state: ReplayState, p: GameStartedPayload): ReplayStat
     our_lineup: p.starting_lineup.map((s) => ({ ...s })),
     current_pitcher_id: p.starting_pitcher_id,
     current_opponent_pitcher_id: p.opponent_starting_pitcher_id,
+    current_batter_slot: 1,
     inning: 1,
     half: "top",
     outs: 0,
@@ -125,6 +126,13 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
 
   const team_score = weAreBatting ? state.team_score + runsScored : state.team_score;
   const opponent_score = weAreBatting ? state.opponent_score : state.opponent_score + runsScored;
+
+  // Advance the batter slot only when our team batted. Wrap 9 → 1.
+  const lineupSize = state.our_lineup.length || 9;
+  const next_batter_slot =
+    weAreBatting && state.current_batter_slot !== null
+      ? (state.current_batter_slot % lineupSize) + 1
+      : state.current_batter_slot;
 
   const derived: DerivedAtBat = {
     event_id: eventId,
@@ -152,6 +160,7 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     outs: state.outs + outsAdded,
     team_score,
     opponent_score,
+    current_batter_slot: next_batter_slot,
     last_play_text: p.description,
     at_bats: [...state.at_bats, derived],
   };

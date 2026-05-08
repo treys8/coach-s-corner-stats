@@ -154,6 +154,10 @@ export interface ReplayState {
   our_lineup: LineupSlot[];
   current_pitcher_id: string | null;
   current_opponent_pitcher_id: string | null;
+  /** 1-based slot in our_lineup that's up next when we're batting. Null
+   *  before game_started. Persists across half-innings since the order
+   *  resumes where it left off. */
+  current_batter_slot: number | null;
 
   last_play_text: string | null;
   last_event_at: string | null;
@@ -176,6 +180,7 @@ export const INITIAL_STATE: ReplayState = {
   our_lineup: [],
   current_pitcher_id: null,
   current_opponent_pitcher_id: null,
+  current_batter_slot: null,
   last_play_text: null,
   last_event_at: null,
   at_bats: [],
