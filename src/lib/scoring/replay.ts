@@ -158,6 +158,7 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     fielder_position: p.fielder_position,
     runs_scored_on_play: runsScored,
     outs_recorded: outsAdded,
+    runner_advances: p.runner_advances,
     description: p.description,
   };
 
