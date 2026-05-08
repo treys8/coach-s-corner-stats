@@ -151,6 +151,8 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     result: p.result,
     rbi: p.rbi,
     pitch_count: p.pitch_count,
+    balls: p.balls ?? 0,
+    strikes: p.strikes ?? 0,
     spray_x: p.spray_x,
     spray_y: p.spray_y,
     fielder_position: p.fielder_position,

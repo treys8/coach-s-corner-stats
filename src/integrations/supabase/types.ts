@@ -251,6 +251,8 @@ export type Database = {
           result: string;
           rbi: number;
           pitch_count: number;
+          balls: number;
+          strikes: number;
           spray_x: number | null;
           spray_y: number | null;
           fielder_position: string | null;
@@ -272,6 +274,8 @@ export type Database = {
           result: string;
           rbi?: number;
           pitch_count?: number;
+          balls?: number;
+          strikes?: number;
           spray_x?: number | null;
           spray_y?: number | null;
           fielder_position?: string | null;

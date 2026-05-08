@@ -75,7 +75,8 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [pitchCount, setPitchCount] = useState(0);
+  const [balls, setBalls] = useState(0);
+  const [strikes, setStrikes] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const names = useMemo(() => nameById(roster), [roster]);
@@ -115,6 +116,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     setSubmitting(true);
     const advances = defaultAdvances(state.bases, weAreBatting ? currentSlot?.player_id ?? null : null, result);
     const runs = advances.filter((a) => a.to === "home").length;
+    const { balls: finalBalls, strikes: finalStrikes } = finalCount(result, balls, strikes);
 
     const payload: AtBatPayload = {
       inning: state.inning,
@@ -125,7 +127,9 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       batting_order: weAreBatting ? state.current_batter_slot : null,
       result,
       rbi: runs,
-      pitch_count: pitchCount,
+      pitch_count: finalBalls + finalStrikes,
+      balls: finalBalls,
+      strikes: finalStrikes,
       spray_x: null,
       spray_y: null,
       fielder_position: null,
@@ -144,7 +148,8 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     setSubmitting(false);
     if (!ok) return;
 
-    setPitchCount(0);
+    setBalls(0);
+    setStrikes(0);
     await refresh();
   };
 
@@ -200,7 +205,12 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     <div className="space-y-4">
       <TopBar state={state} weAreBatting={weAreBatting} />
       <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
-      <PitchCounter value={pitchCount} onChange={setPitchCount} />
+      <BallStrikeCounter
+        balls={balls}
+        strikes={strikes}
+        onBalls={setBalls}
+        onStrikes={setStrikes}
+      />
       <OutcomeGrid disabled={submitting || state.outs >= 3} onPick={submitAtBat} />
       <FlowControls
         onEndHalf={endHalfInning}
@@ -300,14 +310,44 @@ function BatterCard({
   );
 }
 
-function PitchCounter({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+function BallStrikeCounter({
+  balls,
+  strikes,
+  onBalls,
+  onStrikes,
+}: {
+  balls: number;
+  strikes: number;
+  onBalls: (n: number) => void;
+  onStrikes: (n: number) => void;
+}) {
   return (
-    <div className="flex items-center gap-3">
-      <span className="text-xs uppercase tracking-wider text-muted-foreground">Pitches</span>
-      <Button size="sm" variant="outline" onClick={() => onChange(Math.max(0, value - 1))}>−</Button>
-      <span className="font-mono-stat text-xl w-8 text-center">{value}</span>
-      <Button size="sm" variant="outline" onClick={() => onChange(value + 1)}>+</Button>
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+      <Counter label="Balls" max={4} value={balls} onChange={onBalls} />
+      <Counter label="Strikes" max={3} value={strikes} onChange={onStrikes} />
+      <span className="font-mono-stat text-2xl text-sa-blue-deep">{balls}-{strikes}</span>
       <span className="text-xs text-muted-foreground">resets after each at-bat</span>
+    </div>
+  );
+}
+
+function Counter({
+  label,
+  value,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs uppercase tracking-wider text-muted-foreground w-12">{label}</span>
+      <Button size="sm" variant="outline" onClick={() => onChange(Math.max(0, value - 1))} disabled={value <= 0}>−</Button>
+      <span className="font-mono-stat text-xl w-6 text-center">{value}</span>
+      <Button size="sm" variant="outline" onClick={() => onChange(Math.min(max, value + 1))} disabled={value >= max}>+</Button>
     </div>
   );
 }
@@ -466,6 +506,22 @@ async function postEvent(gameId: string, body: PostBody): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+// Auto-fill the count to match the outcome. Walks must be 4 balls; strikeouts
+// must be 3 strikes. For balls put in play (hits, in-play outs, FC, E,
+// sacs, DP/TP), the contact pitch counts as a strike — bump the strike
+// count by one if there's room. HBP is treated as neither.
+function finalCount(
+  result: AtBatResult,
+  balls: number,
+  strikes: number,
+): { balls: number; strikes: number } {
+  if (result === "BB" || result === "IBB") return { balls: 4, strikes };
+  if (result === "K_swinging" || result === "K_looking") return { balls, strikes: 3 };
+  if (result === "HBP") return { balls, strikes };
+  // Hits + in-play outs + FC + E + sacs + DP/TP — the in-play pitch is a strike.
+  return { balls, strikes: Math.min(3, strikes + 1) };
 }
 
 function describePlay(
