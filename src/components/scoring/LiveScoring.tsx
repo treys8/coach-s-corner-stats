@@ -20,8 +20,10 @@ import type {
   AtBatPayload,
   AtBatResult,
   GameEventRecord,
+  LineupSlot,
   PitchingChangePayload,
   ReplayState,
+  SubstitutionPayload,
 } from "@/lib/scoring/types";
 import { toast } from "sonner";
 
@@ -81,6 +83,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [submitting, setSubmitting] = useState(false);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
+  const [subOpen, setSubOpen] = useState(false);
   const names = useMemo(() => nameById(roster), [roster]);
 
   // Load all events for this game and run replay() to get the canonical
@@ -170,6 +173,36 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     await refresh();
   };
 
+  const submitSubstitution = async (
+    outSlot: LineupSlot,
+    inPlayerId: string,
+  ) => {
+    if (submitting) return;
+    if (outSlot.player_id === inPlayerId) return;
+    setSubmitting(true);
+    const payload: SubstitutionPayload = {
+      out_player_id: outSlot.player_id ?? "",
+      in_player_id: inPlayerId,
+      batting_order: outSlot.batting_order,
+      position: null,
+      sub_type: "regular",
+    };
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `sub-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: "substitution",
+      payload,
+    });
+    setSubmitting(false);
+    setSubOpen(false);
+    if (!ok) return;
+    toast.success(
+      `Sub: ${names.get(inPlayerId) ?? "in"} → slot ${outSlot.batting_order}`,
+    );
+    await refresh();
+  };
+
   const submitPitchingChange = async (newPitcherId: string) => {
     if (submitting) return;
     if (newPitcherId === state.current_pitcher_id) return;
@@ -238,6 +271,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       <OutcomeGrid disabled={submitting || state.outs >= 3} onPick={submitAtBat} />
       <FlowControls
         onEndHalf={endHalfInning}
+        onSub={() => setSubOpen(true)}
         onPitchingChange={() => setPitchChangeOpen(true)}
         onFinalize={() => setConfirmFinalize(true)}
         disabled={submitting}
@@ -249,6 +283,15 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
           {state.last_play_text}
         </Card>
       )}
+      <SubstitutionDialog
+        open={subOpen}
+        onOpenChange={setSubOpen}
+        roster={roster}
+        lineup={state.our_lineup}
+        names={names}
+        onSubmit={submitSubstitution}
+        disabled={submitting}
+      />
       <PitchingChangeDialog
         open={pitchChangeOpen}
         onOpenChange={setPitchChangeOpen}
@@ -438,12 +481,14 @@ function ButtonRow({
 
 function FlowControls({
   onEndHalf,
+  onSub,
   onPitchingChange,
   onFinalize,
   disabled,
   outs,
 }: {
   onEndHalf: () => void;
+  onSub: () => void;
   onPitchingChange: () => void;
   onFinalize: () => void;
   disabled: boolean;
@@ -453,6 +498,9 @@ function FlowControls({
     <div className="flex flex-wrap items-center gap-3 pt-2 border-t">
       <Button variant="outline" disabled={disabled} onClick={onEndHalf}>
         End ½ inning
+      </Button>
+      <Button variant="outline" disabled={disabled} onClick={onSub}>
+        Sub
       </Button>
       <Button variant="outline" disabled={disabled} onClick={onPitchingChange}>
         Pitching change
@@ -471,6 +519,107 @@ function FlowControls({
         </span>
       )}
     </div>
+  );
+}
+
+function SubstitutionDialog({
+  open,
+  onOpenChange,
+  roster,
+  lineup,
+  names,
+  onSubmit,
+  disabled,
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  roster: RosterDisplay[];
+  lineup: LineupSlot[];
+  names: Map<string, string>;
+  onSubmit: (outSlot: LineupSlot, inPlayerId: string) => void;
+  disabled: boolean;
+}) {
+  const [outSlot, setOutSlot] = useState<LineupSlot | null>(null);
+  useEffect(() => {
+    if (!open) setOutSlot(null);
+  }, [open]);
+
+  const inLineup = useMemo(
+    () => new Set(lineup.map((s) => s.player_id).filter((id): id is string => !!id)),
+    [lineup],
+  );
+  const benchCandidates = roster.filter((p) => !inLineup.has(p.id));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Substitution</DialogTitle>
+          <DialogDescription>
+            {outSlot
+              ? <>Bringing in for slot {outSlot.batting_order} ({outSlot.player_id ? names.get(outSlot.player_id) ?? "—" : "empty"}). Tap a player to sub in.</>
+              : <>Tap the lineup slot of the player coming out.</>}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[60vh] overflow-y-auto -mx-2 px-2">
+          {!outSlot ? (
+            <div className="grid grid-cols-1 gap-2">
+              {lineup.map((slot) => {
+                const playerName = slot.player_id ? names.get(slot.player_id) ?? "—" : "(empty)";
+                return (
+                  <Button
+                    key={slot.batting_order}
+                    variant="outline"
+                    disabled={disabled}
+                    onClick={() => setOutSlot(slot)}
+                    className="h-14 justify-start text-left"
+                  >
+                    <span className="font-mono-stat text-sa-blue-deep mr-3 w-6">{slot.batting_order}</span>
+                    <span className="flex-1">{playerName}</span>
+                    {slot.position && (
+                      <span className="text-xs text-muted-foreground ml-2">{slot.position}</span>
+                    )}
+                  </Button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {benchCandidates.map((p) => {
+                const num = p.jersey_number ? `#${p.jersey_number} ` : "";
+                return (
+                  <Button
+                    key={p.id}
+                    variant="outline"
+                    disabled={disabled}
+                    onClick={() => onSubmit(outSlot, p.id)}
+                    className="h-14 justify-start text-left"
+                  >
+                    <span className="font-mono-stat text-sa-blue-deep mr-2">{num}</span>
+                    <span>{p.first_name} {p.last_name}</span>
+                  </Button>
+                );
+              })}
+              {benchCandidates.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-6 col-span-full">
+                  No bench players available — everyone on the roster is already in the lineup.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          {outSlot && (
+            <Button variant="ghost" disabled={disabled} onClick={() => setOutSlot(null)}>
+              Back
+            </Button>
+          )}
+          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
