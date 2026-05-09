@@ -402,6 +402,34 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["game_links"]["Insert"]>;
         Relationships: [];
       };
+      score_discrepancies: {
+        Row: {
+          id: string;
+          game_link_id: string;
+          home_acct_home_score: number | null;
+          home_acct_visitor_score: number | null;
+          vis_acct_home_score: number | null;
+          vis_acct_visitor_score: number | null;
+          home_self_confirmed: boolean;
+          visitor_self_confirmed: boolean;
+          opened_at: string;
+          resolved_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          game_link_id: string;
+          home_acct_home_score?: number | null;
+          home_acct_visitor_score?: number | null;
+          vis_acct_home_score?: number | null;
+          vis_acct_visitor_score?: number | null;
+          home_self_confirmed?: boolean;
+          visitor_self_confirmed?: boolean;
+          opened_at?: string;
+          resolved_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["score_discrepancies"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -441,6 +469,7 @@ export type Database = {
         Returns: string;
       };
       unlink_games: { Args: { p_link_id: string }; Returns: void };
+      confirm_my_score: { Args: { p_link_id: string }; Returns: void };
     };
     Enums: { [_ in never]: never };
   };
