@@ -384,6 +384,52 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["glossary"]["Insert"]>;
         Relationships: [];
       };
+      game_links: {
+        Row: {
+          id: string;
+          home_game_id: string;
+          visitor_game_id: string;
+          confirmed_at: string;
+          confirmed_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          home_game_id: string;
+          visitor_game_id: string;
+          confirmed_at?: string;
+          confirmed_by?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["game_links"]["Insert"]>;
+        Relationships: [];
+      };
+      score_discrepancies: {
+        Row: {
+          id: string;
+          game_link_id: string;
+          home_acct_home_score: number | null;
+          home_acct_visitor_score: number | null;
+          vis_acct_home_score: number | null;
+          vis_acct_visitor_score: number | null;
+          home_self_confirmed: boolean;
+          visitor_self_confirmed: boolean;
+          opened_at: string;
+          resolved_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          game_link_id: string;
+          home_acct_home_score?: number | null;
+          home_acct_visitor_score?: number | null;
+          vis_acct_home_score?: number | null;
+          vis_acct_visitor_score?: number | null;
+          home_self_confirmed?: boolean;
+          visitor_self_confirmed?: boolean;
+          opened_at?: string;
+          resolved_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["score_discrepancies"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -406,6 +452,53 @@ export type Database = {
           p_has_grad_year: boolean;
         };
         Returns: Array<{ player_id: string; first_name: string; last_name: string }>;
+      };
+      ingest_stats_workbook: {
+        Args: {
+          p_school: string;
+          p_team: string;
+          p_upload_date: string;
+          p_filename: string;
+          p_players: Json;
+          p_replace: boolean;
+        };
+        Returns: Array<{ upload_id: string; snapshot_count: number }>;
+      };
+      game_match_candidates: {
+        Args: { p_my_game_id: string };
+        Returns: Array<{
+          candidate_game_id: string;
+          game_date: string;
+          game_time: string | null;
+          game_sequence: number;
+          status: GameStatus;
+          is_home: boolean;
+        }>;
+      };
+      confirm_game_link: {
+        Args: { p_home_game_id: string; p_visitor_game_id: string };
+        Returns: string;
+      };
+      unlink_games: { Args: { p_link_id: string }; Returns: void };
+      confirm_my_score: { Args: { p_link_id: string }; Returns: void };
+      find_relink_suggestions: {
+        Args: { p_team_id: string };
+        Returns: Array<{
+          game_id: string;
+          game_date: string;
+          game_time: string | null;
+          opponent_text: string;
+          candidate_school_id: string;
+          candidate_school_name: string;
+          candidate_school_short_name: string | null;
+          candidate_team_id: string;
+          candidate_team_name: string;
+          candidate_team_level: TeamLevel;
+        }>;
+      };
+      apply_relink: {
+        Args: { p_game_ids: string[]; p_target_team_id: string };
+        Returns: number;
       };
     };
     Enums: { [_ in never]: never };

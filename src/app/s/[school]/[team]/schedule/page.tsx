@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Plus, Trash2, MapPin, Calendar, CheckCircle2, Globe } from "lucide-react";
+import { Plus, Trash2, MapPin, Calendar, CheckCircle2, Globe, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { seasonYearFor, isSeasonClosed, currentSeasonYear, seasonLabel } from "@/lib/season";
@@ -42,16 +42,19 @@ const gameSchema = z.object({
 
 const supabase = createClient();
 
+const DEFAULT_FORM = {
+  game_date: "", game_time: "", opponent: "", location: "home",
+  team_score: "", opponent_score: "", result: "", notes: "",
+};
+
 export default function SchedulePage() {
   const { team } = useTeam();
   const [games, setGames] = useState<Game[]>([]);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [seasons, setSeasons] = useState<number[]>([]);
   const [season, setSeason] = useState<number>(currentSeasonYear());
-  const [form, setForm] = useState({
-    game_date: "", game_time: "", opponent: "", location: "home",
-    team_score: "", opponent_score: "", result: "", notes: "",
-  });
+  const [form, setForm] = useState(DEFAULT_FORM);
 
   const load = async () => {
     const { data, error } = await supabase
@@ -75,6 +78,27 @@ export default function SchedulePage() {
 
   const closed = isSeasonClosed(season);
 
+  const closeDialog = () => {
+    setOpen(false);
+    setEditingId(null);
+    setForm(DEFAULT_FORM);
+  };
+
+  const openEdit = (g: Game) => {
+    setEditingId(g.id);
+    setForm({
+      game_date: g.game_date,
+      game_time: g.game_time?.slice(0, 5) ?? "",
+      opponent: g.opponent,
+      location: g.location,
+      team_score: g.team_score === null ? "" : String(g.team_score),
+      opponent_score: g.opponent_score === null ? "" : String(g.opponent_score),
+      result: g.result ?? "",
+      notes: g.notes ?? "",
+    });
+    setOpen(true);
+  };
+
   const submit = async () => {
     const parsed = gameSchema.safeParse(form);
     if (!parsed.success) {
@@ -83,29 +107,33 @@ export default function SchedulePage() {
     }
     const yr = seasonYearFor(form.game_date);
     if (isSeasonClosed(yr)) {
-      toast.error(`The ${yr} season is closed. You can't add games to a past season.`);
+      toast.error(`The ${yr} season is closed.`);
       return;
     }
+    // Provisional is_home derivation matching 20260509160000_..._backfill_is_home.sql:
+    // home/neutral → true, away → false. Will be refined when the opponent picker
+    // wire-up adds an explicit choice for neutral games.
     const payload = {
       team_id: team.id,
       game_date: form.game_date,
       game_time: form.game_time || null,
       opponent: form.opponent.trim(),
       location: form.location as "home" | "away" | "neutral",
+      is_home: form.location !== "away",
       team_score: form.team_score === "" ? null : Number(form.team_score),
       opponent_score: form.opponent_score === "" ? null : Number(form.opponent_score),
       result: (form.result || null) as "W" | "L" | "T" | null,
       notes: form.notes || null,
-      season_year: yr,
     };
-    const { error } = await supabase.from("games").insert(payload);
+    const { error } = editingId
+      ? await supabase.from("games").update(payload).eq("id", editingId)
+      : await supabase.from("games").insert(payload);
     if (error) {
       toast.error(error.message);
       return;
     }
-    toast.success("Game added");
-    setOpen(false);
-    setForm({ game_date: "", game_time: "", opponent: "", location: "home", team_score: "", opponent_score: "", result: "", notes: "" });
+    toast.success(editingId ? "Game updated" : "Game added");
+    closeDialog();
     load();
   };
 
@@ -128,9 +156,16 @@ export default function SchedulePage() {
       }
       if (!confirm("Mark this game final? It'll appear on the public Scores page.")) return;
     }
+    // Write `status` — the games_sync_status_is_final trigger derives is_final
+    // and stamps finalized_at. Writing is_final directly leaves status='draft',
+    // which keeps the game off /scores even though the user marked it final.
     const { error } = await supabase
       .from("games")
-      .update({ is_final: isFinal, finalized_at: isFinal ? new Date().toISOString() : null })
+      .update(
+        isFinal
+          ? { status: "final" as const }
+          : { status: "draft" as const, finalized_at: null },
+      )
       .eq("id", g.id);
     if (error) {
       toast.error(error.message);
@@ -199,6 +234,9 @@ export default function SchedulePage() {
               </Button>
             )
           )}
+          <Button variant="ghost" size="icon" onClick={() => openEdit(g)} disabled={closed} title="Edit game">
+            <Pencil className="w-4 h-4 text-sa-blue" />
+          </Button>
           <Button variant="ghost" size="icon" onClick={() => remove(g.id)}>
             <Trash2 className="w-4 h-4 text-destructive" />
           </Button>
@@ -228,14 +266,14 @@ export default function SchedulePage() {
               ))}
             </SelectContent>
           </Select>
-          <Dialog open={open} onOpenChange={setOpen}>
+          <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : closeDialog())}>
             <DialogTrigger asChild>
               <Button disabled={closed} className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange disabled:opacity-50">
                 <Plus className="w-4 h-4 mr-1" /> Add Game
               </Button>
             </DialogTrigger>
             <DialogContent>
-              <DialogHeader><DialogTitle className="font-display text-2xl">Add Game</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle className="font-display text-2xl">{editingId ? "Edit Game" : "Add Game"}</DialogTitle></DialogHeader>
               <div className="grid gap-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div><Label>Date</Label><Input type="date" value={form.game_date} onChange={(e) => setForm({ ...form, game_date: e.target.value })} /></div>
@@ -270,7 +308,7 @@ export default function SchedulePage() {
                 </div>
                 <div><Label>Notes</Label><Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} maxLength={500} rows={2} /></div>
               </div>
-              <DialogFooter><Button onClick={submit} className="bg-sa-blue hover:bg-sa-blue-deep">Save Game</Button></DialogFooter>
+              <DialogFooter><Button onClick={submit} className="bg-sa-blue hover:bg-sa-blue-deep">{editingId ? "Save Changes" : "Save Game"}</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         </div>

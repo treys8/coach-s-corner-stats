@@ -150,13 +150,13 @@ export default function RosterPage() {
           {!closed && (
             <div className="flex flex-wrap items-center justify-center gap-3">
               <Link
-                href={`/s/${school.slug}/${team.slug}/roster`}
+                href={`/s/${school.slug}/${team.slug}/upload/roster`}
                 className="inline-flex items-center gap-2 bg-sa-orange text-white px-6 py-3 rounded-md font-semibold uppercase tracking-wider text-sm shadow-orange hover:bg-sa-orange-glow transition-colors"
               >
                 <Upload className="w-4 h-4" /> Upload Roster
               </Link>
               <Link
-                href={`/s/${school.slug}/${team.slug}/upload`}
+                href={`/s/${school.slug}/${team.slug}/upload/stats`}
                 className="inline-flex items-center gap-2 border border-sa-blue text-sa-blue px-6 py-3 rounded-md font-semibold uppercase tracking-wider text-sm hover:bg-sa-blue/5 transition-colors"
               >
                 <Upload className="w-4 h-4" /> Upload Stats

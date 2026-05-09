@@ -38,8 +38,7 @@ export function Layout({
     { href: `${base}/records`, label: "Records" },
     { href: `${base}/schedule`, label: "Schedule" },
     { href: `${base}/score`, label: "Score" },
-    { href: `${base}/roster`, label: "Upload Roster" },
-    { href: `${base}/upload`, label: "Upload Stats" },
+    { href: `${base}/upload`, label: "Upload" },
   ];
 
   return (
