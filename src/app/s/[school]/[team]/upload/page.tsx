@@ -6,15 +6,47 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import { parseStatsWorkbook } from "@/lib/csvParser";
+import { parseStatsWorkbook, type ParsedPlayer } from "@/lib/csvParser";
 import type { Json } from "@/integrations/supabase/types";
-import { seasonYearFor, isSeasonClosed } from "@/lib/season";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
 
 const supabase = createClient();
+
+const OVERWRITE_PREFIX = "STATS_OVERWRITE_REQUIRED:";
+
+// Format YYYY-MM-DD as M/D/YYYY without going through `new Date(...)`, which
+// parses the string as UTC midnight and shifts a day in negative-offset zones.
+const formatPickerDate = (yyyyMmDd: string): string => {
+  const [y, m, d] = yyyyMmDd.split("-");
+  if (!y || !m || !d) return yyyyMmDd;
+  return `${Number(m)}/${Number(d)}/${y}`;
+};
+
+const friendlyError = (msg: string): string => {
+  const m = msg.match(/^season (\d+) is closed$/);
+  if (m) return `The ${m[1]} season is closed (ended May 31). Pick a date inside an open season window (Feb 1 – May 31).`;
+  return msg;
+};
+
+interface PendingOverwrite {
+  players: ParsedPlayer[];
+  filename: string;
+  uploadDate: string;
+  existingCount: number;
+}
 
 export default function UploadStatsPage() {
   const { school } = useSchool();
@@ -23,7 +55,43 @@ export default function UploadStatsPage() {
   const [uploadDate, setUploadDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [pendingOverwrite, setPendingOverwrite] = useState<PendingOverwrite | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Mirrors `busy` for synchronous reads from Radix's onOpenChange, which fires
+  // before React re-renders with the latest state.
+  const busyRef = useRef(false);
+  const setBusyBoth = (v: boolean) => {
+    busyRef.current = v;
+    setBusy(v);
+  };
+
+  const ingestOnce = async (params: {
+    players: ParsedPlayer[];
+    filename: string;
+    uploadDate: string;
+    replace: boolean;
+  }): Promise<number> => {
+    const payload = params.players.map((p) => ({ first: p.first, last: p.last, stats: p.stats }));
+    const { data, error } = await supabase.rpc("ingest_stats_workbook", {
+      p_school: school.id,
+      p_team: team.id,
+      p_upload_date: params.uploadDate,
+      p_filename: params.filename,
+      p_players: payload as unknown as Json,
+      p_replace: params.replace,
+    });
+    if (error) throw error;
+    const rows = data ?? [];
+    return rows[0]?.snapshot_count ?? params.players.length;
+  };
+
+  const finishSuccess = (count: number, date: string) => {
+    setResult({ ok: true, msg: `Imported ${count} players for ${formatPickerDate(date)}.` });
+    toast.success("Stats uploaded");
+    setFile(null);
+    setPendingOverwrite(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
 
   const handleSubmit = async () => {
     if (!file) {
@@ -34,7 +102,7 @@ export default function UploadStatsPage() {
       toast.error("Pick an upload date");
       return;
     }
-    setBusy(true);
+    setBusyBoth(true);
     setResult(null);
     try {
       const buf = await file.arrayBuffer();
@@ -47,75 +115,48 @@ export default function UploadStatsPage() {
         );
       }
 
-      const season_year = seasonYearFor(uploadDate);
-      if (isSeasonClosed(season_year)) {
-        throw new Error(`The ${season_year} season is closed (ended May 31). Pick a date inside an open season window (Feb 1 – May 31).`);
+      try {
+        const count = await ingestOnce({ players, filename: file.name, uploadDate, replace: false });
+        finishSuccess(count, uploadDate);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.startsWith(OVERWRITE_PREFIX)) {
+          const existingCount = parseInt(msg.slice(OVERWRITE_PREFIX.length), 10) || 0;
+          setPendingOverwrite({ players, filename: file.name, uploadDate, existingCount });
+          return;
+        }
+        throw e;
       }
-
-      // 1+2+3. Atomic players + roster_entries upsert via RPC. Stats workbooks
-      // never carry Position or Grad Year columns, so we pass has_position and
-      // has_grad_year as false — that preserves any values previously set via
-      // the dedicated roster upload. The RPC returns the resolved player ids
-      // so we don't need a separate SELECT to build idByName for snapshots.
-      const { data: rosterIds, error: rpcErr } = await supabase.rpc("upsert_roster", {
-        p_school: school.id,
-        p_team: team.id,
-        p_season: season_year,
-        p_players: players.map((p) => ({ first: p.first, last: p.last, number: p.number })) as unknown as Json,
-        p_has_number: true,
-        p_has_position: false,
-        p_has_grad_year: false,
-      });
-      if (rpcErr) throw rpcErr;
-      const idByName = new Map<string, string>(
-        (rosterIds ?? []).map((r) => [`${r.first_name}|${r.last_name}`, r.player_id]),
-      );
-
-      // 4. Insert audit row.
-      const { data: uploadRow, error: upErr } = await supabase
-        .from("csv_uploads")
-        .insert({ team_id: team.id, upload_date: uploadDate, filename: file.name, player_count: players.length, season_year })
-        .select("id")
-        .single();
-      if (upErr) throw upErr;
-
-      // 5. Upsert stat_snapshots (team-scoped, by player_id+upload_date+game_id).
-      // game_id is NULL for xlsx rows; NULLS NOT DISTINCT on the unique constraint
-      // makes the (team, player, date, NULL) tuple collide on re-upload.
-      const snapshots = players
-        .map((p) => {
-          const pid = idByName.get(`${p.first}|${p.last}`);
-          if (!pid) return null;
-          return {
-            player_id: pid,
-            team_id: team.id,
-            upload_date: uploadDate,
-            upload_id: uploadRow.id,
-            stats: p.stats,
-            season_year,
-            source: "xlsx",
-            game_id: null,
-          };
-        })
-        .filter(Boolean);
-
-      const { error: snapErr } = await supabase
-        .from("stat_snapshots")
-        .upsert(snapshots as never[], { onConflict: "team_id,player_id,upload_date,game_id" });
-      if (snapErr) throw snapErr;
-
-      setResult({ ok: true, msg: `Imported ${players.length} players for ${new Date(uploadDate).toLocaleDateString()}.` });
-      toast.success("Stats uploaded");
-      setFile(null);
-      if (fileRef.current) fileRef.current.value = "";
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Upload failed";
+      const raw = e instanceof Error ? e.message : "Upload failed";
+      const msg = friendlyError(raw);
       setResult({ ok: false, msg });
       toast.error(msg);
     } finally {
-      setBusy(false);
+      setBusyBoth(false);
     }
   };
+
+  const handleConfirmOverwrite = async () => {
+    if (!pendingOverwrite) return;
+    const { players, filename, uploadDate: stagedDate } = pendingOverwrite;
+    setBusyBoth(true);
+    try {
+      const count = await ingestOnce({ players, filename, uploadDate: stagedDate, replace: true });
+      finishSuccess(count, stagedDate);
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : "Upload failed";
+      const msg = friendlyError(raw);
+      setResult({ ok: false, msg });
+      toast.error(msg);
+      setPendingOverwrite(null);
+    } finally {
+      setBusyBoth(false);
+    }
+  };
+
+  const dialogOpen = pendingOverwrite !== null;
+  const submitDisabled = busy || !file || dialogOpen;
 
   return (
     <div className="container mx-auto px-6 py-10 max-w-3xl">
@@ -154,7 +195,7 @@ export default function UploadStatsPage() {
 
           <Button
             onClick={handleSubmit}
-            disabled={busy || !file}
+            disabled={submitDisabled}
             className="w-full bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange font-semibold uppercase tracking-wider"
           >
             {busy ? "Importing…" : "Import Stats"}
@@ -186,6 +227,30 @@ export default function UploadStatsPage() {
           <li>Players are matched by first + last name across weekly uploads</li>
         </ul>
       </Card>
+
+      <AlertDialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !busyRef.current) setPendingOverwrite(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace existing snapshot?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingOverwrite
+                ? `A stats snapshot already exists for ${formatPickerDate(pendingOverwrite.uploadDate)} (${pendingOverwrite.existingCount} player ${pendingOverwrite.existingCount === 1 ? "row" : "rows"}). Replacing will overwrite those values with the new workbook.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmOverwrite} disabled={busy}>
+              {busy ? "Replacing…" : "Replace"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

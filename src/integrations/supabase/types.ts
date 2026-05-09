@@ -453,6 +453,17 @@ export type Database = {
         };
         Returns: Array<{ player_id: string; first_name: string; last_name: string }>;
       };
+      ingest_stats_workbook: {
+        Args: {
+          p_school: string;
+          p_team: string;
+          p_upload_date: string;
+          p_filename: string;
+          p_players: Json;
+          p_replace: boolean;
+        };
+        Returns: Array<{ upload_id: string; snapshot_count: number }>;
+      };
       game_match_candidates: {
         Args: { p_my_game_id: string };
         Returns: Array<{
