@@ -77,10 +77,17 @@ export default function RosterPage() {
     return allEntries
       .filter((e) => e.season_year === season)
       .slice()
-      .sort(
-        (a, b) =>
-          (parseInt(a.jersey_number ?? "") || 999) - (parseInt(b.jersey_number ?? "") || 999),
-      );
+      .sort((a, b) => {
+        // parseInt("0") || 999 was 999 — would have sent #0 to the bottom.
+        // Treat null / blank / non-numeric as 999 so #0 sorts to the top while
+        // missing jerseys still sort last.
+        const score = (j: string | null) => {
+          if (j == null || j.trim() === "") return 999;
+          const n = Number(j);
+          return Number.isFinite(n) ? n : 999;
+        };
+        return score(a.jersey_number) - score(b.jersey_number);
+      });
   }, [allEntries, season]);
 
   const closed = isSeasonClosed(season);

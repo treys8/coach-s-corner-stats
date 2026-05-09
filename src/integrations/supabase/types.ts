@@ -370,6 +370,18 @@ export type Database = {
         Args: { p_slug: string; p_name: string };
         Returns: Database["public"]["Tables"]["schools"]["Row"];
       };
+      upsert_roster: {
+        Args: {
+          p_school: string;
+          p_team: string;
+          p_season: number;
+          p_players: Json;
+          p_has_number: boolean;
+          p_has_position: boolean;
+          p_has_grad_year: boolean;
+        };
+        Returns: Array<{ player_id: string; first_name: string; last_name: string }>;
+      };
     };
     Enums: { [_ in never]: never };
   };

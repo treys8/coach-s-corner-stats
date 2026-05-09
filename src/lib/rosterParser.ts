@@ -15,6 +15,12 @@ export interface ParsedRosterPlayer {
 
 export interface ParsedRoster {
   players: ParsedRosterPlayer[];
+  // Whether the source file had each optional column at all. Lets the caller
+  // distinguish "column absent → preserve existing DB value" from "column
+  // present but cell blank → clear existing DB value".
+  hadNumberColumn: boolean;
+  hadPositionColumn: boolean;
+  hadGradYearColumn: boolean;
 }
 
 type Row = (string | number | null | undefined)[];
@@ -113,5 +119,10 @@ export function parseRosterFile(data: ArrayBuffer): ParsedRoster {
   if (players.length === 0) {
     throw new Error("No players found. Make sure rows have both a First and Last name.");
   }
-  return { players };
+  return {
+    players,
+    hadNumberColumn: map.number >= 0,
+    hadPositionColumn: map.position >= 0,
+    hadGradYearColumn: map.grad_year >= 0,
+  };
 }
