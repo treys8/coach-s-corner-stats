@@ -384,6 +384,24 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["glossary"]["Insert"]>;
         Relationships: [];
       };
+      game_links: {
+        Row: {
+          id: string;
+          home_game_id: string;
+          visitor_game_id: string;
+          confirmed_at: string;
+          confirmed_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          home_game_id: string;
+          visitor_game_id: string;
+          confirmed_at?: string;
+          confirmed_by?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["game_links"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -407,6 +425,22 @@ export type Database = {
         };
         Returns: Array<{ player_id: string; first_name: string; last_name: string }>;
       };
+      game_match_candidates: {
+        Args: { p_my_game_id: string };
+        Returns: Array<{
+          candidate_game_id: string;
+          game_date: string;
+          game_time: string | null;
+          game_sequence: number;
+          status: GameStatus;
+          is_home: boolean;
+        }>;
+      };
+      confirm_game_link: {
+        Args: { p_home_game_id: string; p_visitor_game_id: string };
+        Returns: string;
+      };
+      unlink_games: { Args: { p_link_id: string }; Returns: void };
     };
     Enums: { [_ in never]: never };
   };
