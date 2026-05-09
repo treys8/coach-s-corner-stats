@@ -33,3 +33,6 @@ tsconfig.tsbuildinfo
 *.sln
 *.sw?
 tsconfig.tsbuildinfo
+
+# Supabase CLI cache
+supabase/.temp/
