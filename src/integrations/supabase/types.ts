@@ -470,6 +470,25 @@ export type Database = {
       };
       unlink_games: { Args: { p_link_id: string }; Returns: void };
       confirm_my_score: { Args: { p_link_id: string }; Returns: void };
+      find_relink_suggestions: {
+        Args: { p_team_id: string };
+        Returns: Array<{
+          game_id: string;
+          game_date: string;
+          game_time: string | null;
+          opponent_text: string;
+          candidate_school_id: string;
+          candidate_school_name: string;
+          candidate_school_short_name: string | null;
+          candidate_team_id: string;
+          candidate_team_name: string;
+          candidate_team_level: TeamLevel;
+        }>;
+      };
+      apply_relink: {
+        Args: { p_game_ids: string[]; p_target_team_id: string };
+        Returns: number;
+      };
     };
     Enums: { [_ in never]: never };
   };
