@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { parseStatsWorkbook } from "@/lib/csvParser";
+import type { Json } from "@/integrations/supabase/types";
 import { seasonYearFor, isSeasonClosed } from "@/lib/season";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
@@ -51,43 +52,24 @@ export default function UploadStatsPage() {
         throw new Error(`The ${season_year} season is closed (ended May 31). Pick a date inside an open season window (Feb 1 – May 31).`);
       }
 
-      // 1. Upsert players (school-scoped, persistent identity).
-      const playerRows = players.map((p) => ({
-        school_id: school.id,
-        first_name: p.first,
-        last_name: p.last,
-      }));
-      const { error: playerErr } = await supabase
-        .from("players")
-        .upsert(playerRows, { onConflict: "school_id,first_name,last_name" });
-      if (playerErr) throw playerErr;
-
-      // 2. Fetch player IDs scoped to this school.
-      const { data: playerRecords, error: fetchErr } = await supabase
-        .from("players")
-        .select("id, first_name, last_name")
-        .eq("school_id", school.id);
-      if (fetchErr) throw fetchErr;
-      const idByName = new Map<string, string>();
-      (playerRecords ?? []).forEach((r) => idByName.set(`${r.first_name}|${r.last_name}`, r.id));
-
-      // 3. Upsert roster_entries for this team-season (carries jersey number).
-      const rosterRows = players
-        .map((p) => {
-          const pid = idByName.get(`${p.first}|${p.last}`);
-          if (!pid) return null;
-          return {
-            player_id: pid,
-            team_id: team.id,
-            season_year,
-            jersey_number: p.number || null,
-          };
-        })
-        .filter(Boolean) as Array<{ player_id: string; team_id: string; season_year: number; jersey_number: string | null }>;
-      const { error: rosterErr } = await supabase
-        .from("roster_entries")
-        .upsert(rosterRows, { onConflict: "team_id,season_year,player_id" });
-      if (rosterErr) throw rosterErr;
+      // 1+2+3. Atomic players + roster_entries upsert via RPC. Stats workbooks
+      // never carry Position or Grad Year columns, so we pass has_position and
+      // has_grad_year as false — that preserves any values previously set via
+      // the dedicated roster upload. The RPC returns the resolved player ids
+      // so we don't need a separate SELECT to build idByName for snapshots.
+      const { data: rosterIds, error: rpcErr } = await supabase.rpc("upsert_roster", {
+        p_school: school.id,
+        p_team: team.id,
+        p_season: season_year,
+        p_players: players.map((p) => ({ first: p.first, last: p.last, number: p.number })) as unknown as Json,
+        p_has_number: true,
+        p_has_position: false,
+        p_has_grad_year: false,
+      });
+      if (rpcErr) throw rpcErr;
+      const idByName = new Map<string, string>(
+        (rosterIds ?? []).map((r) => [`${r.first_name}|${r.last_name}`, r.player_id]),
+      );
 
       // 4. Insert audit row.
       const { data: uploadRow, error: upErr } = await supabase
