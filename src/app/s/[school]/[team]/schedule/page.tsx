@@ -86,17 +86,20 @@ export default function SchedulePage() {
       toast.error(`The ${yr} season is closed. You can't add games to a past season.`);
       return;
     }
+    // Provisional is_home derivation matching 20260509160000_..._backfill_is_home.sql:
+    // home/neutral → true, away → false. Will be refined when the opponent picker
+    // wire-up adds an explicit choice for neutral games.
     const payload = {
       team_id: team.id,
       game_date: form.game_date,
       game_time: form.game_time || null,
       opponent: form.opponent.trim(),
       location: form.location as "home" | "away" | "neutral",
+      is_home: form.location !== "away",
       team_score: form.team_score === "" ? null : Number(form.team_score),
       opponent_score: form.opponent_score === "" ? null : Number(form.opponent_score),
       result: (form.result || null) as "W" | "L" | "T" | null,
       notes: form.notes || null,
-      season_year: yr,
     };
     const { error } = await supabase.from("games").insert(payload);
     if (error) {
@@ -128,9 +131,16 @@ export default function SchedulePage() {
       }
       if (!confirm("Mark this game final? It'll appear on the public Scores page.")) return;
     }
+    // Write `status` — the games_sync_status_is_final trigger derives is_final
+    // and stamps finalized_at. Writing is_final directly leaves status='draft',
+    // which keeps the game off /scores even though the user marked it final.
     const { error } = await supabase
       .from("games")
-      .update({ is_final: isFinal, finalized_at: isFinal ? new Date().toISOString() : null })
+      .update(
+        isFinal
+          ? { status: "final" as const }
+          : { status: "draft" as const, finalized_at: null },
+      )
       .eq("id", g.id);
     if (error) {
       toast.error(error.message);
