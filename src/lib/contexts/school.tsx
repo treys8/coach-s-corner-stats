@@ -10,6 +10,8 @@ export interface School {
   logo_url: string | null;
   primary_color: string | null;
   secondary_color: string | null;
+  is_discoverable: boolean;
+  public_scores_enabled: boolean;
 }
 
 export interface SchoolContextValue {

@@ -8,8 +8,10 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { ArrowLeft } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
+import { useAuth } from "@/contexts/auth";
 
 const supabase = createClient();
 
@@ -18,14 +20,20 @@ const DEFAULT_SECONDARY = "#FF4A00";
 
 export default function SchoolSettingsPage() {
   const { school, isAdmin } = useSchool();
+  const { session } = useAuth();
+  const userId = session?.user.id ?? null;
   const [form, setForm] = useState({
     name: school.name,
     short_name: school.short_name ?? "",
     logo_url: school.logo_url ?? "",
     primary_color: school.primary_color ?? DEFAULT_PRIMARY,
     secondary_color: school.secondary_color ?? DEFAULT_SECONDARY,
+    is_discoverable: school.is_discoverable,
+    public_scores_enabled: school.public_scores_enabled,
   });
   const [busy, setBusy] = useState(false);
+  const [allowCoachContact, setAllowCoachContact] = useState<boolean | null>(null);
+  const [contactBusy, setContactBusy] = useState(false);
 
   useEffect(() => {
     setForm({
@@ -34,8 +42,52 @@ export default function SchoolSettingsPage() {
       logo_url: school.logo_url ?? "",
       primary_color: school.primary_color ?? DEFAULT_PRIMARY,
       secondary_color: school.secondary_color ?? DEFAULT_SECONDARY,
+      is_discoverable: school.is_discoverable,
+      public_scores_enabled: school.public_scores_enabled,
     });
   }, [school]);
+
+  // Load this admin's current contact-flag value.
+  useEffect(() => {
+    if (!isAdmin || !userId) {
+      setAllowCoachContact(null);
+      return;
+    }
+    let active = true;
+    (async () => {
+      const { data } = await supabase
+        .from("school_admins")
+        .select("allow_coach_contact")
+        .eq("school_id", school.id)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (!active) return;
+      const row = data as { allow_coach_contact: boolean } | null;
+      setAllowCoachContact(row?.allow_coach_contact ?? false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [isAdmin, userId, school.id]);
+
+  const toggleCoachContact = async (next: boolean) => {
+    if (!userId || contactBusy) return;
+    setContactBusy(true);
+    const prev = allowCoachContact;
+    setAllowCoachContact(next); // optimistic
+    const { error } = await supabase
+      .from("school_admins")
+      .update({ allow_coach_contact: next })
+      .eq("school_id", school.id)
+      .eq("user_id", userId);
+    setContactBusy(false);
+    if (error) {
+      setAllowCoachContact(prev);
+      toast.error(error.message);
+      return;
+    }
+    toast.success(next ? "Contact info will be shown on disputes" : "Contact info hidden");
+  };
 
   if (!isAdmin) {
     return (
@@ -65,6 +117,8 @@ export default function SchoolSettingsPage() {
         logo_url: form.logo_url.trim() || null,
         primary_color: form.primary_color || null,
         secondary_color: form.secondary_color || null,
+        is_discoverable: form.is_discoverable,
+        public_scores_enabled: form.public_scores_enabled,
       })
       .eq("id", school.id);
     setBusy(false);
@@ -172,6 +226,45 @@ export default function SchoolSettingsPage() {
           </div>
         </div>
 
+        <div className="border-t pt-5 space-y-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Public visibility</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Controls how your school appears outside its own login.
+            </p>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <Label htmlFor="public-scores" className="text-sm font-semibold">
+                Publish scores to the public Scores page
+              </Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                When off, none of your finalized or in-progress games appear on the public Scores page.
+              </p>
+            </div>
+            <Switch
+              id="public-scores"
+              checked={form.public_scores_enabled}
+              onCheckedChange={(v) => setForm({ ...form, public_scores_enabled: v })}
+            />
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <Label htmlFor="discoverable" className="text-sm font-semibold">
+                Discoverable in the opponent picker
+              </Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                When off, other coaches can&apos;t find your teams by typing your school name. Schools you&apos;ve already linked games with are unaffected.
+              </p>
+            </div>
+            <Switch
+              id="discoverable"
+              checked={form.is_discoverable}
+              onCheckedChange={(v) => setForm({ ...form, is_discoverable: v })}
+            />
+          </div>
+        </div>
+
         {/* Live swatch preview */}
         <div
           className="rounded-md p-5 flex items-center gap-4"
@@ -212,6 +305,34 @@ export default function SchoolSettingsPage() {
           </Button>
         </div>
       </Card>
+
+      {allowCoachContact !== null && (
+        <Card className="p-8 shadow-elevated mt-6">
+          <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Your contact preferences</p>
+          <h3 className="font-display text-2xl text-sa-blue-deep mt-1 mb-1">
+            Contact info on disputes
+          </h3>
+          <p className="text-sm text-muted-foreground mb-5">
+            When two schools record different final scores for the same game, both coaches see a private dispute banner. Turn this on to let the other coach see your name and email so they can reach out.
+          </p>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <Label htmlFor="coach-contact" className="text-sm font-semibold">
+                Show my contact info on score disputes
+              </Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Off by default. Only the opposing coach on a linked game can see it, and only when both sides have opted in.
+              </p>
+            </div>
+            <Switch
+              id="coach-contact"
+              checked={allowCoachContact}
+              disabled={contactBusy}
+              onCheckedChange={toggleCoachContact}
+            />
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

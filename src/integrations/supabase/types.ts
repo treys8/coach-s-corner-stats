@@ -16,6 +16,7 @@ export type TeamRole = "coach" | "scorer" | "assistant";
 export type GameLocation = "home" | "away" | "neutral";
 export type GameResult = "W" | "L" | "T";
 export type GameStatus = "draft" | "in_progress" | "final";
+export type GameResultType = "regulation" | "shortened" | "forfeit" | "suspended";
 export type InningHalf = "top" | "bottom";
 
 export type GameEventType =
@@ -50,6 +51,8 @@ export type Database = {
           logo_url: string | null;
           primary_color: string | null;
           secondary_color: string | null;
+          is_discoverable: boolean;
+          public_scores_enabled: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -61,6 +64,8 @@ export type Database = {
           logo_url?: string | null;
           primary_color?: string | null;
           secondary_color?: string | null;
+          is_discoverable?: boolean;
+          public_scores_enabled?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -92,8 +97,20 @@ export type Database = {
         Relationships: [];
       };
       school_admins: {
-        Row: { school_id: string; user_id: string; role: SchoolRole; created_at: string };
-        Insert: { school_id: string; user_id: string; role?: SchoolRole; created_at?: string };
+        Row: {
+          school_id: string;
+          user_id: string;
+          role: SchoolRole;
+          allow_coach_contact: boolean;
+          created_at: string;
+        };
+        Insert: {
+          school_id: string;
+          user_id: string;
+          role?: SchoolRole;
+          allow_coach_contact?: boolean;
+          created_at?: string;
+        };
         Update: Partial<Database["public"]["Tables"]["school_admins"]["Insert"]>;
         Relationships: [];
       };
@@ -183,6 +200,10 @@ export type Database = {
           game_date: string;
           game_time: string | null;
           opponent: string;
+          opponent_team_id: string | null;
+          is_home: boolean;
+          game_sequence: number;
+          result_type: GameResultType;
           location: GameLocation;
           team_score: number | null;
           opponent_score: number | null;
@@ -201,6 +222,10 @@ export type Database = {
           game_date: string;
           game_time?: string | null;
           opponent: string;
+          opponent_team_id?: string | null;
+          is_home: boolean;
+          game_sequence?: number;
+          result_type?: GameResultType;
           location?: GameLocation;
           team_score?: number | null;
           opponent_score?: number | null;
