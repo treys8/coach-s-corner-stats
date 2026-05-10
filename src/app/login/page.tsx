@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,22 +11,39 @@ import { Mail, CheckCircle2, AlertCircle } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
 
 export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+          Loading…
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const { session, signInWithEmail, loading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawNext = searchParams.get("next");
+  const next = rawNext && rawNext.startsWith("/") ? rawNext : null;
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
-    if (!loading && session) router.replace("/");
-  }, [loading, session, router]);
+    if (!loading && session) router.replace(next ?? "/");
+  }, [loading, session, router, next]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!email.trim()) return;
     setBusy(true);
     setResult(null);
-    const { error } = await signInWithEmail(email.trim());
+    const { error } = await signInWithEmail(email.trim(), next ?? undefined);
     setBusy(false);
     setResult(
       error ? { ok: false, msg: error } : { ok: true, msg: `Check ${email} for a sign-in link.` },

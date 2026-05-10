@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Copy, Trash2, Upload, X } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
 import { useAuth } from "@/contexts/auth";
 import {
@@ -49,6 +49,90 @@ export default function SchoolSettingsPage() {
   const [busy, setBusy] = useState(false);
   const [allowCoachContact, setAllowCoachContact] = useState<boolean | null>(null);
   const [contactBusy, setContactBusy] = useState(false);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Logo must be under 5MB");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    const extFromMime: Record<string, string> = {
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/webp": "webp",
+      "image/svg+xml": "svg",
+    };
+    const ext = extFromMime[file.type];
+    if (!ext) {
+      toast.error("Use PNG, JPG, SVG, or WebP");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      const path = `${school.id}/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("school-logos")
+        .upload(path, file, { cacheControl: "3600", upsert: false });
+      if (upErr) {
+        toast.error(upErr.message);
+        return;
+      }
+      const { data: pub } = supabase.storage.from("school-logos").getPublicUrl(path);
+      const newUrl = pub.publicUrl;
+      const oldUrl = form.logo_url;
+
+      const { error: dbErr } = await supabase
+        .from("schools")
+        .update({ logo_url: newUrl })
+        .eq("id", school.id);
+      if (dbErr) {
+        await supabase.storage.from("school-logos").remove([path]);
+        toast.error(dbErr.message);
+        return;
+      }
+
+      if (oldUrl && oldUrl.includes("/school-logos/")) {
+        const oldPath = oldUrl.split("/school-logos/")[1];
+        if (oldPath) await supabase.storage.from("school-logos").remove([oldPath]);
+      }
+
+      setForm((f) => ({ ...f, logo_url: newUrl }));
+      toast.success("Logo updated");
+    } finally {
+      setLogoBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleLogoRemove = async () => {
+    if (!form.logo_url) return;
+    if (!confirm("Remove the school logo?")) return;
+    setLogoBusy(true);
+    try {
+      const oldUrl = form.logo_url;
+      const { error } = await supabase
+        .from("schools")
+        .update({ logo_url: null })
+        .eq("id", school.id);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      if (oldUrl.includes("/school-logos/")) {
+        const oldPath = oldUrl.split("/school-logos/")[1];
+        if (oldPath) await supabase.storage.from("school-logos").remove([oldPath]);
+      }
+      setForm((f) => ({ ...f, logo_url: "" }));
+      toast.success("Logo removed");
+    } finally {
+      setLogoBusy(false);
+    }
+  };
 
   useEffect(() => {
     setForm({
@@ -87,6 +171,118 @@ export default function SchoolSettingsPage() {
       active = false;
     };
   }, [isAdmin, userId, school.id]);
+
+  // ---- Admin invites / roster -----------------------------------------------
+
+  interface AdminRow {
+    user_id: string;
+    email: string;
+    display_name: string;
+    role: string;
+    created_at: string;
+  }
+  interface InviteRow {
+    id: string;
+    email: string;
+    token: string;
+    expires_at: string;
+    created_at: string;
+  }
+
+  const [adminsList, setAdminsList] = useState<AdminRow[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<InviteRow[]>([]);
+  const [adminsLoaded, setAdminsLoaded] = useState(false);
+  const [adminsError, setAdminsError] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [newInviteUrl, setNewInviteUrl] = useState<string | null>(null);
+
+  const loadAdminsAndInvites = async () => {
+    if (!isAdmin) return;
+    const [admins, invites] = await Promise.all([
+      supabase.rpc("list_school_admins", { p_school: school.id }),
+      supabase
+        .from("school_admin_invites")
+        .select("id, email, token, expires_at, created_at")
+        .eq("school_id", school.id)
+        .is("accepted_at", null)
+        .order("created_at", { ascending: false }),
+    ]);
+    if (admins.error) {
+      setAdminsError(admins.error.message);
+    } else {
+      setAdminsList((admins.data ?? []) as AdminRow[]);
+      setAdminsError(null);
+    }
+    if (!invites.error) setPendingInvites((invites.data ?? []) as InviteRow[]);
+    setAdminsLoaded(true);
+  };
+
+  useEffect(() => {
+    loadAdminsAndInvites();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [school.id, isAdmin]);
+
+  const createInvite = async () => {
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error("Enter a valid email");
+      return;
+    }
+    setInviteBusy(true);
+    setNewInviteUrl(null);
+    const { data, error } = await supabase
+      .from("school_admin_invites")
+      .insert({ school_id: school.id, email })
+      .select("token")
+      .single();
+    setInviteBusy(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    const token = (data as { token: string }).token;
+    setNewInviteUrl(`${window.location.origin}/invite/${token}`);
+    setInviteEmail("");
+    loadAdminsAndInvites();
+    toast.success("Invite created — share the link");
+  };
+
+  const revokeInvite = async (id: string) => {
+    if (!confirm("Revoke this invite?")) return;
+    const { error } = await supabase.from("school_admin_invites").delete().eq("id", id);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success("Invite revoked");
+    loadAdminsAndInvites();
+  };
+
+  const removeAdmin = async (targetUserId: string, targetEmail: string) => {
+    if (!confirm(`Remove ${targetEmail} as an admin?`)) return;
+    const { error } = await supabase
+      .from("school_admins")
+      .delete()
+      .eq("school_id", school.id)
+      .eq("user_id", targetUserId);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success("Admin removed");
+    loadAdminsAndInvites();
+  };
+
+  const copyLink = (url: string) => {
+    navigator.clipboard.writeText(url).then(
+      () => toast.success("Link copied"),
+      () => toast.error("Could not copy"),
+    );
+  };
+
+  // ---- Coach contact preference ---------------------------------------------
 
   const toggleCoachContact = async (next: boolean) => {
     if (!userId || contactBusy) return;
@@ -197,17 +393,58 @@ export default function SchoolSettingsPage() {
           </p>
         </div>
         <div>
-          <Label htmlFor="logo-url" className="mb-1.5 block">Logo URL (optional)</Label>
-          <Input
-            id="logo-url"
-            type="url"
-            value={form.logo_url}
-            onChange={(e) => setForm({ ...form, logo_url: e.target.value })}
-            placeholder="https://yourschool.org/logo.png"
-          />
-          <p className="text-xs text-muted-foreground mt-1">
-            Direct URL to a logo image. Image upload coming later.
-          </p>
+          <Label className="mb-1.5 block">Logo</Label>
+          <div className="flex items-start gap-4">
+            {form.logo_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={form.logo_url}
+                alt="Current logo"
+                className="h-20 w-20 object-contain bg-muted rounded border"
+              />
+            ) : (
+              <div className="h-20 w-20 rounded border border-dashed flex items-center justify-center text-[10px] uppercase tracking-wider text-muted-foreground">
+                No logo
+              </div>
+            )}
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={logoBusy}
+                  className="gap-1"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  {logoBusy ? "Uploading…" : form.logo_url ? "Replace" : "Upload"}
+                </Button>
+                {form.logo_url && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleLogoRemove}
+                    disabled={logoBusy}
+                    className="gap-1 text-destructive hover:text-destructive"
+                  >
+                    <X className="w-3.5 h-3.5" /> Remove
+                  </Button>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                  onChange={handleLogoUpload}
+                  className="hidden"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                PNG, JPG, SVG, or WebP. Saves immediately on upload. Max 5MB.
+              </p>
+            </div>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -394,6 +631,158 @@ export default function SchoolSettingsPage() {
           >
             {busy ? "Saving…" : "Save settings"}
           </Button>
+        </div>
+      </Card>
+
+      <Card className="p-8 shadow-elevated mt-6">
+        <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Admins</p>
+        <h3 className="font-display text-2xl text-sa-blue-deep mt-1 mb-1">
+          School admin access
+        </h3>
+        <p className="text-sm text-muted-foreground mb-5">
+          Admins can edit settings, manage teams, and invite other admins.
+        </p>
+
+        <div className="space-y-2 mb-6">
+          <Label htmlFor="invite-email" className="text-sm font-semibold">
+            Invite a new admin
+          </Label>
+          <div className="flex gap-2">
+            <Input
+              id="invite-email"
+              type="email"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="coach@example.com"
+              disabled={inviteBusy}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  createInvite();
+                }
+              }}
+            />
+            <Button
+              onClick={createInvite}
+              disabled={inviteBusy || !inviteEmail.trim()}
+              className="bg-sa-blue hover:bg-sa-blue-deep text-white"
+            >
+              {inviteBusy ? "Creating…" : "Create invite"}
+            </Button>
+          </div>
+          {newInviteUrl && (
+            <div className="rounded-md border bg-muted/40 px-3 py-2 mt-2 text-xs">
+              <p className="font-semibold mb-1">Invite link (share manually):</p>
+              <div className="flex items-center gap-2">
+                <code className="text-[11px] break-all flex-1">{newInviteUrl}</code>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => copyLink(newInviteUrl)}
+                  className="h-7"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Expires in 14 days. Only the recipient&apos;s email can accept.
+              </p>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            No email is sent — copy the link and share it with the new admin yourself.
+          </p>
+        </div>
+
+        {pendingInvites.length > 0 && (
+          <div className="mb-6">
+            <p className="text-sm font-semibold mb-2">Pending invites</p>
+            <div className="space-y-1">
+              {pendingInvites.map((inv) => (
+                <div
+                  key={inv.id}
+                  className="flex items-center gap-2 py-1.5 px-2 border rounded text-sm"
+                >
+                  <span className="flex-1 truncate">{inv.email}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">
+                    Exp {new Date(inv.expires_at).toLocaleDateString()}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      copyLink(`${window.location.origin}/invite/${inv.token}`)
+                    }
+                    title="Copy invite link"
+                    className="h-7 w-7 p-0"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => revokeInvite(inv.id)}
+                    title="Revoke invite"
+                    className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <p className="text-sm font-semibold mb-2">Current admins</p>
+          {!adminsLoaded ? (
+            <p className="text-xs text-muted-foreground italic">Loading…</p>
+          ) : adminsError ? (
+            <p className="text-xs text-destructive">
+              Couldn&apos;t load admins: {adminsError}
+            </p>
+          ) : adminsList.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">No admins yet.</p>
+          ) : (
+            <div className="space-y-1">
+              {adminsList.map((a) => {
+                const isSelf = a.user_id === userId;
+                return (
+                  <div
+                    key={a.user_id}
+                    className="flex items-center gap-2 py-1.5 px-2 border rounded text-sm"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="truncate">{a.display_name}</p>
+                      {a.display_name !== a.email && (
+                        <p className="text-[11px] text-muted-foreground truncate">
+                          {a.email}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {a.role}
+                    </span>
+                    {isSelf ? (
+                      <span className="text-[10px] uppercase tracking-wider text-sa-orange font-bold pr-1">
+                        You
+                      </span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => removeAdmin(a.user_id, a.email)}
+                        title="Remove admin"
+                        className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </Card>
 
