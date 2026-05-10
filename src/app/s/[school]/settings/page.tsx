@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Upload, X } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
 import { useAuth } from "@/contexts/auth";
 import {
@@ -49,6 +49,90 @@ export default function SchoolSettingsPage() {
   const [busy, setBusy] = useState(false);
   const [allowCoachContact, setAllowCoachContact] = useState<boolean | null>(null);
   const [contactBusy, setContactBusy] = useState(false);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Logo must be under 5MB");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    const extFromMime: Record<string, string> = {
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/webp": "webp",
+      "image/svg+xml": "svg",
+    };
+    const ext = extFromMime[file.type];
+    if (!ext) {
+      toast.error("Use PNG, JPG, SVG, or WebP");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      const path = `${school.id}/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("school-logos")
+        .upload(path, file, { cacheControl: "3600", upsert: false });
+      if (upErr) {
+        toast.error(upErr.message);
+        return;
+      }
+      const { data: pub } = supabase.storage.from("school-logos").getPublicUrl(path);
+      const newUrl = pub.publicUrl;
+      const oldUrl = form.logo_url;
+
+      const { error: dbErr } = await supabase
+        .from("schools")
+        .update({ logo_url: newUrl })
+        .eq("id", school.id);
+      if (dbErr) {
+        await supabase.storage.from("school-logos").remove([path]);
+        toast.error(dbErr.message);
+        return;
+      }
+
+      if (oldUrl && oldUrl.includes("/school-logos/")) {
+        const oldPath = oldUrl.split("/school-logos/")[1];
+        if (oldPath) await supabase.storage.from("school-logos").remove([oldPath]);
+      }
+
+      setForm((f) => ({ ...f, logo_url: newUrl }));
+      toast.success("Logo updated");
+    } finally {
+      setLogoBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleLogoRemove = async () => {
+    if (!form.logo_url) return;
+    if (!confirm("Remove the school logo?")) return;
+    setLogoBusy(true);
+    try {
+      const oldUrl = form.logo_url;
+      const { error } = await supabase
+        .from("schools")
+        .update({ logo_url: null })
+        .eq("id", school.id);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      if (oldUrl.includes("/school-logos/")) {
+        const oldPath = oldUrl.split("/school-logos/")[1];
+        if (oldPath) await supabase.storage.from("school-logos").remove([oldPath]);
+      }
+      setForm((f) => ({ ...f, logo_url: "" }));
+      toast.success("Logo removed");
+    } finally {
+      setLogoBusy(false);
+    }
+  };
 
   useEffect(() => {
     setForm({
@@ -197,17 +281,58 @@ export default function SchoolSettingsPage() {
           </p>
         </div>
         <div>
-          <Label htmlFor="logo-url" className="mb-1.5 block">Logo URL (optional)</Label>
-          <Input
-            id="logo-url"
-            type="url"
-            value={form.logo_url}
-            onChange={(e) => setForm({ ...form, logo_url: e.target.value })}
-            placeholder="https://yourschool.org/logo.png"
-          />
-          <p className="text-xs text-muted-foreground mt-1">
-            Direct URL to a logo image. Image upload coming later.
-          </p>
+          <Label className="mb-1.5 block">Logo</Label>
+          <div className="flex items-start gap-4">
+            {form.logo_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={form.logo_url}
+                alt="Current logo"
+                className="h-20 w-20 object-contain bg-muted rounded border"
+              />
+            ) : (
+              <div className="h-20 w-20 rounded border border-dashed flex items-center justify-center text-[10px] uppercase tracking-wider text-muted-foreground">
+                No logo
+              </div>
+            )}
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={logoBusy}
+                  className="gap-1"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  {logoBusy ? "Uploading…" : form.logo_url ? "Replace" : "Upload"}
+                </Button>
+                {form.logo_url && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleLogoRemove}
+                    disabled={logoBusy}
+                    className="gap-1 text-destructive hover:text-destructive"
+                  >
+                    <X className="w-3.5 h-3.5" /> Remove
+                  </Button>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                  onChange={handleLogoUpload}
+                  className="hidden"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                PNG, JPG, SVG, or WebP. Saves immediately on upload. Max 5MB.
+              </p>
+            </div>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
