@@ -2,6 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import type { Sport } from "@/integrations/supabase/types";
+import {
+  isAssociation,
+  isClassification,
+  isDivision,
+} from "@/lib/school-classifications";
+import { ScoresFilters } from "./ScoresFilters";
 
 export const metadata: Metadata = {
   title: "Scores — Statly",
@@ -331,7 +337,13 @@ const fmtDate = (iso: string) =>
   });
 
 interface ScoresPageProps {
-  searchParams: Promise<{ school?: string; sport?: string }>;
+  searchParams: Promise<{
+    school?: string;
+    sport?: string;
+    association?: string;
+    classification?: string;
+    division?: string;
+  }>;
 }
 
 export default async function ScoresPage({ searchParams }: ScoresPageProps) {
@@ -353,6 +365,15 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
   }
   if (params.school) {
     query = query.eq("teams.schools.slug", params.school);
+  }
+  if (isAssociation(params.association)) {
+    query = query.eq("teams.schools.association", params.association);
+  }
+  if (isClassification(params.classification)) {
+    query = query.eq("teams.schools.classification", params.classification);
+  }
+  if (isDivision(params.division)) {
+    query = query.eq("teams.schools.division", params.division);
   }
 
   const { data: gamesData, error } = await query;
@@ -428,6 +449,7 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
       </header>
 
       <main className="container mx-auto px-6 py-10">
+        <ScoresFilters />
         {error ? (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive">
             Couldn&apos;t load scores: {error.message}
@@ -436,7 +458,11 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
           <div className="rounded-md border border-dashed border-border bg-muted/30 p-12 text-center">
             <p className="font-display text-2xl text-sa-blue-deep mb-2">No games yet</p>
             <p className="text-sm text-muted-foreground">
-              {params.school || params.sport
+              {params.school ||
+              params.sport ||
+              params.association ||
+              params.classification ||
+              params.division
                 ? "No games match those filters."
                 : "Once coaches finalize games on Statly, they'll show up here."}
             </p>
