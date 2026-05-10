@@ -46,6 +46,16 @@ import type {
 import type { GameEventType } from "@/integrations/supabase/types";
 import { DefensiveDiamond, type FielderPosition } from "@/components/scoring/DefensiveDiamond";
 import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
+import { GameStatusBar } from "@/components/scoring/GameStatusBar";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 
 export interface RosterDisplay {
@@ -58,6 +68,8 @@ export interface RosterDisplay {
 interface LiveScoringProps {
   gameId: string;
   roster: RosterDisplay[];
+  teamShortLabel: string;
+  opponentName: string;
 }
 
 function nameById(roster: RosterDisplay[]): Map<string, string> {
@@ -130,8 +142,9 @@ const RESULT_DESC: Partial<Record<AtBatResult, string>> = {
   CI: "Catcher's interference",
 };
 
-export function LiveScoring({ gameId, roster }: LiveScoringProps) {
+export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: LiveScoringProps) {
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -140,12 +153,20 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [boxScoreOpen, setBoxScoreOpen] = useState(false);
   const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
   const [runnerAction, setRunnerAction] = useState<{
     base: "first" | "second" | "third";
     runnerId: string | null;
   } | null>(null);
   const names = useMemo(() => nameById(roster), [roster]);
+
+  // Box score defaults open on desktop, collapsed on mobile. `useIsMobile`
+  // returns false on the SSR pass; sync once the breakpoint is known.
+  useEffect(() => {
+    setBoxScoreOpen(!isMobile);
+  }, [isMobile]);
 
   // Load all events for this game and run replay() to get the canonical
   // live state. Cheap — Phase 1 has at most a few hundred events per game.
@@ -483,45 +504,61 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     return <div className="text-sm text-muted-foreground">Loading live state…</div>;
   }
 
+  const currentBatterName = currentSlot?.player_id ? names.get(currentSlot.player_id) ?? null : null;
+  const pitcherName = state.current_pitcher_id ? names.get(state.current_pitcher_id) ?? null : null;
+
   return (
-    <div className="space-y-4">
-      <TopBar state={state} weAreBatting={weAreBatting} />
-      <LineScore state={state} />
+    <div className="space-y-3">
+      <GameStatusBar
+        state={state}
+        weAreBatting={weAreBatting}
+        teamShortLabel={teamShortLabel}
+        opponentName={opponentName}
+        currentBatterName={currentBatterName}
+        pitcherName={pitcherName}
+        canUndo={false}
+        onUndo={() => {
+          // Wired in PR2.
+        }}
+        onOpenManage={() => setManageOpen(true)}
+        lastPlayText={state.last_play_text}
+      />
+
+      <BoxScoreToggle open={boxScoreOpen} onToggle={() => setBoxScoreOpen((v) => !v)} />
+      {boxScoreOpen && <LineScore state={state} />}
+
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
-        <div className="space-y-4">
-          <Card className="p-3">
-            {armedResult && (
-              <div className="mb-2 flex items-center justify-between flex-wrap gap-2 text-sm">
-                <span>
-                  <span className="text-muted-foreground">Recording </span>
-                  <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
-                  <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
-                </span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void submitAtBat(armedResult, null)}
-                    disabled={submitting}
-                  >
-                    Skip location
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
-                    Cancel
-                  </Button>
-                </div>
+        <div className="space-y-3">
+          {armedResult && (
+            <div className="flex items-center justify-between flex-wrap gap-2 text-sm rounded-md border bg-muted/40 px-3 py-2">
+              <span>
+                <span className="text-muted-foreground">Recording </span>
+                <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
+                <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void submitAtBat(armedResult, null)}
+                  disabled={submitting}
+                >
+                  Skip location
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
+                  Cancel
+                </Button>
               </div>
-            )}
-            <DefensiveDiamond
-              state={state}
-              names={names}
-              weAreBatting={weAreBatting}
-              dragMode={!!armedResult && !submitting}
-              onFielderDrop={onFielderDrop}
-              onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
-            />
-          </Card>
-          <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
+            </div>
+          )}
+          <DefensiveDiamond
+            state={state}
+            names={names}
+            weAreBatting={weAreBatting}
+            dragMode={!!armedResult && !submitting}
+            onFielderDrop={onFielderDrop}
+            onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
+          />
           <PitchPad
             balls={state.current_balls}
             strikes={state.current_strikes}
@@ -534,36 +571,41 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
             onK3Reach={(src) => void submitAtBat("K_swinging", null, src)}
             armedResult={armedResult}
           />
-          <FlowControls
-            onEndHalf={endHalfInning}
-            onPitchingChange={() => setPitchChangeOpen(true)}
-            onSubstitution={() => setSubOpen(true)}
-            onEditLastPlay={() => setEditOpen(true)}
-            onFinalize={() => setConfirmFinalize(true)}
-            onMoundVisit={() => void submitMoundVisit()}
-            conferencesThisGame={
-              state.defensive_conferences.filter(
-                (c) => c.pitcher_id === state.current_pitcher_id,
-              ).length
-            }
-            disabled={submitting}
-            outs={state.outs}
-            canEdit={state.at_bats.length > 0}
-          />
-          {state.last_play_text && (
-            <Card className="p-3 bg-muted/40 text-sm">
-              <span className="text-muted-foreground">Last play: </span>
-              {state.last_play_text}
-            </Card>
-          )}
         </div>
-        <aside className="lg:sticky lg:top-4 lg:self-start space-y-4">
+        <aside className="lg:sticky lg:top-[6rem] lg:self-start space-y-4">
           <Card className="p-3">
             <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
             <LiveSprayChart state={state} />
           </Card>
         </aside>
       </div>
+
+      <Sheet open={manageOpen} onOpenChange={setManageOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>Manage game</SheetTitle>
+            <SheetDescription>End-of-half, subs, edits, and finalize.</SheetDescription>
+          </SheetHeader>
+          <div className="mt-4">
+            <FlowControls
+              onEndHalf={() => { void endHalfInning(); setManageOpen(false); }}
+              onPitchingChange={() => { setPitchChangeOpen(true); setManageOpen(false); }}
+              onSubstitution={() => { setSubOpen(true); setManageOpen(false); }}
+              onEditLastPlay={() => { setEditOpen(true); setManageOpen(false); }}
+              onFinalize={() => { setConfirmFinalize(true); setManageOpen(false); }}
+              onMoundVisit={() => { void submitMoundVisit(); setManageOpen(false); }}
+              conferencesThisGame={
+                state.defensive_conferences.filter(
+                  (c) => c.pitcher_id === state.current_pitcher_id,
+                ).length
+              }
+              disabled={submitting}
+              outs={state.outs}
+              canEdit={state.at_bats.length > 0}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
       <PitchingChangeDialog
         open={pitchChangeOpen}
         onOpenChange={setPitchChangeOpen}
@@ -612,23 +654,16 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
 
 // ---- Sub-components --------------------------------------------------------
 
-function TopBar({ state, weAreBatting }: { state: ReplayState; weAreBatting: boolean }) {
-  const teamLabel = weAreBatting ? "↑ batting" : "fielding";
+function BoxScoreToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
-    <Card className="p-4">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="font-mono-stat text-3xl text-sa-blue-deep">
-          <span className="text-muted-foreground text-base mr-2">us</span>
-          {state.team_score}
-          <span className="text-muted-foreground mx-2">–</span>
-          {state.opponent_score}
-          <span className="text-muted-foreground text-base ml-2">opp</span>
-        </div>
-        <div className="text-sm text-sa-blue uppercase tracking-wider font-semibold">
-          {state.half === "top" ? "Top" : "Bot"} {state.inning} · {state.outs} out{state.outs === 1 ? "" : "s"} · {teamLabel}
-        </div>
-      </div>
-    </Card>
+    <button
+      type="button"
+      onClick={onToggle}
+      className="text-xs uppercase tracking-wider text-muted-foreground hover:text-sa-orange inline-flex items-center gap-1"
+    >
+      {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      Box score
+    </button>
   );
 }
 
@@ -704,40 +739,6 @@ function LineScore({ state }: { state: ReplayState }) {
           </tr>
         </tbody>
       </table>
-    </Card>
-  );
-}
-
-function BatterCard({
-  state,
-  weAreBatting,
-  currentSlot,
-  names,
-}: {
-  state: ReplayState;
-  weAreBatting: boolean;
-  currentSlot: ReplayState["our_lineup"][number] | null;
-  names: Map<string, string>;
-}) {
-  if (!weAreBatting) {
-    const pitcherName = state.current_pitcher_id ? names.get(state.current_pitcher_id) : null;
-    return (
-      <Card className="p-4">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground">Opponent at bat</p>
-        <p className="font-display text-xl text-sa-blue-deep">
-          Pitching: {pitcherName ?? "(no pitcher set)"}
-        </p>
-      </Card>
-    );
-  }
-  const batterName = currentSlot?.player_id ? names.get(currentSlot.player_id) : null;
-  return (
-    <Card className="p-4">
-      <p className="text-xs uppercase tracking-wider text-muted-foreground">At bat — slot {state.current_batter_slot}</p>
-      <p className="font-display text-xl text-sa-blue-deep">
-        {batterName ?? "(empty slot)"}
-        {currentSlot?.position ? <span className="text-muted-foreground text-sm ml-2">{currentSlot.position}</span> : null}
-      </p>
     </Card>
   );
 }
@@ -954,14 +955,19 @@ function FlowControls({
         ? "Warning: 3 conferences — next forces a pitching change (NFHS 3-4-1)"
         : `${conferencesThisGame} conferences charged this game`;
   return (
-    <div className="flex flex-wrap items-center gap-3 pt-2 border-t">
-      <Button variant="outline" disabled={disabled} onClick={onEndHalf}>
+    <div className="flex flex-col gap-2">
+      {outs >= 3 && (
+        <p className="text-xs uppercase tracking-wider text-sa-orange font-semibold">
+          3 outs — end the half-inning to continue
+        </p>
+      )}
+      <Button variant="outline" disabled={disabled} onClick={onEndHalf} className="justify-start">
         End ½ inning
       </Button>
-      <Button variant="outline" disabled={disabled} onClick={onSubstitution}>
+      <Button variant="outline" disabled={disabled} onClick={onSubstitution} className="justify-start">
         Substitution
       </Button>
-      <Button variant="outline" disabled={disabled} onClick={onPitchingChange}>
+      <Button variant="outline" disabled={disabled} onClick={onPitchingChange} className="justify-start">
         Pitching change
       </Button>
       <Button
@@ -970,29 +976,28 @@ function FlowControls({
         onClick={onMoundVisit}
         title={moundVisitTitle}
         className={
-          conferencesThisGame >= 3
-            ? "border-sa-orange text-sa-orange"
-            : undefined
+          "justify-start " +
+          (conferencesThisGame >= 3 ? "border-sa-orange text-sa-orange" : "")
         }
       >
         Mound visit{conferencesThisGame > 0 ? ` (${conferencesThisGame})` : ""}
       </Button>
-      <Button variant="outline" disabled={disabled || !canEdit} onClick={onEditLastPlay}>
+      <Button
+        variant="outline"
+        disabled={disabled || !canEdit}
+        onClick={onEditLastPlay}
+        className="justify-start"
+      >
         Edit last play
       </Button>
       <Button
         variant="outline"
         disabled={disabled}
         onClick={onFinalize}
-        className="border-sa-orange text-sa-orange hover:bg-sa-orange hover:text-white"
+        className="justify-start border-sa-orange text-sa-orange hover:bg-sa-orange hover:text-white"
       >
         Finalize game
       </Button>
-      {outs >= 3 && (
-        <span className="text-xs uppercase tracking-wider text-sa-orange font-semibold">
-          3 outs — end the half-inning to continue
-        </span>
-      )}
     </div>
   );
 }
