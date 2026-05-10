@@ -75,7 +75,7 @@ export function SprayField({
             patternUnits="userSpaceOnUse"
           >
             <rect width="6" height="100" fill="#cfe1bb" />
-            <rect x="3" width="3" height="100" fill="#bfd5a4" />
+            <rect x="3" width="3" height="100" fill="#c6d8af" />
           </pattern>
           <clipPath id="spray-outfield-clip">
             <path d={OUTFIELD_PATH} />
@@ -109,9 +109,11 @@ export function SprayField({
         {/* Infield dirt — skinned-infield curved arc */}
         <path d={INFIELD_DIRT_PATH} fill="#c9a47a" />
 
-        {/* Infield grass diamond, set slightly off home so the batter's-box
-            area reads as dirt. */}
-        <polygon points="50,84 64,71 50,58 36,71" fill="#bfd5a4" />
+        {/* Batter's-box dirt around home plate so home isn't floating in cream */}
+        <ellipse cx="50" cy="92" rx="8" ry="5.5" fill="#c9a47a" />
+
+        {/* Infield grass diamond — corners aligned with the bases. */}
+        <polygon points="50,86 66,70 50,54 34,70" fill="#bfd5a4" />
 
         {/* Pitcher's mound */}
         <circle cx="50" cy="73" r="2.6" fill="#c9a47a" />
