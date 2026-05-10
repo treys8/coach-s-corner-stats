@@ -189,11 +189,13 @@ export function DefensiveDiamond({
               </text>
             )}
             {tappable && (
+              // Hit target intentionally — chevron clicks bubble to the
+              // parent <g>'s onClick, expanding the otherwise small base
+              // rect (~20px on iPad) to a more finger-friendly area.
               <polygon
                 points={`${bx},${by - 9.5} ${bx - 1.4},${by - 7.2} ${bx + 1.4},${by - 7.2}`}
                 fill="#ee8233"
                 opacity="0.95"
-                pointerEvents="none"
               />
             )}
           </g>
