@@ -39,6 +39,7 @@ export function Layout({
     { href: `${base}/schedule`, label: "Schedule" },
     { href: `${base}/score`, label: "Score" },
     { href: `${base}/upload`, label: "Upload" },
+    { href: `/s/${schoolSlug}/settings`, label: "Settings" },
   ];
 
   return (
