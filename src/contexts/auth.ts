@@ -7,7 +7,7 @@ export type AuthState = {
   session: Session | null;
   user: User | null;
   loading: boolean;
-  signInWithEmail: (email: string) => Promise<{ error: string | null }>;
+  signInWithEmail: (email: string, next?: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 };
 

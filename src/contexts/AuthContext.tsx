@@ -27,8 +27,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
   }, []);
 
-  const signInWithEmail = async (email: string) => {
-    const redirectTo = `${window.location.origin}/auth/callback`;
+  const signInWithEmail = async (email: string, next?: string) => {
+    const base = `${window.location.origin}/auth/callback`;
+    const redirectTo =
+      next && next.startsWith("/") ? `${base}?next=${encodeURIComponent(next)}` : base;
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: { emailRedirectTo: redirectTo },
