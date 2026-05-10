@@ -19,7 +19,13 @@ export function defaultAdvances(
     case "HR":   return hitAdvance(prev, batterId, 4);
     case "BB":
     case "IBB":
-    case "HBP":  return forcedWalk(prev, batterId);
+    case "HBP":
+    case "CI":   return forcedWalk(prev, batterId);
+    // FC and E don't get auto-advances — they almost always involve a
+    // judgment call about who's safe and who's out. Coach overrides via
+    // the edit-last-play dialog.
+    case "FC":
+    case "E":    return [];
     case "SF":   return sacFly(prev, batterId);
     case "SAC":  return sacBunt(prev, batterId);
     // K, FO, GO, LO, PO, IF, FC, E, DP, TP — no auto-advances. The replay
@@ -33,9 +39,9 @@ function hitAdvance(prev: Bases, batterId: string | null, bases: number): Runner
   const advances: RunnerAdvance[] = [];
 
   // Existing runners advance `bases` bases. Anyone reaching home scores.
-  if (prev.third) advances.push(toBase("third", 3 + bases, prev.third));
-  if (prev.second) advances.push(toBase("second", 2 + bases, prev.second));
-  if (prev.first) advances.push(toBase("first", 1 + bases, prev.first));
+  if (prev.third) advances.push(toBase("third", 3 + bases, prev.third.player_id));
+  if (prev.second) advances.push(toBase("second", 2 + bases, prev.second.player_id));
+  if (prev.first) advances.push(toBase("first", 1 + bases, prev.first.player_id));
 
   // Batter goes to `bases` (4 = home for HR).
   advances.push(toBase("batter", bases, batterId));
@@ -53,20 +59,20 @@ function forcedWalk(prev: Bases, batterId: string | null): RunnerAdvance[] {
   }
   // 1st occupied: runner from 1st pushed to 2nd; check chain.
   if (prev.second === null) {
-    advances.push({ from: "first", to: "second", player_id: prev.first });
+    advances.push({ from: "first", to: "second", player_id: prev.first.player_id });
     advances.push({ from: "batter", to: "first", player_id: batterId });
     return advances;
   }
   if (prev.third === null) {
-    advances.push({ from: "second", to: "third", player_id: prev.second });
-    advances.push({ from: "first", to: "second", player_id: prev.first });
+    advances.push({ from: "second", to: "third", player_id: prev.second.player_id });
+    advances.push({ from: "first", to: "second", player_id: prev.first.player_id });
     advances.push({ from: "batter", to: "first", player_id: batterId });
     return advances;
   }
   // Bases loaded — runner from 3rd is forced home.
-  advances.push({ from: "third", to: "home", player_id: prev.third });
-  advances.push({ from: "second", to: "third", player_id: prev.second });
-  advances.push({ from: "first", to: "second", player_id: prev.first });
+  advances.push({ from: "third", to: "home", player_id: prev.third.player_id });
+  advances.push({ from: "second", to: "third", player_id: prev.second.player_id });
+  advances.push({ from: "first", to: "second", player_id: prev.first.player_id });
   advances.push({ from: "batter", to: "first", player_id: batterId });
   return advances;
 }
@@ -74,15 +80,15 @@ function forcedWalk(prev: Bases, batterId: string | null): RunnerAdvance[] {
 function sacFly(prev: Bases, batterId: string | null): RunnerAdvance[] {
   // Out for the batter; runner from 3rd scores; others hold.
   const advances: RunnerAdvance[] = [{ from: "batter", to: "out", player_id: batterId }];
-  if (prev.third) advances.push({ from: "third", to: "home", player_id: prev.third });
+  if (prev.third) advances.push({ from: "third", to: "home", player_id: prev.third.player_id });
   return advances;
 }
 
 function sacBunt(prev: Bases, batterId: string | null): RunnerAdvance[] {
   const advances: RunnerAdvance[] = [{ from: "batter", to: "out", player_id: batterId }];
-  if (prev.third) advances.push({ from: "third", to: "home", player_id: prev.third });
-  if (prev.second) advances.push({ from: "second", to: "third", player_id: prev.second });
-  if (prev.first) advances.push({ from: "first", to: "second", player_id: prev.first });
+  if (prev.third) advances.push({ from: "third", to: "home", player_id: prev.third.player_id });
+  if (prev.second) advances.push({ from: "second", to: "third", player_id: prev.second.player_id });
+  if (prev.first) advances.push({ from: "first", to: "second", player_id: prev.first.player_id });
   return advances;
 }
 

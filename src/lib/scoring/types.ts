@@ -15,7 +15,14 @@ export type AtBatResult =
   | "K_swinging" | "K_looking"
   | "FO" | "GO" | "LO" | "PO" | "IF"
   | "FC" | "SAC" | "SF"
-  | "E" | "DP" | "TP";
+  | "E" | "DP" | "TP"
+  | "CI";
+
+// How the batter reached on an uncaught third strike (PDF §16, A.1).
+// Pitcher still gets the K; batter is on first; downstream scoring
+// classification depends on which: WP runs are earned, PB and E are
+// unearned (PDF §17, §14).
+export type K3ReachSource = "WP" | "PB" | "E";
 
 // Bases involved in a runner movement.
 export type Base = "first" | "second" | "third";
@@ -34,7 +41,21 @@ export interface LineupSlot {
   batting_order: number; // 1..9 (or null for the pitcher in non-DH? see design)
   player_id: string | null;
   position: string | null;
+  /** True for starting nine; preserved across subs so re-entry validation
+   *  knows who's eligible (NFHS Rule 3-1-3: starters may re-enter once,
+   *  to their original slot). The GameStartedPayload may omit this; the
+   *  engine fills it on apply. Always present in `ReplayState.our_lineup`
+   *  after game_started. */
+  is_starter?: boolean;
+  /** True after a starter has used their one re-entry. */
+  re_entered?: boolean;
+  /** Identity of the player who started in this batting slot. Stays
+   *  pinned even when subs replace player_id, so re-entry can verify
+   *  the returning starter is going back to their original slot. */
+  original_player_id?: string | null;
 }
+
+export type LeagueType = "mlb" | "nfhs";
 
 export interface GameStartedPayload {
   we_are_home: boolean;
@@ -42,6 +63,13 @@ export interface GameStartedPayload {
   starting_lineup: LineupSlot[];
   starting_pitcher_id: string | null;            // ours
   opponent_starting_pitcher_id: string | null;   // game_opponent_pitchers.id
+  /** Optional: league rule set for NFHS-specific behaviors (courtesy
+   *  runner, re-entry validation, defensive-conference rule, pitch-count
+   *  rest days). Defaults to "mlb" if absent. Phase 5. */
+  league_type?: LeagueType;
+  /** Optional: state code (e.g., 'NY', 'CA') for state-specific pitch
+   *  count rules when league_type === 'nfhs'. */
+  nfhs_state?: string | null;
 }
 
 export interface AtBatPayload {
@@ -61,6 +89,11 @@ export interface AtBatPayload {
   fielder_position: string | null;
   runner_advances: RunnerAdvance[];
   description: string | null;
+  /** Set when result is K_swinging/K_looking but the batter reached on
+   *  an uncaught third strike (PDF §16). Pitcher still gets the K; batter
+   *  is on first; the source determines whether downstream runs are
+   *  earned (WP=earned, PB/E=unearned). */
+  batter_reached_on_k3?: K3ReachSource;
 }
 
 export interface SubstitutionPayload {
@@ -69,11 +102,64 @@ export interface SubstitutionPayload {
   batting_order: number;
   position: string | null;
   sub_type: "regular" | "pinch_hit" | "pinch_run" | "courtesy_run" | "re_entry";
+  /** For pinch_run / courtesy_run: which base the runner is on. The
+   *  engine replaces the BaseRunner.player_id at this base while
+   *  preserving pitcher_of_record_id and reached_on_error. */
+  original_base?: Base;
 }
 
 export interface PitchingChangePayload {
   out_pitcher_id: string | null;
   in_pitcher_id: string | null;
+}
+
+// ---- Mid-PA running events (Phase B) ---------------------------------------
+
+export interface StolenBasePayload {
+  runner_id: string | null;
+  from: Base;
+  to: Base | "home";
+}
+
+export interface CaughtStealingPayload {
+  runner_id: string | null;
+  from: Base;
+}
+
+export interface PickoffPayload {
+  runner_id: string | null;
+  from: Base;
+}
+
+// Used for wild_pitch, passed_ball, balk, error_advance — UI provides an
+// explicit advance plan because these can move multiple runners. Sources
+// must be base names (no `batter`); destinations are bases / home / out.
+export interface RunnerMovePayload {
+  advances: RunnerAdvance[];
+}
+
+// ---- Per-pitch events (Phase E) -------------------------------------------
+
+export type PitchType =
+  | "ball"
+  | "called_strike"
+  | "swinging_strike"
+  | "foul"
+  | "in_play"
+  | "hbp"
+  | "foul_tip_caught"  // strike; records K when count is 2 strikes (PDF §4)
+  | "pitchout"         // counts as a ball
+  | "intentional_ball"; // counts as a ball; IBB-stream
+
+export interface PitchPayload {
+  pitch_type: PitchType;
+  location_x?: number | null;
+  location_y?: number | null;
+}
+
+export interface DefensiveConferencePayload {
+  pitcher_id: string;
+  inning: number;
 }
 
 export interface InningEndPayload {
@@ -104,7 +190,13 @@ export type GameEventPayload =
   | PitchingChangePayload
   | InningEndPayload
   | GameFinalizedPayload
-  | CorrectionPayload;
+  | CorrectionPayload
+  | StolenBasePayload
+  | CaughtStealingPayload
+  | PickoffPayload
+  | RunnerMovePayload
+  | PitchPayload
+  | DefensiveConferencePayload;
 
 // ---- Persisted shape used by the engine ------------------------------------
 
@@ -121,10 +213,23 @@ export interface GameEventRecord {
 
 // ---- Reduced state ---------------------------------------------------------
 
+// A runner on base, tagged with the pitcher who put them there. The
+// `pitcher_of_record_id` travels with the runner across pitching changes
+// and downstream advances, so when this runner eventually scores the
+// rollup can credit the run to the correct pitcher (PDF §17, inherited
+// runners). `reached_on_error` flags runners who reached on errors or
+// passed balls — used by ER reconstruction in Phase 2 to identify
+// error-fueled runs that survive in the unearned bucket.
+export interface BaseRunner {
+  player_id: string;
+  pitcher_of_record_id: string | null;
+  reached_on_error: boolean;
+}
+
 export interface Bases {
-  first: string | null;
-  second: string | null;
-  third: string | null;
+  first: BaseRunner | null;
+  second: BaseRunner | null;
+  third: BaseRunner | null;
 }
 
 export interface DerivedAtBat {
@@ -148,13 +253,29 @@ export interface DerivedAtBat {
   /** Carried forward from the at-bat payload so the rollup can attribute
    *  R per scoring runner. Not persisted in the at_bats DB table. */
   runner_advances: RunnerAdvance[];
+  /** Pitcher of record from the offense's perspective at the moment this
+   *  PA began. Used by the rollup so per-PA pitcher attribution doesn't
+   *  depend on a separate event lookup. */
+  pitcher_of_record_id: string | null;
+  /** Snapshot of base occupants (with pitcher_of_record) BEFORE this PA
+   *  started. Used by ER reconstruction to identify inherited runners
+   *  and trace error-fueled scoring chains. */
+  bases_before: Bases;
   description: string | null;
+  /** Per-pitch trail captured during this PA (Phase E). In-memory only —
+   *  the engine reconstitutes it from `pitch` events on every replay. */
+  pitches: PitchPayload[];
+  /** Set when batter reached on uncaught K3 (mirrors AtBatPayload). */
+  batter_reached_on_k3?: K3ReachSource;
 }
 
 export interface ReplayState {
   status: GameStatus;
   we_are_home: boolean;
   use_dh: boolean;
+  /** Rule set for NFHS-only behaviors. Defaults 'mlb'. Phase 5. */
+  league_type: LeagueType;
+  nfhs_state: string | null;
 
   inning: number;
   half: InningHalf;
@@ -175,6 +296,50 @@ export interface ReplayState {
   last_event_at: string | null;
 
   at_bats: DerivedAtBat[];
+
+  /** Live count for the current PA, derived from pitch events. Reset on
+   *  at_bat / inning_end. (Phase E) */
+  current_balls: number;
+  current_strikes: number;
+  /** Pitch trail accumulated during the current open PA. */
+  current_pa_pitches: PitchPayload[];
+
+  /** Non-PA running events (SB-home, WP, PB, balk, error_advance) that
+   *  scored a run, paired with the pitcher of record at that moment.
+   *  `source` lets the rollup distinguish earned-vs-unearned (PB runs
+   *  are unearned; WP and balk are earned — PDF §14, §17). */
+  non_pa_runs: NonPaRun[];
+
+  /** Defensive conferences (mound visits) per pitcher per inning.
+   *  NFHS Rule 3-4-1: 3 charged conferences per pitcher per game; 4th
+   *  forces removal. PDF §28.9. The replay engine just tracks the log;
+   *  the UI consults it for warnings and forced pitching changes. */
+  defensive_conferences: { pitcher_id: string; inning: number }[];
+
+  /** NFHS courtesy-runner usage. A courtesy runner is permitted at any
+   *  time for the pitcher and/or catcher of record; only one CR per
+   *  pitcher and one per catcher per game. Not the same as a regular
+   *  substitution (PDF §28.3). Tracked by the player_id who acted as the
+   *  CR each time, plus which role they covered. */
+  courtesy_runners_used: {
+    runner_player_id: string;
+    role: "pitcher" | "catcher";
+    inning: number;
+  }[];
+}
+
+export type NonPaRunSource =
+  | "wild_pitch"
+  | "passed_ball"
+  | "balk"
+  | "error_advance"
+  | "stolen_base";
+
+export interface NonPaRun {
+  event_id: string;
+  pitcher_id: string | null;
+  runs: number;
+  source: NonPaRunSource;
 }
 
 export const EMPTY_BASES: Bases = { first: null, second: null, third: null };
@@ -183,6 +348,8 @@ export const INITIAL_STATE: ReplayState = {
   status: "draft",
   we_are_home: true,
   use_dh: true,
+  league_type: "mlb",
+  nfhs_state: null,
   inning: 1,
   half: "top",
   outs: 0,
@@ -196,4 +363,10 @@ export const INITIAL_STATE: ReplayState = {
   last_play_text: null,
   last_event_at: null,
   at_bats: [],
+  current_balls: 0,
+  current_strikes: 0,
+  current_pa_pitches: [],
+  non_pa_runs: [],
+  defensive_conferences: [],
+  courtesy_runners_used: [],
 };

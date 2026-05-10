@@ -35,11 +35,44 @@ interface DefensiveDiamondProps {
   /** When set, fielders become draggable. Drop fires onFielderDrop. */
   dragMode?: boolean;
   onFielderDrop?: (x: number, y: number, fielderPosition: FielderPosition) => void;
+  /** When set (and not in dragMode), tapping an occupied base fires this. */
+  onRunnerAction?: (
+    base: "first" | "second" | "third",
+    runnerId: string | null,
+  ) => void;
 }
 
 interface FielderRow {
   position: FielderPosition;
   player_id: string | null;
+}
+
+// When we're batting, runners are ours and we know names. When we're
+// fielding, the opposing team is on base — show generic R1/R2/R3 labels.
+const BASE_GENERIC: Record<"first" | "second" | "third", string> = {
+  first: "R1",
+  second: "R2",
+  third: "R3",
+};
+
+function lastNameOf(full: string): string {
+  // names are formatted "#5 Koester" or "Koester Smith" — strip a leading
+  // jersey token, then take the last whitespace-separated word.
+  const noJersey = full.replace(/^#\S+\s+/, "");
+  const parts = noJersey.trim().split(/\s+/);
+  return parts[parts.length - 1] ?? full;
+}
+
+function runnerLabel(
+  base: "first" | "second" | "third",
+  playerId: string | null,
+  names: Map<string, string>,
+  weAreBatting: boolean,
+): string {
+  if (!weAreBatting) return BASE_GENERIC[base];
+  if (!playerId) return BASE_GENERIC[base];
+  const full = names.get(playerId);
+  return full ? lastNameOf(full) : BASE_GENERIC[base];
 }
 
 // Pitcher tracks current_pitcher_id (pitching_change events don't touch the
@@ -60,6 +93,7 @@ export function DefensiveDiamond({
   weAreBatting,
   dragMode = false,
   onFielderDrop,
+  onRunnerAction,
 }: DefensiveDiamondProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<{
@@ -141,14 +175,35 @@ export function DefensiveDiamond({
       {/* Bases (rotated squares; orange when occupied) */}
       {(["first", "second", "third"] as const).map((b) => {
         const [bx, by] = BASE_XY[b];
-        const occupied = state.bases[b] !== null;
+        const runner = state.bases[b];
+        const occupied = runner !== null;
+        const tappable = occupied && !dragMode && !!onRunnerAction;
         return (
-          <g key={b} transform={`translate(${bx} ${by}) rotate(45)`}>
-            <rect
-              x={-2.2} y={-2.2} width={4.4} height={4.4}
-              fill={occupied ? "#ee8233" : "#fff"}
-              stroke="#1f3252" strokeWidth="0.35"
-            />
+          <g
+            key={b}
+            onClick={tappable ? () => onRunnerAction!(b, runner?.player_id ?? null) : undefined}
+            style={tappable ? { cursor: "pointer" } : undefined}
+            data-base={b}
+          >
+            <g transform={`translate(${bx} ${by}) rotate(45)`}>
+              <rect
+                x={-2.2} y={-2.2} width={4.4} height={4.4}
+                fill={occupied ? "#ee8233" : "#fff"}
+                stroke="#1f3252" strokeWidth="0.35"
+              />
+            </g>
+            {occupied && (
+              <text
+                x={bx} y={by - 4}
+                textAnchor="middle"
+                fontSize="2.2"
+                fontWeight="700"
+                fill="#1f3252"
+                pointerEvents="none"
+              >
+                {runnerLabel(b, runner?.player_id ?? null, names, weAreBatting)}
+              </text>
+            )}
           </g>
         );
       })}

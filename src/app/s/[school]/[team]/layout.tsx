@@ -25,7 +25,7 @@ export default function TeamLayout({
     (async () => {
       const { data, error } = await supabase
         .from("teams")
-        .select("id, school_id, slug, name, sport, level")
+        .select("id, school_id, slug, name, sport, level, league_type, nfhs_state")
         .eq("school_id", school.id)
         .eq("slug", teamSlug)
         .maybeSingle();

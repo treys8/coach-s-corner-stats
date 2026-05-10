@@ -10,6 +10,8 @@ export interface Team {
   name: string;
   sport: Sport;
   level: TeamLevel;
+  league_type: "mlb" | "nfhs";
+  nfhs_state: string | null;
 }
 
 export interface TeamContextValue {

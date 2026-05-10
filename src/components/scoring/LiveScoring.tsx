@@ -27,13 +27,23 @@ import { INITIAL_STATE } from "@/lib/scoring/types";
 import type {
   AtBatPayload,
   AtBatResult,
+  Bases,
+  CaughtStealingPayload,
   CorrectionPayload,
   DerivedAtBat,
   GameEventRecord,
+  K3ReachSource,
+  PickoffPayload,
+  PitchPayload,
+  PitchType,
   PitchingChangePayload,
   ReplayState,
+  RunnerAdvance,
+  RunnerMovePayload,
+  StolenBasePayload,
   SubstitutionPayload,
 } from "@/lib/scoring/types";
+import type { GameEventType } from "@/integrations/supabase/types";
 import { DefensiveDiamond, type FielderPosition } from "@/components/scoring/DefensiveDiamond";
 import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
 import { toast } from "sonner";
@@ -64,11 +74,40 @@ const supabase = createClient();
 // Non-contact outcomes are one-tap. In-play outcomes arm drag mode on the
 // defensive diamond — the user drags the fielder who made the play to the
 // ball location, and the drop captures spray (x, y) + fielder_position.
-const NON_CONTACT: AtBatResult[] = ["K_swinging", "K_looking", "BB", "HBP"];
+const NON_CONTACT: AtBatResult[] = ["K_swinging", "K_looking", "BB", "IBB", "HBP", "CI"];
 const HITS: AtBatResult[] = ["1B", "2B", "3B", "HR"];
 const OUTS_IN_PLAY: AtBatResult[] = ["FO", "GO", "LO", "PO"];
-const IN_PLAY: AtBatResult[] = [...HITS, ...OUTS_IN_PLAY];
+// FC and E are in-play with a fielder location; the rest are productive outs
+// or multi-out plays that don't need spray.
+const OTHER_IN_PLAY: AtBatResult[] = ["FC", "E"];
+const PRODUCTIVE: AtBatResult[] = ["SAC", "SF", "DP", "TP"];
+const IN_PLAY: AtBatResult[] = [...HITS, ...OUTS_IN_PLAY, ...OTHER_IN_PLAY];
 const isInPlay = (r: AtBatResult) => (IN_PLAY as AtBatResult[]).includes(r);
+
+// Auto-RBI from a runner-advance plan, applying PDF §7 exclusions:
+// no RBI on errors or GIDP, and no RBI for a run scoring from a base
+// where the runner reached on an error (or PB advancement).
+function autoRBI(
+  advances: RunnerAdvance[],
+  result: AtBatResult,
+  basesBefore: Bases,
+): number {
+  if (result === "E" || result === "DP") return 0;
+  let count = 0;
+  for (const adv of advances) {
+    if (adv.to !== "home") continue;
+    if (adv.from === "batter") {
+      // Batter himself reached and circled (HR or chained advances).
+      // PDF: HR always RBI. Other batter-to-home cases inherit the
+      // result's RBI eligibility (E/DP already excluded above).
+      count += 1;
+    } else {
+      const src = basesBefore[adv.from];
+      if (src && !src.reached_on_error) count += 1;
+    }
+  }
+  return count;
+}
 
 const RESULT_LABEL: Record<AtBatResult, string> = {
   K_swinging: "K↘", K_looking: "Kᴸ",
@@ -76,6 +115,7 @@ const RESULT_LABEL: Record<AtBatResult, string> = {
   "1B": "1B", "2B": "2B", "3B": "3B", HR: "HR",
   FO: "Fly out", GO: "Ground out", LO: "Line out", PO: "Popout", IF: "Infield fly",
   FC: "FC", SAC: "SAC", SF: "SF", E: "Error", DP: "DP", TP: "TP",
+  CI: "CI",
 };
 
 const RESULT_DESC: Partial<Record<AtBatResult, string>> = {
@@ -83,7 +123,11 @@ const RESULT_DESC: Partial<Record<AtBatResult, string>> = {
   K_looking: "Strikeout looking",
   BB: "Walk", IBB: "Intentional walk", HBP: "Hit by pitch",
   "1B": "Single", "2B": "Double", "3B": "Triple", HR: "Home run",
-  FO: "Flyout", GO: "Groundout", LO: "Lineout", PO: "Popout",
+  FO: "Flyout", GO: "Groundout", LO: "Lineout", PO: "Popout", IF: "Infield fly",
+  FC: "Fielder's choice", E: "Reached on error",
+  SAC: "Sacrifice bunt", SF: "Sacrifice fly",
+  DP: "Double play", TP: "Triple play",
+  CI: "Catcher's interference",
 };
 
 export function LiveScoring({ gameId, roster }: LiveScoringProps) {
@@ -91,14 +135,16 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [balls, setBalls] = useState(0);
-  const [strikes, setStrikes] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
+  const [runnerAction, setRunnerAction] = useState<{
+    base: "first" | "second" | "third";
+    runnerId: string | null;
+  } | null>(null);
   const names = useMemo(() => nameById(roster), [roster]);
 
   // Load all events for this game and run replay() to get the canonical
@@ -144,12 +190,26 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   const submitAtBat = async (
     result: AtBatResult,
     spray: { x: number; y: number; fielder: FielderPosition } | null,
+    k3Reach?: K3ReachSource,
   ) => {
     if (submitting) return;
     setSubmitting(true);
-    const advances = defaultAdvances(state.bases, weAreBatting ? currentSlot?.player_id ?? null : null, result);
+    const batterId = weAreBatting ? currentSlot?.player_id ?? null : null;
+    // K3-reach: pitcher gets the K, batter goes to first instead of being out.
+    // Override defaultAdvances with an explicit batter→first plan; downstream
+    // RBI logic excludes runs from the tainted batter (E/PB) automatically.
+    const advances = k3Reach
+      ? [{ from: "batter" as const, to: "first" as const, player_id: batterId }]
+      : defaultAdvances(state.bases, batterId, result);
     const runs = advances.filter((a) => a.to === "home").length;
-    const { balls: finalBalls, strikes: finalStrikes } = finalCount(result, balls, strikes);
+    const rbi = autoRBI(advances, result, state.bases);
+    // If pitches are logged for this PA, the engine will derive the final
+    // count from them — pass the live values along anyway as a hint, with
+    // finalCount() as the no-pitch-trail fallback.
+    const trailEmpty = state.current_pa_pitches.length === 0;
+    const { balls: finalBalls, strikes: finalStrikes } = trailEmpty
+      ? finalCount(result, state.current_balls, state.current_strikes)
+      : { balls: state.current_balls, strikes: state.current_strikes };
 
     const payload: AtBatPayload = {
       inning: state.inning,
@@ -159,7 +219,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
       batting_order: weAreBatting ? state.current_batter_slot : null,
       result,
-      rbi: runs,
+      rbi,
       pitch_count: finalBalls + finalStrikes,
       balls: finalBalls,
       strikes: finalStrikes,
@@ -168,6 +228,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       fielder_position: spray?.fielder ?? null,
       runner_advances: advances,
       description: describePlay(result, runs, currentSlot?.player_id ?? null, names),
+      batter_reached_on_k3: k3Reach,
     };
 
     const nextSeq = lastSeq + 1;
@@ -181,15 +242,49 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     setSubmitting(false);
     if (!ok) return;
 
-    setBalls(0);
-    setStrikes(0);
     setArmedResult(null);
+    await refresh();
+  };
+
+  const submitPitch = async (pitchType: PitchType) => {
+    if (submitting) return;
+    setSubmitting(true);
+    const payload: PitchPayload = { pitch_type: pitchType };
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `pitch-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: "pitch",
+      payload,
+    });
+    setSubmitting(false);
+    if (!ok) return;
     await refresh();
   };
 
   const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
     if (!armedResult) return;
     void submitAtBat(armedResult, { x, y, fielder });
+  };
+
+  const submitMidPA = async (
+    eventType: GameEventType,
+    payload: StolenBasePayload | CaughtStealingPayload | PickoffPayload | RunnerMovePayload,
+    clientPrefix: string,
+  ) => {
+    if (submitting) return;
+    setSubmitting(true);
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `${clientPrefix}-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: eventType,
+      payload,
+    });
+    setSubmitting(false);
+    setRunnerAction(null);
+    if (!ok) return;
+    await refresh();
   };
 
   const endHalfInning = async () => {
@@ -207,15 +302,65 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     await refresh();
   };
 
+  // In a non-DH game, the new pitcher must occupy a slot in the batting
+  // order. If they're not in the lineup yet, we substitute them into the
+  // outgoing pitcher's slot and then record the pitching change. If they're
+  // already in the lineup as a fielder, we substitute their slot's position
+  // to "P" so the diamond and stats reflect the change.
   const submitPitchingChange = async (newPitcherId: string) => {
     if (submitting) return;
     if (newPitcherId === state.current_pitcher_id) return;
     setSubmitting(true);
+
+    const lineupSlotOf = (pid: string | null) =>
+      state.our_lineup.find((s) => s.player_id === pid) ?? null;
+    const oldSlot = lineupSlotOf(state.current_pitcher_id);
+    const newSlot = lineupSlotOf(newPitcherId);
+
+    let leadingSub: SubstitutionPayload | null = null;
+    if (!state.use_dh) {
+      if (newSlot) {
+        // New pitcher is already in the lineup as a fielder — retitle his
+        // slot's position to P so the diamond reflects it.
+        leadingSub = {
+          out_player_id: newPitcherId,
+          in_player_id: newPitcherId,
+          batting_order: newSlot.batting_order,
+          position: "P",
+          sub_type: "regular",
+        };
+      } else if (oldSlot) {
+        // New pitcher is on the bench — replace the outgoing pitcher in his
+        // batting slot.
+        leadingSub = {
+          out_player_id: state.current_pitcher_id!,
+          in_player_id: newPitcherId,
+          batting_order: oldSlot.batting_order,
+          position: "P",
+          sub_type: "regular",
+        };
+      }
+    }
+
+    let nextSeq = lastSeq + 1;
+    if (leadingSub) {
+      const okSub = await postEvent(gameId, {
+        client_event_id: `sub-pc-${nextSeq}`,
+        sequence_number: nextSeq,
+        event_type: "substitution",
+        payload: leadingSub,
+      });
+      if (!okSub) {
+        setSubmitting(false);
+        return;
+      }
+      nextSeq += 1;
+    }
+
     const payload: PitchingChangePayload = {
       out_pitcher_id: state.current_pitcher_id,
       in_pitcher_id: newPitcherId,
     };
-    const nextSeq = lastSeq + 1;
     const ok = await postEvent(gameId, {
       client_event_id: `pc-${nextSeq}`,
       sequence_number: nextSeq,
@@ -226,6 +371,36 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     setPitchChangeOpen(false);
     if (!ok) return;
     toast.success(`Pitcher: ${names.get(newPitcherId) ?? "updated"}`);
+    await refresh();
+  };
+
+  const submitMoundVisit = async () => {
+    if (submitting) return;
+    if (!state.current_pitcher_id) return;
+    setSubmitting(true);
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `dc-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: "defensive_conference",
+      payload: {
+        pitcher_id: state.current_pitcher_id,
+        inning: state.inning,
+      },
+    });
+    setSubmitting(false);
+    if (!ok) return;
+    // After the conference is recorded, alert at the warning thresholds.
+    // Count is post-event since refresh() will re-fold from the server.
+    const newCount = state.defensive_conferences.filter(
+      (c) => c.pitcher_id === state.current_pitcher_id,
+    ).length + 1;
+    if (newCount >= 4) {
+      toast.warning("4th conference — pitcher must be removed (NFHS 3-4-1)");
+      setPitchChangeOpen(true);
+    } else if (newCount === 3) {
+      toast.warning("3rd conference — next visit forces a pitching change");
+    }
     await refresh();
   };
 
@@ -246,62 +421,21 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
     await refresh();
   };
 
-  // Edit the most recent at-bat by issuing a correction event. Recomputes
-  // runner advances against the bases as they were before that play, so a
-  // 1B → 2B edit (etc.) updates scoring/outs/bases consistently after replay.
-  const editLastPlay = async (newResult: AtBatResult) => {
+  // Edit the most recent at-bat by issuing a correction event. Receives a
+  // fully-built corrected payload from the edit dialog (result, count, and
+  // per-runner advances all editable). The dialog owns the bases-before
+  // calculation so the user can see and override runner movement.
+  const editLastPlay = async (
+    supersededEventId: string,
+    correctedAtBat: AtBatPayload,
+  ) => {
     if (submitting) return;
-    const last = state.at_bats[state.at_bats.length - 1];
-    if (!last) return;
     setSubmitting(true);
-
-    const { data, error } = await supabase
-      .from("game_events")
-      .select("*")
-      .eq("game_id", gameId)
-      .order("sequence_number", { ascending: true });
-    if (error) {
-      setSubmitting(false);
-      toast.error(`Couldn't load events: ${error.message}`);
-      return;
-    }
-    const events = (data ?? []) as unknown as GameEventRecord[];
-    const target = events.find((e) => e.id === last.event_id);
-    if (!target) {
-      setSubmitting(false);
-      toast.error("Couldn't find the original event to correct.");
-      return;
-    }
-    const before = events.filter((e) => e.sequence_number < target.sequence_number);
-    const stateBefore = replay(before);
-    const newAdvances = defaultAdvances(stateBefore.bases, last.batter_id, newResult);
-    const rbi = newAdvances.filter((a) => a.to === "home").length;
-
-    const correctedAtBat: AtBatPayload = {
-      inning: last.inning,
-      half: last.half,
-      batter_id: last.batter_id,
-      pitcher_id: last.pitcher_id,
-      opponent_pitcher_id: last.opponent_pitcher_id,
-      batting_order: last.batting_order,
-      result: newResult,
-      rbi,
-      pitch_count: last.pitch_count,
-      balls: last.balls,
-      strikes: last.strikes,
-      spray_x: last.spray_x,
-      spray_y: last.spray_y,
-      fielder_position: last.fielder_position,
-      runner_advances: newAdvances,
-      description: describePlay(newResult, rbi, last.batter_id, names),
-    };
-
     const correction: CorrectionPayload = {
-      superseded_event_id: target.id,
+      superseded_event_id: supersededEventId,
       corrected_event_type: "at_bat",
       corrected_payload: correctedAtBat,
     };
-
     const nextSeq = lastSeq + 1;
     const ok = await postEvent(gameId, {
       client_event_id: `corr-${nextSeq}`,
@@ -352,6 +486,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
   return (
     <div className="space-y-4">
       <TopBar state={state} weAreBatting={weAreBatting} />
+      <LineScore state={state} />
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
         <div className="space-y-4">
           <Card className="p-3">
@@ -383,18 +518,20 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
               weAreBatting={weAreBatting}
               dragMode={!!armedResult && !submitting}
               onFielderDrop={onFielderDrop}
+              onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
             />
           </Card>
           <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
-          <BallStrikeCounter
-            balls={balls}
-            strikes={strikes}
-            onBalls={setBalls}
-            onStrikes={setStrikes}
+          <PitchPad
+            balls={state.current_balls}
+            strikes={state.current_strikes}
+            disabled={submitting || state.outs >= 3}
+            onPitch={submitPitch}
           />
           <OutcomeGrid
             disabled={submitting || state.outs >= 3}
             onPick={onOutcomePicked}
+            onK3Reach={(src) => void submitAtBat("K_swinging", null, src)}
             armedResult={armedResult}
           />
           <FlowControls
@@ -403,6 +540,12 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
             onSubstitution={() => setSubOpen(true)}
             onEditLastPlay={() => setEditOpen(true)}
             onFinalize={() => setConfirmFinalize(true)}
+            onMoundVisit={() => void submitMoundVisit()}
+            conferencesThisGame={
+              state.defensive_conferences.filter(
+                (c) => c.pitcher_id === state.current_pitcher_id,
+              ).length
+            }
             disabled={submitting}
             outs={state.outs}
             canEdit={state.at_bats.length > 0}
@@ -425,7 +568,7 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
         open={pitchChangeOpen}
         onOpenChange={setPitchChangeOpen}
         roster={roster}
-        currentPitcherId={state.current_pitcher_id}
+        state={state}
         names={names}
         onPick={submitPitchingChange}
         disabled={submitting}
@@ -442,8 +585,10 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
       <EditLastPlayDialog
         open={editOpen}
         onOpenChange={setEditOpen}
+        gameId={gameId}
         lastAtBat={state.at_bats[state.at_bats.length - 1] ?? null}
-        onPick={editLastPlay}
+        names={names}
+        onSubmit={editLastPlay}
         disabled={submitting}
       />
       <FinalizeDialog
@@ -451,6 +596,14 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
         onOpenChange={setConfirmFinalize}
         state={state}
         onConfirm={finalize}
+        disabled={submitting}
+      />
+      <RunnerActionDialog
+        action={runnerAction}
+        onClose={() => setRunnerAction(null)}
+        names={names}
+        bases={state.bases}
+        onSubmit={submitMidPA}
         disabled={submitting}
       />
     </div>
@@ -475,6 +628,82 @@ function TopBar({ state, weAreBatting }: { state: ReplayState; weAreBatting: boo
           {state.half === "top" ? "Top" : "Bot"} {state.inning} · {state.outs} out{state.outs === 1 ? "" : "s"} · {teamLabel}
         </div>
       </div>
+    </Card>
+  );
+}
+
+const HIT_RESULT_SET: ReadonlySet<AtBatResult> = new Set(["1B", "2B", "3B", "HR"]);
+
+function LineScore({ state }: { state: ReplayState }) {
+  const innings = Math.max(7, state.inning);
+  // [inningIndex 0..n-1] -> per-side R/H/E.
+  // An "E" result means the batter reached on error — credited to the
+  // FIELDING team (our usE when fielding, oppE when batting).
+  type Cell = { usR: number; oppR: number; usH: number; oppH: number; usE: number; oppE: number };
+  const cells: Cell[] = Array.from({ length: innings }, () => ({
+    usR: 0, oppR: 0, usH: 0, oppH: 0, usE: 0, oppE: 0,
+  }));
+  for (const ab of state.at_bats) {
+    const idx = ab.inning - 1;
+    if (idx < 0 || idx >= cells.length) continue;
+    const weBatted = (state.we_are_home && ab.half === "bottom")
+      || (!state.we_are_home && ab.half === "top");
+    if (weBatted) {
+      cells[idx].usR += ab.runs_scored_on_play;
+      if (HIT_RESULT_SET.has(ab.result)) cells[idx].usH += 1;
+      // We batted and reached on error → opp's defensive error.
+      if (ab.result === "E") cells[idx].oppE += 1;
+    } else {
+      cells[idx].oppR += ab.runs_scored_on_play;
+      if (HIT_RESULT_SET.has(ab.result)) cells[idx].oppH += 1;
+      // Opp batted and reached on error → our defensive error.
+      if (ab.result === "E") cells[idx].usE += 1;
+    }
+  }
+  const totals = cells.reduce(
+    (acc, c) => ({
+      usR: acc.usR + c.usR, oppR: acc.oppR + c.oppR,
+      usH: acc.usH + c.usH, oppH: acc.oppH + c.oppH,
+      usE: acc.usE + c.usE, oppE: acc.oppE + c.oppE,
+    }),
+    { usR: 0, oppR: 0, usH: 0, oppH: 0, usE: 0, oppE: 0 },
+  );
+
+  return (
+    <Card className="p-3 overflow-x-auto">
+      <table className="font-mono-stat text-sm w-full min-w-max">
+        <thead>
+          <tr className="text-xs uppercase tracking-wider text-muted-foreground">
+            <th className="text-left pr-3 font-semibold w-12"></th>
+            {cells.map((_, i) => (
+              <th key={i} className="px-2 text-center">{i + 1}</th>
+            ))}
+            <th className="px-2 text-center border-l">R</th>
+            <th className="px-2 text-center">H</th>
+            <th className="px-2 text-center">E</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td className="pr-3 text-xs uppercase tracking-wider text-sa-blue font-semibold">us</td>
+            {cells.map((c, i) => (
+              <td key={i} className="px-2 text-center text-sa-blue-deep">{c.usR}</td>
+            ))}
+            <td className="px-2 text-center text-sa-blue-deep border-l">{totals.usR}</td>
+            <td className="px-2 text-center text-sa-blue-deep">{totals.usH}</td>
+            <td className="px-2 text-center text-sa-blue-deep">{totals.usE}</td>
+          </tr>
+          <tr>
+            <td className="pr-3 text-xs uppercase tracking-wider text-muted-foreground font-semibold">opp</td>
+            {cells.map((c, i) => (
+              <td key={i} className="px-2 text-center text-sa-blue-deep">{c.oppR}</td>
+            ))}
+            <td className="px-2 text-center text-sa-blue-deep border-l">{totals.oppR}</td>
+            <td className="px-2 text-center text-sa-blue-deep">{totals.oppH}</td>
+            <td className="px-2 text-center text-sa-blue-deep">{totals.oppE}</td>
+          </tr>
+        </tbody>
+      </table>
     </Card>
   );
 }
@@ -513,24 +742,66 @@ function BatterCard({
   );
 }
 
-function BallStrikeCounter({
+function PitchPad({
   balls,
   strikes,
-  onBalls,
-  onStrikes,
+  disabled,
+  onPitch,
 }: {
   balls: number;
   strikes: number;
-  onBalls: (n: number) => void;
-  onStrikes: (n: number) => void;
+  disabled: boolean;
+  onPitch: (t: PitchType) => void;
 }) {
+  const pitches: { type: PitchType; label: string; cls: string }[] = [
+    { type: "ball", label: "Ball", cls: "bg-sa-blue hover:bg-sa-blue/90 text-white" },
+    { type: "called_strike", label: "Called K", cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
+    { type: "swinging_strike", label: "Swing K", cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
+    { type: "foul", label: "Foul", cls: "bg-muted hover:bg-muted/80 text-foreground" },
+    { type: "in_play", label: "In play", cls: "bg-sa-blue-deep/80 hover:bg-sa-blue-deep text-white" },
+    { type: "hbp", label: "HBP", cls: "bg-muted hover:bg-muted/80 text-foreground" },
+  ];
+  // Less-common pitch types tucked into a secondary row to keep the
+  // primary pad uncluttered. Foul-tip-caught is a strike (and records K
+  // at 2 strikes); pitchout and intentional_ball both add a ball.
+  const auxPitches: { type: PitchType; label: string }[] = [
+    { type: "foul_tip_caught", label: "Foul tip" },
+    { type: "pitchout", label: "Pitchout" },
+    { type: "intentional_ball", label: "Int. ball" },
+  ];
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-      <Counter label="Balls" max={4} value={balls} onChange={onBalls} />
-      <Counter label="Strikes" max={3} value={strikes} onChange={onStrikes} />
-      <span className="font-mono-stat text-2xl text-sa-blue-deep">{balls}-{strikes}</span>
-      <span className="text-xs text-muted-foreground">resets after each at-bat</span>
-    </div>
+    <Card className="p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">Count</span>
+        <span className="font-mono-stat text-3xl text-sa-blue-deep">{balls}-{strikes}</span>
+      </div>
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+        {pitches.map((p) => (
+          <Button
+            key={p.type}
+            disabled={disabled}
+            onClick={() => onPitch(p.type)}
+            className={`h-12 text-sm font-bold ${p.cls}`}
+          >
+            {p.label}
+          </Button>
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {auxPitches.map((p) => (
+          <Button
+            key={p.type}
+            variant="outline"
+            disabled={disabled}
+            onClick={() => onPitch(p.type)}
+            className="h-9 text-xs"
+          >
+            {p.label}
+          </Button>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">Tap pitches as they happen — counter resets at the at-bat outcome.</p>
+    </Card>
   );
 }
 
@@ -558,17 +829,54 @@ function Counter({
 function OutcomeGrid({
   disabled,
   onPick,
+  onK3Reach,
   armedResult,
 }: {
   disabled: boolean;
   onPick: (r: AtBatResult) => void;
+  onK3Reach: (src: K3ReachSource) => void;
   armedResult: AtBatResult | null;
 }) {
   return (
     <div className="space-y-2">
       <ButtonRow disabled={disabled} onPick={onPick} results={NON_CONTACT} variant="default" armedResult={armedResult} />
+      <K3ReachRow disabled={disabled} onK3Reach={onK3Reach} />
       <ButtonRow disabled={disabled} onPick={onPick} results={HITS} variant="hit" armedResult={armedResult} />
       <ButtonRow disabled={disabled} onPick={onPick} results={OUTS_IN_PLAY} variant="out" armedResult={armedResult} />
+      <ButtonRow disabled={disabled} onPick={onPick} results={OTHER_IN_PLAY} variant="other" armedResult={armedResult} />
+      <ButtonRow disabled={disabled} onPick={onPick} results={PRODUCTIVE} variant="out" armedResult={armedResult} />
+    </div>
+  );
+}
+
+function K3ReachRow({
+  disabled,
+  onK3Reach,
+}: {
+  disabled: boolean;
+  onK3Reach: (src: K3ReachSource) => void;
+}) {
+  // Uncaught third strike: pitcher gets the K, batter reaches first.
+  // Source matters for ER (PB/E unearned, WP earned).
+  const buttons: { src: K3ReachSource; label: string }[] = [
+    { src: "WP", label: "K-WP" },
+    { src: "PB", label: "K-PB" },
+    { src: "E", label: "K-E" },
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {buttons.map((b) => (
+        <Button
+          key={b.src}
+          variant="outline"
+          disabled={disabled}
+          onClick={() => onK3Reach(b.src)}
+          className="text-xs"
+          title={`Strikeout, batter reached on ${b.src === "WP" ? "wild pitch" : b.src === "PB" ? "passed ball" : "error"}`}
+        >
+          {b.label}
+        </Button>
+      ))}
     </div>
   );
 }
@@ -583,7 +891,7 @@ function ButtonRow({
   disabled: boolean;
   onPick: (r: AtBatResult) => void;
   results: AtBatResult[];
-  variant: "default" | "hit" | "out";
+  variant: "default" | "hit" | "out" | "other";
   armedResult: AtBatResult | null;
 }) {
   const cls =
@@ -591,7 +899,9 @@ function ButtonRow({
       ? "bg-sa-orange hover:bg-sa-orange/90 text-white"
       : variant === "out"
         ? "bg-muted hover:bg-muted/80 text-foreground"
-        : "bg-sa-blue hover:bg-sa-blue/90 text-white";
+        : variant === "other"
+          ? "bg-sa-blue-deep/80 hover:bg-sa-blue-deep text-white"
+          : "bg-sa-blue hover:bg-sa-blue/90 text-white";
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
       {results.map((r) => {
@@ -618,6 +928,8 @@ function FlowControls({
   onSubstitution,
   onEditLastPlay,
   onFinalize,
+  onMoundVisit,
+  conferencesThisGame,
   disabled,
   outs,
   canEdit,
@@ -627,10 +939,20 @@ function FlowControls({
   onSubstitution: () => void;
   onEditLastPlay: () => void;
   onFinalize: () => void;
+  onMoundVisit: () => void;
+  /** Conferences charged to the CURRENT pitcher this game. Drives the
+   *  3-warning / 4-forced-removal copy (NFHS 3-4-1; PDF §28.9). */
+  conferencesThisGame: number;
   disabled: boolean;
   outs: number;
   canEdit: boolean;
 }) {
+  const moundVisitTitle =
+    conferencesThisGame >= 4
+      ? "4 conferences — pitcher must be removed"
+      : conferencesThisGame === 3
+        ? "Warning: 3 conferences — next forces a pitching change (NFHS 3-4-1)"
+        : `${conferencesThisGame} conferences charged this game`;
   return (
     <div className="flex flex-wrap items-center gap-3 pt-2 border-t">
       <Button variant="outline" disabled={disabled} onClick={onEndHalf}>
@@ -641,6 +963,19 @@ function FlowControls({
       </Button>
       <Button variant="outline" disabled={disabled} onClick={onPitchingChange}>
         Pitching change
+      </Button>
+      <Button
+        variant="outline"
+        disabled={disabled}
+        onClick={onMoundVisit}
+        title={moundVisitTitle}
+        className={
+          conferencesThisGame >= 3
+            ? "border-sa-orange text-sa-orange"
+            : undefined
+        }
+      >
+        Mound visit{conferencesThisGame > 0 ? ` (${conferencesThisGame})` : ""}
       </Button>
       <Button variant="outline" disabled={disabled || !canEdit} onClick={onEditLastPlay}>
         Edit last play
@@ -666,7 +1001,7 @@ function PitchingChangeDialog({
   open,
   onOpenChange,
   roster,
-  currentPitcherId,
+  state,
   names,
   onPick,
   disabled,
@@ -674,13 +1009,68 @@ function PitchingChangeDialog({
   open: boolean;
   onOpenChange: (b: boolean) => void;
   roster: RosterDisplay[];
-  currentPitcherId: string | null;
+  state: ReplayState;
   names: Map<string, string>;
   onPick: (id: string) => void;
   disabled: boolean;
 }) {
+  const [pending, setPending] = useState<string | null>(null);
+
+  // Reset confirmation state on open/close.
+  useEffect(() => {
+    if (!open) setPending(null);
+  }, [open]);
+
+  const currentPitcherId = state.current_pitcher_id;
   const currentName = currentPitcherId ? names.get(currentPitcherId) : null;
   const candidates = roster.filter((p) => p.id !== currentPitcherId);
+
+  // Side-effect description for the confirmation step.
+  const lineupSlotOf = (pid: string | null) =>
+    state.our_lineup.find((s) => s.player_id === pid) ?? null;
+  const sideEffect = (newPitcherId: string): string | null => {
+    if (state.use_dh) return null;
+    const newSlot = lineupSlotOf(newPitcherId);
+    const oldSlot = lineupSlotOf(currentPitcherId);
+    if (newSlot) {
+      return `${names.get(newPitcherId) ?? "Player"} stays in slot ${newSlot.batting_order}; their position becomes P.`;
+    }
+    if (oldSlot && currentPitcherId) {
+      return `${names.get(newPitcherId) ?? "New pitcher"} takes slot ${oldSlot.batting_order} from ${currentName ?? "the current pitcher"}.`;
+    }
+    return null;
+  };
+
+  if (pending) {
+    const newName = names.get(pending) ?? "the new pitcher";
+    const note = sideEffect(pending);
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm pitching change</DialogTitle>
+            <DialogDescription>
+              {currentName ? <>{currentName} → {newName}.</> : <>Bring in {newName}.</>}
+              {note && <> {note}</>}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={disabled} onClick={() => setPending(null)}>
+              Back
+            </Button>
+            <Button
+              disabled={disabled}
+              onClick={() => onPick(pending)}
+              className="bg-sa-orange hover:bg-sa-orange/90"
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -699,7 +1089,7 @@ function PitchingChangeDialog({
                   key={p.id}
                   variant="outline"
                   disabled={disabled}
-                  onClick={() => onPick(p.id)}
+                  onClick={() => setPending(p.id)}
                   className="h-14 justify-start text-left"
                 >
                   <span className="font-mono-stat text-sa-blue-deep mr-2">{num}</span>
@@ -726,6 +1116,8 @@ function PitchingChangeDialog({
 
 const SUB_POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"] as const;
 
+type SubKind = SubstitutionPayload["sub_type"];
+
 function SubstitutionDialog({
   open,
   onOpenChange,
@@ -743,16 +1135,20 @@ function SubstitutionDialog({
   onSubmit: (payload: SubstitutionPayload) => void;
   disabled: boolean;
 }) {
+  const [subKind, setSubKind] = useState<SubKind>("regular");
   const [slotOrder, setSlotOrder] = useState<number | null>(null);
   const [inPlayerId, setInPlayerId] = useState<string | null>(null);
   const [position, setPosition] = useState<string | null>(null);
+  const [originalBase, setOriginalBase] = useState<"first" | "second" | "third" | null>(null);
 
   // Reset state when the dialog closes so reopening starts fresh.
   useEffect(() => {
     if (!open) {
+      setSubKind("regular");
       setSlotOrder(null);
       setInPlayerId(null);
       setPosition(null);
+      setOriginalBase(null);
     }
   }, [open]);
 
@@ -764,19 +1160,109 @@ function SubstitutionDialog({
     (p) => !lineupIds.has(p.id) && p.id !== state.current_pitcher_id,
   );
 
+  // Eligible re-entry slots: starter is currently OUT (slot.player_id !==
+  // original_player_id) AND has not already re-entered.
+  const reEntrySlots = state.our_lineup.filter(
+    (s) => s.is_starter && !s.re_entered && s.player_id !== s.original_player_id && s.original_player_id,
+  );
+
+  // Occupied bases — needed for pinch_run / courtesy_run.
+  const occupiedBases = (["first", "second", "third"] as const).filter(
+    (b) => state.bases[b] !== null,
+  );
+
+  // Courtesy-runner role — derived from which baserunner matches the
+  // current pitcher / catcher.
+  const catcherSlot = state.our_lineup.find((s) => s.position === "C");
+  const catcherId = catcherSlot?.player_id ?? null;
+  const baseRunnerId = originalBase ? state.bases[originalBase]?.player_id ?? null : null;
+  const courtesyRole: "pitcher" | "catcher" | null =
+    baseRunnerId === state.current_pitcher_id
+      ? "pitcher"
+      : baseRunnerId === catcherId
+        ? "catcher"
+        : null;
+  const courtesyAlreadyUsedForRole = courtesyRole
+    ? state.courtesy_runners_used.some((c) => c.role === courtesyRole)
+    : false;
+
   const outName = slot?.player_id ? names.get(slot.player_id) ?? null : null;
-  const canSubmit =
-    !disabled && slot?.player_id && inPlayerId && inPlayerId !== slot.player_id;
+
+  const canSubmit = (() => {
+    if (disabled) return false;
+    if (subKind === "regular" || subKind === "pinch_hit") {
+      return !!(slot?.player_id && inPlayerId && inPlayerId !== slot.player_id);
+    }
+    if (subKind === "pinch_run") {
+      return !!(originalBase && baseRunnerId && inPlayerId && inPlayerId !== baseRunnerId);
+    }
+    if (subKind === "courtesy_run") {
+      return !!(originalBase && baseRunnerId && inPlayerId && courtesyRole && !courtesyAlreadyUsedForRole);
+    }
+    if (subKind === "re_entry") {
+      return !!(slotOrder && slot?.original_player_id && inPlayerId === slot.original_player_id);
+    }
+    return false;
+  })();
 
   const handleSubmit = () => {
-    if (!slot?.player_id || !inPlayerId || !slotOrder) return;
-    onSubmit({
-      out_player_id: slot.player_id,
-      in_player_id: inPlayerId,
-      batting_order: slotOrder,
-      position: position ?? slot.position ?? null,
-      sub_type: "regular",
-    });
+    if (subKind === "regular" || subKind === "pinch_hit") {
+      if (!slot?.player_id || !inPlayerId || !slotOrder) return;
+      onSubmit({
+        out_player_id: slot.player_id,
+        in_player_id: inPlayerId,
+        batting_order: slotOrder,
+        position: position ?? slot.position ?? null,
+        sub_type: subKind,
+      });
+      return;
+    }
+    if (subKind === "pinch_run") {
+      if (!originalBase || !baseRunnerId || !inPlayerId) return;
+      // Pinch-runner replaces the player in the lineup too. Find their slot.
+      const runnerSlot = state.our_lineup.find((s) => s.player_id === baseRunnerId);
+      onSubmit({
+        out_player_id: baseRunnerId,
+        in_player_id: inPlayerId,
+        batting_order: runnerSlot?.batting_order ?? 0,
+        position: runnerSlot?.position ?? null,
+        sub_type: "pinch_run",
+        original_base: originalBase,
+      });
+      return;
+    }
+    if (subKind === "courtesy_run") {
+      if (!originalBase || !baseRunnerId || !inPlayerId) return;
+      onSubmit({
+        out_player_id: baseRunnerId,
+        in_player_id: inPlayerId,
+        batting_order: 0, // courtesy runner doesn't take the lineup slot
+        position: null,
+        sub_type: "courtesy_run",
+        original_base: originalBase,
+      });
+      return;
+    }
+    if (subKind === "re_entry") {
+      if (!slotOrder || !slot?.original_player_id || inPlayerId !== slot.original_player_id) return;
+      const outId = slot.player_id ?? "";
+      onSubmit({
+        out_player_id: outId,
+        in_player_id: slot.original_player_id,
+        batting_order: slotOrder,
+        position: position ?? slot.position ?? null,
+        sub_type: "re_entry",
+      });
+      return;
+    }
+  };
+
+  const subKindLabel: Record<SubKind, string> = {
+    regular: "Regular",
+    pinch_hit: "Pinch hit",
+    pinch_run: "Pinch run",
+    courtesy_run: "Courtesy run (NFHS)",
+    re_entry: "Re-entry",
   };
 
   return (
@@ -785,83 +1271,191 @@ function SubstitutionDialog({
         <DialogHeader>
           <DialogTitle>Substitution</DialogTitle>
           <DialogDescription>
-            Replace a player in the lineup. The new player keeps the slot&apos;s batting order.
+            Replace a player. Pinch run swaps the lineup; courtesy run is
+            NFHS-only and doesn&apos;t change the batting order.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           <div>
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Lineup slot</Label>
-            <Select
-              value={slotOrder ? String(slotOrder) : ""}
-              onValueChange={(v) => {
-                const n = Number(v);
-                setSlotOrder(n);
-                const target = state.our_lineup.find((s) => s.batting_order === n);
-                setPosition(target?.position ?? null);
-              }}
-            >
-              <SelectTrigger><SelectValue placeholder="— pick slot —" /></SelectTrigger>
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Type</Label>
+            <Select value={subKind} onValueChange={(v) => setSubKind(v as SubKind)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {state.our_lineup.map((s) => {
-                  const who = s.player_id ? names.get(s.player_id) ?? "—" : "(empty)";
-                  return (
-                    <SelectItem key={s.batting_order} value={String(s.batting_order)}>
-                      {s.batting_order}. {who}{s.position ? ` (${s.position})` : ""}
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-            {outName && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Coming out: <span className="font-semibold text-sa-blue-deep">{outName}</span>
-              </p>
-            )}
-          </div>
-
-          <div>
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Coming in</Label>
-            <Select
-              value={inPlayerId ?? ""}
-              onValueChange={(v) => setInPlayerId(v || null)}
-              disabled={!slotOrder}
-            >
-              <SelectTrigger><SelectValue placeholder={slotOrder ? "— pick bench player —" : "Pick a slot first"} /></SelectTrigger>
-              <SelectContent>
-                {benchPlayers.length === 0 && (
-                  <div className="px-2 py-1.5 text-sm text-muted-foreground">No bench players available.</div>
-                )}
-                {benchPlayers.map((p) => {
-                  const num = p.jersey_number ? `#${p.jersey_number} ` : "";
-                  return (
-                    <SelectItem key={p.id} value={p.id}>
-                      {num}{p.first_name} {p.last_name}
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Position</Label>
-            <Select
-              value={position ?? ""}
-              onValueChange={(v) => setPosition(v || null)}
-              disabled={!slotOrder}
-            >
-              <SelectTrigger><SelectValue placeholder="— position —" /></SelectTrigger>
-              <SelectContent>
-                {SUB_POSITIONS.filter((pos) => pos !== "DH" || state.use_dh).map((pos) => (
-                  <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+                {(Object.keys(subKindLabel) as SubKind[]).map((k) => (
+                  <SelectItem key={k} value={k}>{subKindLabel[k]}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground mt-1">
-              Defaults to the slot&apos;s current position. Pitching changes are handled separately.
-            </p>
           </div>
+
+          {(subKind === "regular" || subKind === "pinch_hit") && (
+            <>
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Lineup slot</Label>
+                <Select
+                  value={slotOrder ? String(slotOrder) : ""}
+                  onValueChange={(v) => {
+                    const n = Number(v);
+                    setSlotOrder(n);
+                    const target = state.our_lineup.find((s) => s.batting_order === n);
+                    setPosition(target?.position ?? null);
+                  }}
+                >
+                  <SelectTrigger><SelectValue placeholder="— pick slot —" /></SelectTrigger>
+                  <SelectContent>
+                    {state.our_lineup.map((s) => {
+                      const who = s.player_id ? names.get(s.player_id) ?? "—" : "(empty)";
+                      return (
+                        <SelectItem key={s.batting_order} value={String(s.batting_order)}>
+                          {s.batting_order}. {who}{s.position ? ` (${s.position})` : ""}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                {outName && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Coming out: <span className="font-semibold text-sa-blue-deep">{outName}</span>
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Coming in</Label>
+                <Select
+                  value={inPlayerId ?? ""}
+                  onValueChange={(v) => setInPlayerId(v || null)}
+                  disabled={!slotOrder}
+                >
+                  <SelectTrigger><SelectValue placeholder={slotOrder ? "— pick bench player —" : "Pick a slot first"} /></SelectTrigger>
+                  <SelectContent>
+                    {benchPlayers.length === 0 && (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No bench players available.</div>
+                    )}
+                    {benchPlayers.map((p) => {
+                      const num = p.jersey_number ? `#${p.jersey_number} ` : "";
+                      return (
+                        <SelectItem key={p.id} value={p.id}>
+                          {num}{p.first_name} {p.last_name}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Position</Label>
+                <Select
+                  value={position ?? ""}
+                  onValueChange={(v) => setPosition(v || null)}
+                  disabled={!slotOrder}
+                >
+                  <SelectTrigger><SelectValue placeholder="— position —" /></SelectTrigger>
+                  <SelectContent>
+                    {SUB_POSITIONS.filter((pos) => pos !== "DH" || state.use_dh).map((pos) => (
+                      <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
+          {(subKind === "pinch_run" || subKind === "courtesy_run") && (
+            <>
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Runner on base</Label>
+                <Select
+                  value={originalBase ?? ""}
+                  onValueChange={(v) => setOriginalBase((v || null) as "first" | "second" | "third" | null)}
+                >
+                  <SelectTrigger><SelectValue placeholder={occupiedBases.length ? "— pick base —" : "No runners on base"} /></SelectTrigger>
+                  <SelectContent>
+                    {occupiedBases.map((b) => {
+                      const id = state.bases[b]?.player_id ?? null;
+                      const who = id ? names.get(id) ?? "Runner" : "Runner";
+                      return (
+                        <SelectItem key={b} value={b}>
+                          {b === "first" ? "1B" : b === "second" ? "2B" : "3B"} — {who}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {subKind === "courtesy_run" && originalBase && !courtesyRole && (
+                <p className="text-xs text-sa-orange">
+                  Courtesy runner is NFHS-only and only valid for the pitcher or catcher of record.
+                </p>
+              )}
+              {subKind === "courtesy_run" && courtesyRole && courtesyAlreadyUsedForRole && (
+                <p className="text-xs text-sa-orange">
+                  A courtesy runner has already been used for the {courtesyRole} this game.
+                </p>
+              )}
+
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Runner coming in</Label>
+                <Select
+                  value={inPlayerId ?? ""}
+                  onValueChange={(v) => setInPlayerId(v || null)}
+                  disabled={!originalBase}
+                >
+                  <SelectTrigger><SelectValue placeholder={originalBase ? "— pick bench player —" : "Pick a base first"} /></SelectTrigger>
+                  <SelectContent>
+                    {benchPlayers.length === 0 && (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No bench players available.</div>
+                    )}
+                    {benchPlayers.map((p) => {
+                      const num = p.jersey_number ? `#${p.jersey_number} ` : "";
+                      return (
+                        <SelectItem key={p.id} value={p.id}>
+                          {num}{p.first_name} {p.last_name}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
+          {subKind === "re_entry" && (
+            <>
+              <div>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Eligible starter slot</Label>
+                <Select
+                  value={slotOrder ? String(slotOrder) : ""}
+                  onValueChange={(v) => {
+                    const n = Number(v);
+                    setSlotOrder(n);
+                    const s = state.our_lineup.find((x) => x.batting_order === n);
+                    setInPlayerId(s?.original_player_id ?? null);
+                    setPosition(s?.position ?? null);
+                  }}
+                >
+                  <SelectTrigger><SelectValue placeholder={reEntrySlots.length ? "— pick slot —" : "No eligible re-entries"} /></SelectTrigger>
+                  <SelectContent>
+                    {reEntrySlots.map((s) => {
+                      const original = s.original_player_id ? names.get(s.original_player_id) ?? "Starter" : "Starter";
+                      const current = s.player_id ? names.get(s.player_id) ?? "—" : "(empty)";
+                      return (
+                        <SelectItem key={s.batting_order} value={String(s.batting_order)}>
+                          {s.batting_order}. {original} (currently {current})
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  NFHS Rule 3-1-3: a starter may re-enter once, in their original slot.
+                </p>
+              </div>
+            </>
+          )}
         </div>
 
         <DialogFooter>
@@ -881,56 +1475,380 @@ const EDIT_RESULTS: AtBatResult[] = [
   ...NON_CONTACT,
   ...HITS,
   ...OUTS_IN_PLAY,
+  ...OTHER_IN_PLAY,
+  ...PRODUCTIVE,
 ];
+
+type AdvanceDest = "first" | "second" | "third" | "home" | "out" | "held";
+type AdvanceSource = "batter" | "first" | "second" | "third";
+
+interface EditableAdvance {
+  source: AdvanceSource;
+  player_id: string | null;
+  dest: AdvanceDest;
+}
+
+const DEST_LABEL: Record<AdvanceDest, string> = {
+  first: "1st",
+  second: "2nd",
+  third: "3rd",
+  home: "Home",
+  out: "Out",
+  held: "Held",
+};
+
+function sourceLabel(source: AdvanceSource): string {
+  if (source === "batter") return "Batter";
+  if (source === "first") return "On 1st";
+  if (source === "second") return "On 2nd";
+  return "On 3rd";
+}
+
+// Build editable advance rows from bases-before plus the batter, seeded
+// from a runner_advances list (defaults or existing).
+function seedAdvances(
+  basesBefore: Bases,
+  batterId: string | null,
+  seed: RunnerAdvance[],
+): EditableAdvance[] {
+  const sources: { source: AdvanceSource; player_id: string | null }[] = [
+    { source: "batter", player_id: batterId },
+  ];
+  if (basesBefore.third) sources.push({ source: "third", player_id: basesBefore.third.player_id });
+  if (basesBefore.second) sources.push({ source: "second", player_id: basesBefore.second.player_id });
+  if (basesBefore.first) sources.push({ source: "first", player_id: basesBefore.first.player_id });
+
+  return sources.map((s) => {
+    const match = seed.find((a) => a.from === s.source);
+    let dest: AdvanceDest = "held";
+    if (match) {
+      if (match.to === "home") dest = "home";
+      else if (match.to === "out") dest = "out";
+      else dest = match.to;
+    } else if (s.source === "batter") {
+      // Batter wasn't placed by the seed — must be an out (e.g., K, FO).
+      dest = "out";
+    }
+    return { source: s.source, player_id: s.player_id, dest };
+  });
+}
+
+function editableToRunnerAdvances(rows: EditableAdvance[]): RunnerAdvance[] {
+  const out: RunnerAdvance[] = [];
+  for (const r of rows) {
+    if (r.dest === "held") continue;
+    out.push({
+      from: r.source,
+      to: r.dest,
+      player_id: r.player_id,
+    });
+  }
+  return out;
+}
 
 function EditLastPlayDialog({
   open,
   onOpenChange,
+  gameId,
   lastAtBat,
-  onPick,
+  names,
+  onSubmit,
   disabled,
 }: {
   open: boolean;
   onOpenChange: (b: boolean) => void;
+  gameId: string;
   lastAtBat: DerivedAtBat | null;
-  onPick: (r: AtBatResult) => void;
+  names: Map<string, string>;
+  onSubmit: (supersededEventId: string, correctedAtBat: AtBatPayload) => void;
   disabled: boolean;
 }) {
+  const [loading, setLoading] = useState(false);
+  const [basesBefore, setBasesBefore] = useState<Bases | null>(null);
+  const [result, setResult] = useState<AtBatResult | null>(null);
+  const [balls, setBalls] = useState(0);
+  const [strikes, setStrikes] = useState(0);
+  const [advances, setAdvances] = useState<EditableAdvance[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load bases-before whenever the dialog opens for a fresh at-bat.
+  useEffect(() => {
+    if (!open || !lastAtBat) return;
+    let active = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      const { data, error: e } = await supabase
+        .from("game_events")
+        .select("*")
+        .eq("game_id", gameId)
+        .order("sequence_number", { ascending: true });
+      if (!active) return;
+      if (e) {
+        setError(`Couldn't load events: ${e.message}`);
+        setLoading(false);
+        return;
+      }
+      const events = (data ?? []) as unknown as GameEventRecord[];
+      const target = events.find((ev) => ev.id === lastAtBat.event_id);
+      if (!target) {
+        setError("Couldn't find the original event.");
+        setLoading(false);
+        return;
+      }
+      // For chained edits, lastAtBat.event_id is the previous correction's
+      // id. The original at_bat (and any earlier corrections) are in the
+      // event log with seq < target.seq but are superseded by later
+      // corrections. Strip those out so replay() yields bases-BEFORE the
+      // play we're editing, not bases-AFTER an old version of it.
+      const supersededIds = new Set<string>();
+      for (const ev of events) {
+        if (ev.event_type === "correction") {
+          const p = ev.payload as CorrectionPayload;
+          supersededIds.add(p.superseded_event_id);
+        }
+      }
+      const before = events.filter(
+        (ev) =>
+          ev.sequence_number < target.sequence_number
+          && !supersededIds.has(ev.id),
+      );
+      const stateBefore = replay(before);
+      setBasesBefore(stateBefore.bases);
+      setResult(lastAtBat.result);
+      setBalls(lastAtBat.balls);
+      setStrikes(lastAtBat.strikes);
+      setAdvances(seedAdvances(stateBefore.bases, lastAtBat.batter_id, lastAtBat.runner_advances));
+      setLoading(false);
+    })();
+    return () => { active = false; };
+  }, [open, lastAtBat, gameId]);
+
+  // When the user picks a different result, reseed advances from defaults.
+  const onResultChange = (r: AtBatResult) => {
+    setResult(r);
+    if (basesBefore && lastAtBat) {
+      const seeded = defaultAdvances(basesBefore, lastAtBat.batter_id, r);
+      setAdvances(seedAdvances(basesBefore, lastAtBat.batter_id, seeded));
+    }
+  };
+
+  const setRowDest = (idx: number, dest: AdvanceDest) => {
+    setAdvances((prev) => prev.map((row, i) => (i === idx ? { ...row, dest } : row)));
+  };
+
+  const handleSubmit = () => {
+    if (!lastAtBat || !result) return;
+    const newAdvances = editableToRunnerAdvances(advances);
+    const rbi = basesBefore
+      ? autoRBI(newAdvances, result, basesBefore)
+      : newAdvances.filter((a) => a.to === "home").length;
+    const corrected: AtBatPayload = {
+      inning: lastAtBat.inning,
+      half: lastAtBat.half,
+      batter_id: lastAtBat.batter_id,
+      pitcher_id: lastAtBat.pitcher_id,
+      opponent_pitcher_id: lastAtBat.opponent_pitcher_id,
+      batting_order: lastAtBat.batting_order,
+      result,
+      rbi,
+      pitch_count: balls + strikes,
+      balls,
+      strikes,
+      spray_x: lastAtBat.spray_x,
+      spray_y: lastAtBat.spray_y,
+      fielder_position: lastAtBat.fielder_position,
+      runner_advances: newAdvances,
+      description: describePlay(result, rbi, lastAtBat.batter_id, names),
+    };
+    onSubmit(lastAtBat.event_id, corrected);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Edit last play</DialogTitle>
           <DialogDescription>
-            Replace the last at-bat&apos;s result. Bases, outs, and runs re-derive from the
-            new outcome. Spray location and fielder carry forward; re-record the play
-            from scratch if those need to change.
+            Adjust the result, count, and runner movement. Spray location and fielder carry
+            forward; re-record the play from scratch if those need to change.
           </DialogDescription>
         </DialogHeader>
-        {lastAtBat && (
-          <p className="text-sm text-muted-foreground border-l-2 border-sa-blue pl-3 my-2">
-            Currently: <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[lastAtBat.result] ?? lastAtBat.result}</span>
-            {lastAtBat.description ? <> — {lastAtBat.description}</> : null}
-          </p>
+        {loading && <p className="text-sm text-muted-foreground py-4">Loading…</p>}
+        {error && <p className="text-sm text-destructive py-2">{error}</p>}
+        {!loading && !error && lastAtBat && result && (
+          <div className="space-y-4 py-2">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Result</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {EDIT_RESULTS.map((r) => (
+                  <Button
+                    key={r}
+                    variant={r === result ? "default" : "outline"}
+                    disabled={disabled}
+                    onClick={() => onResultChange(r)}
+                    className="h-10 font-bold"
+                    title={RESULT_DESC[r] ?? r}
+                  >
+                    {RESULT_LABEL[r]}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Count</p>
+              <div className="flex items-center gap-6">
+                <Counter label="Balls" max={4} value={balls} onChange={setBalls} />
+                <Counter label="Strikes" max={3} value={strikes} onChange={setStrikes} />
+                <span className="font-mono-stat text-xl text-sa-blue-deep">{balls}-{strikes}</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Runner movement</p>
+              <div className="space-y-2">
+                {advances.map((row, i) => {
+                  const who = row.player_id ? names.get(row.player_id) ?? "—" : sourceLabel(row.source);
+                  return (
+                    <div key={`${row.source}-${i}`} className="grid grid-cols-12 items-center gap-2">
+                      <div className="col-span-5 text-sm">
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground">{sourceLabel(row.source)}</span>
+                        {row.player_id && (
+                          <span className="ml-2 font-semibold text-sa-blue-deep">{who}</span>
+                        )}
+                      </div>
+                      <div className="col-span-7">
+                        <Select value={row.dest} onValueChange={(v) => setRowDest(i, v as AdvanceDest)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {(Object.keys(DEST_LABEL) as AdvanceDest[]).map((d) => (
+                              <SelectItem key={d} value={d}>{DEST_LABEL[d]}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  );
+                })}
+                {advances.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No runners.</p>
+                )}
+              </div>
+            </div>
+          </div>
         )}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 py-2">
-          {EDIT_RESULTS.map((r) => (
-            <Button
-              key={r}
-              variant="outline"
-              disabled={disabled || !lastAtBat || lastAtBat.result === r}
-              onClick={() => onPick(r)}
-              className="h-12 font-bold"
-              title={RESULT_DESC[r] ?? r}
-            >
-              {RESULT_LABEL[r]}
-            </Button>
-          ))}
-        </div>
         <DialogFooter>
           <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
+          <Button
+            disabled={disabled || loading || !!error || !result}
+            onClick={handleSubmit}
+            className="bg-sa-orange hover:bg-sa-orange/90"
+          >
+            Save changes
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// All-runners-up advance plan for WP/PB/Balk — every occupied base moves
+// one base forward. Used as the default when the coach taps WP/PB/Balk on
+// any runner; user can refine via Edit Last Play if needed (Phase C work).
+function allUpAdvances(bases: Bases): RunnerAdvance[] {
+  const advances: RunnerAdvance[] = [];
+  if (bases.third) advances.push({ from: "third", to: "home", player_id: bases.third.player_id });
+  if (bases.second) advances.push({ from: "second", to: "third", player_id: bases.second.player_id });
+  if (bases.first) advances.push({ from: "first", to: "second", player_id: bases.first.player_id });
+  return advances;
+}
+
+function RunnerActionDialog({
+  action,
+  onClose,
+  names,
+  bases,
+  onSubmit,
+  disabled,
+}: {
+  action: { base: "first" | "second" | "third"; runnerId: string | null } | null;
+  onClose: () => void;
+  names: Map<string, string>;
+  bases: Bases;
+  onSubmit: (
+    eventType: GameEventType,
+    payload: StolenBasePayload | CaughtStealingPayload | PickoffPayload | RunnerMovePayload,
+    clientPrefix: string,
+  ) => void;
+  disabled: boolean;
+}) {
+  const open = action !== null;
+  const runnerName = action?.runnerId ? names.get(action.runnerId) ?? "Runner" : "Runner";
+  const stealTarget: "second" | "third" | "home" | null =
+    action?.base === "first" ? "second"
+    : action?.base === "second" ? "third"
+    : action?.base === "third" ? "home"
+    : null;
+  const stealLabel = stealTarget === "home" ? "Steal home"
+    : stealTarget === "third" ? "Steal 3rd"
+    : "Steal 2nd";
+
+  const steal = () => {
+    if (!action || !stealTarget) return;
+    const payload: StolenBasePayload = {
+      runner_id: action.runnerId,
+      from: action.base,
+      to: stealTarget,
+    };
+    onSubmit("stolen_base", payload, `sb-${action.base}`);
+  };
+  const caughtStealing = () => {
+    if (!action) return;
+    const payload: CaughtStealingPayload = { runner_id: action.runnerId, from: action.base };
+    onSubmit("caught_stealing", payload, `cs-${action.base}`);
+  };
+  const pickoff = () => {
+    if (!action) return;
+    const payload: PickoffPayload = { runner_id: action.runnerId, from: action.base };
+    onSubmit("pickoff", payload, `po-${action.base}`);
+  };
+  const allUp = (eventType: GameEventType, prefix: string) => {
+    const payload: RunnerMovePayload = { advances: allUpAdvances(bases) };
+    onSubmit(eventType, payload, prefix);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(b) => { if (!b) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{runnerName} on {action?.base === "first" ? "1st" : action?.base === "second" ? "2nd" : "3rd"}</DialogTitle>
+          <DialogDescription>
+            Pick what happened. Wild pitch, passed ball, and balk advance every runner one base.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-2 py-2">
+          <Button onClick={steal} disabled={disabled} className="bg-sa-orange hover:bg-sa-orange/90 text-white">
+            {stealLabel}
+          </Button>
+          <Button onClick={caughtStealing} disabled={disabled} variant="outline">
+            Caught stealing
+          </Button>
+          <Button onClick={pickoff} disabled={disabled} variant="outline">
+            Pickoff out
+          </Button>
+          <Button onClick={() => allUp("wild_pitch", "wp")} disabled={disabled} variant="outline">
+            Wild pitch
+          </Button>
+          <Button onClick={() => allUp("passed_ball", "pb")} disabled={disabled} variant="outline">
+            Passed ball
+          </Button>
+          <Button onClick={() => allUp("balk", "bk")} disabled={disabled} variant="outline">
+            Balk
+          </Button>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={disabled}>Cancel</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
