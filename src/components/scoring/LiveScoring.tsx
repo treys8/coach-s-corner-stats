@@ -146,6 +146,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
   const router = useRouter();
   const isMobile = useIsMobile();
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
+  const [events, setEvents] = useState<GameEventRecord[]>([]);
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -186,6 +187,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
       }
       const events = (data ?? []) as unknown as GameEventRecord[];
       setState(replay(events));
+      setEvents(events);
       setLastSeq(events.reduce((m, e) => Math.max(m, e.sequence_number), 0));
       setLoading(false);
     })();
@@ -198,6 +200,28 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
     [state.our_lineup, state.current_batter_slot],
   );
 
+  // The most recent event a coach can revert. Walks the event log backwards,
+  // skipping void/correction events and events already superseded by a prior
+  // correction. `game_started` is intentionally not undoable from the live
+  // screen (un-finalize lives on the FinalStub).
+  const lastUndoableEvent = useMemo(() => {
+    const supersededIds = new Set<string>();
+    for (const ev of events) {
+      if (ev.event_type === "correction") {
+        const p = ev.payload as CorrectionPayload;
+        supersededIds.add(p.superseded_event_id);
+      }
+    }
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.event_type === "correction") continue;
+      if (supersededIds.has(ev.id)) continue;
+      if (ev.event_type === "game_started") return null;
+      return ev;
+    }
+    return null;
+  }, [events]);
+
   const onOutcomePicked = (result: AtBatResult) => {
     if (submitting) return;
     if (isInPlay(result)) {
@@ -208,6 +232,31 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
     void submitAtBat(result, null);
   };
 
+  // If a posted event caused outs to cross 3, auto-emit `inning_end` so the
+  // coach doesn't have to tap End ½ inning every half. Undo can revert this
+  // if a CS / pickoff for the 3rd out had follow-up the coach still wants
+  // to record.
+  const maybeAutoEndHalf = async (
+    prevOuts: number,
+    snap: { state: ReplayState; events: GameEventRecord[] },
+  ) => {
+    if (prevOuts >= 3) return;
+    if (snap.state.outs < 3) return;
+    if (snap.state.status !== "in_progress") return;
+    const nextSeq = snap.events.reduce((m, e) => Math.max(m, e.sequence_number), 0) + 1;
+    const halfLabel = snap.state.half === "top" ? "Top" : "Bot";
+    const inning = snap.state.inning;
+    const ok = await postEvent(gameId, {
+      client_event_id: `ie-auto-${inning}-${snap.state.half}-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: "inning_end",
+      payload: { inning, half: snap.state.half },
+    });
+    if (!ok) return;
+    toast.success(`End ${halfLabel} ${inning}. Tap Undo to revert.`);
+    await refresh();
+  };
+
   const submitAtBat = async (
     result: AtBatResult,
     spray: { x: number; y: number; fielder: FielderPosition } | null,
@@ -215,6 +264,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
   ) => {
     if (submitting) return;
     setSubmitting(true);
+    const prevOuts = state.outs;
     const batterId = weAreBatting ? currentSlot?.player_id ?? null : null;
     // K3-reach: pitcher gets the K, batter goes to first instead of being out.
     // Override defaultAdvances with an explicit batter→first plan; downstream
@@ -260,27 +310,92 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
       event_type: "at_bat",
       payload,
     });
-    setSubmitting(false);
-    if (!ok) return;
-
+    if (!ok) {
+      setSubmitting(false);
+      return;
+    }
     setArmedResult(null);
-    await refresh();
+    const snap = await refresh();
+    if (snap) await maybeAutoEndHalf(prevOuts, snap);
+    setSubmitting(false);
+  };
+
+  // If this pitch closes the at-bat, auto-emit the corresponding outcome
+  // with the next sequence number so the coach doesn't have to tap BB/K/HBP
+  // after filling the count. Foul-with-2-strikes and in-play never close
+  // the AB. Intentional ball 4 → IBB; pitchout/ball 4 → BB.
+  const closingResultForPitch = (pitchType: PitchType): AtBatResult | null => {
+    if (pitchType === "ball" && state.current_balls === 3) return "BB";
+    if (pitchType === "pitchout" && state.current_balls === 3) return "BB";
+    if (pitchType === "intentional_ball" && state.current_balls === 3) return "IBB";
+    if (pitchType === "called_strike" && state.current_strikes === 2) return "K_looking";
+    if (pitchType === "swinging_strike" && state.current_strikes === 2) return "K_swinging";
+    if (pitchType === "foul_tip_caught" && state.current_strikes === 2) return "K_swinging";
+    if (pitchType === "hbp") return "HBP";
+    return null;
   };
 
   const submitPitch = async (pitchType: PitchType) => {
     if (submitting) return;
     setSubmitting(true);
-    const payload: PitchPayload = { pitch_type: pitchType };
-    const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
-      client_event_id: `pitch-${nextSeq}`,
-      sequence_number: nextSeq,
+    const prevOuts = state.outs;
+    const baseSeq = lastSeq + 1;
+    const okPitch = await postEvent(gameId, {
+      client_event_id: `pitch-${baseSeq}`,
+      sequence_number: baseSeq,
       event_type: "pitch",
-      payload,
+      payload: { pitch_type: pitchType },
     });
+    if (!okPitch) {
+      setSubmitting(false);
+      return;
+    }
+
+    const closing = closingResultForPitch(pitchType);
+    if (closing) {
+      // The engine prefers the pitch trail over the payload balls/strikes
+      // when deriving the AB count; we still pass finalCount as a fallback.
+      const batterId = weAreBatting ? currentSlot?.player_id ?? null : null;
+      const advances = defaultAdvances(state.bases, batterId, closing);
+      const runs = advances.filter((a) => a.to === "home").length;
+      const rbi = autoRBI(advances, closing, state.bases);
+      const fallback = finalCount(closing, state.current_balls, state.current_strikes);
+      const abPayload: AtBatPayload = {
+        inning: state.inning,
+        half: state.half,
+        batter_id: batterId,
+        pitcher_id: weAreBatting ? null : state.current_pitcher_id,
+        opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
+        batting_order: weAreBatting ? state.current_batter_slot : null,
+        result: closing,
+        rbi,
+        pitch_count: fallback.balls + fallback.strikes,
+        balls: fallback.balls,
+        strikes: fallback.strikes,
+        spray_x: null,
+        spray_y: null,
+        fielder_position: null,
+        runner_advances: advances,
+        description: describePlay(closing, runs, batterId, names),
+      };
+      const okAB = await postEvent(gameId, {
+        client_event_id: `ab-auto-${state.inning}-${state.half}-${baseSeq + 1}`,
+        sequence_number: baseSeq + 1,
+        event_type: "at_bat",
+        payload: abPayload,
+      });
+      if (!okAB) {
+        // Pitch persisted but the auto-AB didn't. Refresh so the count
+        // updates; coach can tap the outcome manually to finish the PA.
+        setSubmitting(false);
+        await refresh();
+        return;
+      }
+    }
+
+    const snap = await refresh();
+    if (snap) await maybeAutoEndHalf(prevOuts, snap);
     setSubmitting(false);
-    if (!ok) return;
-    await refresh();
   };
 
   const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
@@ -295,6 +410,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
   ) => {
     if (submitting) return;
     setSubmitting(true);
+    const prevOuts = state.outs;
     const nextSeq = lastSeq + 1;
     const ok = await postEvent(gameId, {
       client_event_id: `${clientPrefix}-${nextSeq}`,
@@ -302,10 +418,14 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
       event_type: eventType,
       payload,
     });
-    setSubmitting(false);
     setRunnerAction(null);
-    if (!ok) return;
-    await refresh();
+    if (!ok) {
+      setSubmitting(false);
+      return;
+    }
+    const snap = await refresh();
+    if (snap) await maybeAutoEndHalf(prevOuts, snap);
+    setSubmitting(false);
   };
 
   const endHalfInning = async () => {
@@ -489,15 +609,49 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
     router.refresh();
   };
 
-  const refresh = async () => {
-    const { data } = await supabase
+  // One-tap undo. Posts a void correction superseding the most recent live
+  // event (skipping prior corrections + their targets). Undoing a corrected
+  // at_bat removes BOTH the original and the correction from replay — the
+  // coach goes back to before the play was recorded, which matches the
+  // mental model of "step further back."
+  const submitUndo = async () => {
+    if (submitting || !lastUndoableEvent) return;
+    setSubmitting(true);
+    const target = lastUndoableEvent;
+    const label = describeEvent(target, names);
+    const nextSeq = lastSeq + 1;
+    const ok = await postEvent(gameId, {
+      client_event_id: `undo-${nextSeq}`,
+      sequence_number: nextSeq,
+      event_type: "correction",
+      payload: {
+        superseded_event_id: target.id,
+        corrected_event_type: null,
+        corrected_payload: null,
+      } as CorrectionPayload,
+    });
+    setSubmitting(false);
+    if (!ok) return;
+    toast.success(`Undid: ${label}`);
+    await refresh();
+  };
+
+  // Returns the new snapshot so callers can act on the post-refresh state
+  // synchronously without waiting for React to flush the next render
+  // (auto-end-half needs to compare prev vs new outs in the same tick).
+  const refresh = async (): Promise<{ state: ReplayState; events: GameEventRecord[] } | null> => {
+    const { data, error } = await supabase
       .from("game_events")
       .select("*")
       .eq("game_id", gameId)
       .order("sequence_number", { ascending: true });
-    const events = (data ?? []) as unknown as GameEventRecord[];
-    setState(replay(events));
-    setLastSeq(events.reduce((m, e) => Math.max(m, e.sequence_number), 0));
+    if (error) return null;
+    const refreshed = (data ?? []) as unknown as GameEventRecord[];
+    const newState = replay(refreshed);
+    setState(newState);
+    setEvents(refreshed);
+    setLastSeq(refreshed.reduce((m, e) => Math.max(m, e.sequence_number), 0));
+    return { state: newState, events: refreshed };
   };
 
   if (loading) {
@@ -516,10 +670,8 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
         opponentName={opponentName}
         currentBatterName={currentBatterName}
         pitcherName={pitcherName}
-        canUndo={false}
-        onUndo={() => {
-          // Wired in PR2.
-        }}
+        canUndo={lastUndoableEvent !== null && !submitting}
+        onUndo={() => void submitUndo()}
         onOpenManage={() => setManageOpen(true)}
         lastPlayText={state.last_play_text}
       />
@@ -1961,4 +2113,61 @@ function describePlay(
     : " (opp)";
   if (runs === 0) return `${base}${who}`;
   return `${base}${who} — ${runs} run${runs === 1 ? "" : "s"}`;
+}
+
+// Used by the undo toast: a one-liner describing what an event was, before
+// we void it. Kept loose — coaches don't need legal-grade event descriptions,
+// just enough to recognize what's being reverted.
+function describeEvent(event: GameEventRecord, names: Map<string, string>): string {
+  switch (event.event_type) {
+    case "at_bat": {
+      const p = event.payload as AtBatPayload;
+      if (p.description) return p.description;
+      const result = RESULT_DESC[p.result] ?? p.result;
+      const who = p.batter_id ? names.get(p.batter_id) ?? "batter" : "opp";
+      return `${result} (${who})`;
+    }
+    case "pitch": {
+      const p = event.payload as PitchPayload;
+      const labels: Record<PitchType, string> = {
+        ball: "ball",
+        called_strike: "called strike",
+        swinging_strike: "swinging strike",
+        foul: "foul",
+        in_play: "in-play",
+        hbp: "hit by pitch",
+        foul_tip_caught: "foul tip caught",
+        pitchout: "pitchout",
+        intentional_ball: "intentional ball",
+      };
+      return labels[p.pitch_type] ?? p.pitch_type;
+    }
+    case "stolen_base": {
+      const p = event.payload as StolenBasePayload;
+      return `stolen base (${p.from} → ${p.to})`;
+    }
+    case "caught_stealing": return "caught stealing";
+    case "pickoff": return "pickoff";
+    case "wild_pitch": return "wild pitch";
+    case "passed_ball": return "passed ball";
+    case "balk": return "balk";
+    case "error_advance": return "error advance";
+    case "inning_end": return "end of ½ inning";
+    case "substitution": {
+      const p = event.payload as SubstitutionPayload;
+      const inName = names.get(p.in_player_id) ?? "sub";
+      return `sub (${inName} → slot ${p.batting_order})`;
+    }
+    case "pitching_change": {
+      const p = event.payload as PitchingChangePayload;
+      const inName = p.in_pitcher_id ? names.get(p.in_pitcher_id) ?? "new pitcher" : "new pitcher";
+      return `pitching change (${inName})`;
+    }
+    case "defensive_conference": return "mound visit";
+    case "position_change": return "position change";
+    case "game_started": return "game start";
+    case "game_finalized": return "finalize";
+    case "correction": return "edit";
+    default: return event.event_type;
+  }
 }
