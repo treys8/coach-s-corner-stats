@@ -9,7 +9,7 @@
 
 import { adminClient } from "@/lib/supabase/admin";
 import { replay } from "./replay";
-import { rollupBatting, rollupPitching } from "./rollup";
+import { computeWLS, rollupBatting, rollupPitching } from "./rollup";
 import type { GameEventPayload, GameEventRecord, ReplayState } from "./types";
 import type { GameEventType } from "@/integrations/supabase/types";
 
@@ -119,9 +119,9 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     inning: state.inning,
     half: state.half,
     outs: state.outs,
-    runner_first: state.bases.first,
-    runner_second: state.bases.second,
-    runner_third: state.bases.third,
+    runner_first: state.bases.first?.player_id ?? null,
+    runner_second: state.bases.second?.player_id ?? null,
+    runner_third: state.bases.third?.player_id ?? null,
     team_score: state.team_score,
     opponent_score: state.opponent_score,
     last_play_text: state.last_play_text,
@@ -216,7 +216,18 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     const season_year = new Date(game_date).getFullYear();
 
     const batting = rollupBatting(state.at_bats);
-    const pitching = rollupPitching(state.at_bats);
+    const pitching = rollupPitching(state.at_bats, state.non_pa_runs);
+    const wls = computeWLS(
+      state.at_bats,
+      state.non_pa_runs,
+      state.we_are_home,
+      state.team_score,
+      state.opponent_score,
+      state.league_type,
+    );
+    if (wls.W) { const line = pitching.get(wls.W); if (line) line.W = 1; }
+    if (wls.L) { const line = pitching.get(wls.L); if (line) line.L = 1; }
+    if (wls.SV) { const line = pitching.get(wls.SV); if (line) line.SV = 1; }
     const playerIds = new Set<string>([...batting.keys(), ...pitching.keys()]);
 
     if (playerIds.size > 0) {

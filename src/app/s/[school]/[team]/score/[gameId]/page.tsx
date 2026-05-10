@@ -173,8 +173,15 @@ interface SlotState {
   position: Position | null;
 }
 
+const MIN_LINEUP_SIZE = 9;
+const MAX_LINEUP_SIZE = 12;
+
 const emptyLineup = (): SlotState[] =>
-  Array.from({ length: 9 }, (_, i) => ({ batting_order: i + 1, player_id: null, position: null }));
+  Array.from({ length: MIN_LINEUP_SIZE }, (_, i) => ({
+    batting_order: i + 1,
+    player_id: null,
+    position: null,
+  }));
 
 function PreGameForm({
   game,
@@ -185,6 +192,7 @@ function PreGameForm({
   roster: RosterPlayer[];
   onStarted: () => void;
 }) {
+  const { team } = useTeam();
   const [useDh, setUseDh] = useState(true);
   const [lineup, setLineup] = useState<SlotState[]>(emptyLineup);
   const [pitcherId, setPitcherId] = useState<string | null>(null);
@@ -197,16 +205,36 @@ function PreGameForm({
     setLineup((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
   };
 
+  const addSlot = () => {
+    setLineup((prev) => {
+      if (prev.length >= MAX_LINEUP_SIZE) return prev;
+      return [...prev, { batting_order: prev.length + 1, player_id: null, position: null }];
+    });
+  };
+
+  const removeLastSlot = () => {
+    setLineup((prev) => {
+      if (prev.length <= MIN_LINEUP_SIZE) return prev;
+      return prev.slice(0, -1);
+    });
+  };
+
   const validate = (): string | null => {
     const filled = lineup.filter((s) => s.player_id);
-    if (filled.length !== 9) return "All 9 lineup slots need a player.";
+    if (filled.length !== lineup.length) {
+      return `All ${lineup.length} lineup slots need a player.`;
+    }
     const ids = filled.map((s) => s.player_id);
     if (new Set(ids).size !== ids.length) return "A player can only appear once in the lineup.";
-    const missingPos = lineup.find((s) => s.player_id && !s.position);
+    // Slots 1..9 must have a defensive position. Slots 10..12 are extra
+    // hitters and may have no position. Pitcher slot rules below.
+    const missingPos = lineup.find(
+      (s) => s.player_id && !s.position && s.batting_order <= 9,
+    );
     if (missingPos) return `Slot ${missingPos.batting_order} needs a position.`;
     if (useDh && !pitcherId) return "Pick a starting pitcher.";
     if (!useDh && !lineup.some((s) => s.position === "P")) {
-      return "Without DH, one of the 9 batters must play P.";
+      return "Without DH, one of the batters must play P.";
     }
     return null;
   };
@@ -232,6 +260,8 @@ function PreGameForm({
       starting_lineup: lineupPayload,
       starting_pitcher_id: startingPitcherId,
       opponent_starting_pitcher_id: null,
+      league_type: team.league_type,
+      nfhs_state: team.nfhs_state,
     };
 
     setSubmitting(true);
@@ -277,6 +307,7 @@ function PreGameForm({
   };
 
   const usedIds = new Set(lineup.map((s) => s.player_id).filter(Boolean) as string[]);
+  if (pitcherId) usedIds.add(pitcherId);
 
   return (
     <Card className="p-6 space-y-6">
@@ -291,42 +322,76 @@ function PreGameForm({
       <div>
         <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-3">Batting order</h4>
         <div className="space-y-2">
-          {lineup.map((slot, i) => (
-            <div key={slot.batting_order} className="grid grid-cols-12 items-center gap-2">
-              <div className="col-span-1 text-right font-mono-stat font-bold text-sa-blue-deep">
-                {slot.batting_order}
+          {lineup.map((slot, i) => {
+            const isExtra = slot.batting_order > 9;
+            return (
+              <div key={slot.batting_order} className="grid grid-cols-12 items-center gap-2">
+                <div className="col-span-1 text-right font-mono-stat font-bold text-sa-blue-deep">
+                  {slot.batting_order}
+                </div>
+                <div className="col-span-7">
+                  <Select
+                    value={slot.player_id ?? ""}
+                    onValueChange={(v) => updateSlot(i, { player_id: v || null })}
+                  >
+                    <SelectTrigger><SelectValue placeholder="— pick player —" /></SelectTrigger>
+                    <SelectContent>
+                      {roster
+                        .filter((p) => !usedIds.has(p.id) || p.id === slot.player_id)
+                        .map((p) => (
+                          <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-4">
+                  {isExtra ? (
+                    <div className="flex items-center justify-center h-9 px-3 rounded-md border border-dashed text-xs uppercase tracking-wider text-muted-foreground">
+                      EH (extra hitter)
+                    </div>
+                  ) : (
+                    <Select
+                      value={slot.position ?? ""}
+                      onValueChange={(v) => updateSlot(i, { position: (v || null) as Position | null })}
+                      disabled={!slot.player_id}
+                    >
+                      <SelectTrigger><SelectValue placeholder="position" /></SelectTrigger>
+                      <SelectContent>
+                        {POSITIONS.filter((pos) => pos !== "DH" || useDh).map((pos) => (
+                          <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
               </div>
-              <div className="col-span-7">
-                <Select
-                  value={slot.player_id ?? ""}
-                  onValueChange={(v) => updateSlot(i, { player_id: v || null })}
-                >
-                  <SelectTrigger><SelectValue placeholder="— pick player —" /></SelectTrigger>
-                  <SelectContent>
-                    {roster
-                      .filter((p) => !usedIds.has(p.id) || p.id === slot.player_id)
-                      .map((p) => (
-                        <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="col-span-4">
-                <Select
-                  value={slot.position ?? ""}
-                  onValueChange={(v) => updateSlot(i, { position: (v || null) as Position | null })}
-                  disabled={!slot.player_id}
-                >
-                  <SelectTrigger><SelectValue placeholder="position" /></SelectTrigger>
-                  <SelectContent>
-                    {POSITIONS.filter((pos) => pos !== "DH" || useDh).map((pos) => (
-                      <SelectItem key={pos} value={pos}>{pos}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          ))}
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2 mt-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={addSlot}
+            disabled={lineup.length >= MAX_LINEUP_SIZE}
+          >
+            + Add batting slot
+          </Button>
+          {lineup.length > MIN_LINEUP_SIZE && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={removeLastSlot}
+              disabled={!!lineup[lineup.length - 1]?.player_id}
+            >
+              − Remove slot {lineup.length}
+            </Button>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Slots 10–12 are extra hitters — no defensive position needed.
+          </p>
         </div>
       </div>
 
