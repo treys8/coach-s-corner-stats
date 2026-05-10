@@ -387,8 +387,8 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
       if (!okAB) {
         // Pitch persisted but the auto-AB didn't. Refresh so the count
         // updates; coach can tap the outcome manually to finish the PA.
-        setSubmitting(false);
         await refresh();
+        setSubmitting(false);
         return;
       }
     }
@@ -630,10 +630,15 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
         corrected_payload: null,
       } as CorrectionPayload,
     });
-    setSubmitting(false);
-    if (!ok) return;
+    if (!ok) {
+      setSubmitting(false);
+      return;
+    }
     toast.success(`Undid: ${label}`);
+    // Hold the submitting flag through refresh so `events` updates before
+    // a fast double-tap can re-target the same event.
     await refresh();
+    setSubmitting(false);
   };
 
   // Returns the new snapshot so callers can act on the post-refresh state
