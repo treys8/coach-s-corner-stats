@@ -14,7 +14,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -23,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Settings, Trophy, Users } from "lucide-react";
+import { Pencil, Plus, Settings, Trash2, Trophy, Users } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
 import type { Sport, TeamLevel } from "@/integrations/supabase/types";
 
@@ -57,13 +56,50 @@ export default function SchoolDashboard() {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({
+  const DEFAULT_FORM = {
     name: "Varsity Baseball",
     slug: "",
     sport: "baseball" as Sport,
     level: "varsity" as TeamLevel,
-  });
+  };
+  const [form, setForm] = useState(DEFAULT_FORM);
+
+  const openAdd = () => {
+    setEditingId(null);
+    setForm(DEFAULT_FORM);
+    setOpen(true);
+  };
+
+  const openEdit = (t: TeamRow) => {
+    setEditingId(t.id);
+    setForm({ name: t.name, slug: t.slug, sport: t.sport, level: t.level });
+    setOpen(true);
+  };
+
+  const closeDialog = () => {
+    setOpen(false);
+    setEditingId(null);
+    setForm(DEFAULT_FORM);
+  };
+
+  const remove = async (t: TeamRow) => {
+    if (
+      !confirm(
+        `Delete team "${t.name}"? This permanently removes its games, roster entries, and stats. Cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    const { error } = await supabase.from("teams").delete().eq("id", t.id);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success("Team deleted");
+    load();
+  };
 
   const load = async () => {
     const { data, error } = await supabase
@@ -91,21 +127,30 @@ export default function SchoolDashboard() {
       return;
     }
     setSubmitting(true);
-    const { error } = await supabase.from("teams").insert({
-      school_id: school.id,
-      slug,
-      name: form.name.trim(),
-      sport: form.sport,
-      level: form.level,
-    });
+    const { error } = editingId
+      ? await supabase
+          .from("teams")
+          .update({
+            slug,
+            name: form.name.trim(),
+            sport: form.sport,
+            level: form.level,
+          })
+          .eq("id", editingId)
+      : await supabase.from("teams").insert({
+          school_id: school.id,
+          slug,
+          name: form.name.trim(),
+          sport: form.sport,
+          level: form.level,
+        });
     setSubmitting(false);
     if (error) {
       toast.error(error.message);
       return;
     }
-    toast.success("Team added");
-    setOpen(false);
-    setForm({ name: "Varsity Baseball", slug: "", sport: "baseball", level: "varsity" });
+    toast.success(editingId ? "Team updated" : "Team added");
+    closeDialog();
     load();
   };
 
@@ -130,15 +175,18 @@ export default function SchoolDashboard() {
                 <Settings className="w-4 h-4" /> Settings
               </Button>
             </Link>
-            <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange">
-                <Plus className="w-4 h-4 mr-1" /> Add Team
-              </Button>
-            </DialogTrigger>
+            <Button
+              onClick={openAdd}
+              className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange"
+            >
+              <Plus className="w-4 h-4 mr-1" /> Add Team
+            </Button>
+            <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : closeDialog())}>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle className="font-display text-2xl">Add Team</DialogTitle>
+                <DialogTitle className="font-display text-2xl">
+                  {editingId ? "Edit Team" : "Add Team"}
+                </DialogTitle>
               </DialogHeader>
               <div className="grid gap-3">
                 <div>
@@ -146,7 +194,11 @@ export default function SchoolDashboard() {
                   <Input
                     value={form.name}
                     onChange={(e) =>
-                      setForm({ ...form, name: e.target.value, slug: slugify(e.target.value) })
+                      setForm({
+                        ...form,
+                        name: e.target.value,
+                        slug: editingId ? form.slug : slugify(e.target.value),
+                      })
                     }
                     placeholder="Varsity Baseball"
                   />
@@ -160,6 +212,11 @@ export default function SchoolDashboard() {
                   />
                   <p className="text-xs text-muted-foreground mt-1">
                     /s/{school.slug}/<span className="text-sa-orange">{form.slug || slugify(form.name)}</span>
+                    {editingId && (
+                      <span className="block text-amber-700 mt-0.5">
+                        Changing the slug breaks existing bookmarks to this team.
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -199,7 +256,7 @@ export default function SchoolDashboard() {
               </div>
               <DialogFooter>
                 <Button onClick={submit} disabled={submitting} className="bg-sa-blue hover:bg-sa-blue-deep">
-                  {submitting ? "Saving…" : "Save Team"}
+                  {submitting ? "Saving…" : editingId ? "Save Changes" : "Save Team"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -226,21 +283,44 @@ export default function SchoolDashboard() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {teams.map((t) => (
-            <Link
+            <div
               key={t.id}
-              href={`/s/${school.slug}/${t.slug}`}
-              className="group bg-card border border-border rounded-lg overflow-hidden shadow-card hover:shadow-elevated hover:-translate-y-0.5 transition-all"
+              className="group relative bg-card border border-border rounded-lg overflow-hidden shadow-card hover:shadow-elevated hover:-translate-y-0.5 transition-all"
             >
-              <div className="bg-gradient-blue h-2" />
-              <div className="p-5">
-                <p className="text-xs uppercase tracking-wider text-sa-orange font-semibold">
-                  {LEVEL_LABEL[t.level]} · {SPORT_LABEL[t.sport]}
-                </p>
-                <p className="font-display text-2xl text-sa-blue-deep group-hover:text-sa-orange transition-colors">
-                  {t.name}
-                </p>
-              </div>
-            </Link>
+              <Link href={`/s/${school.slug}/${t.slug}`} className="block">
+                <div className="bg-gradient-blue h-2" />
+                <div className="p-5 pr-20">
+                  <p className="text-xs uppercase tracking-wider text-sa-orange font-semibold">
+                    {LEVEL_LABEL[t.level]} · {SPORT_LABEL[t.sport]}
+                  </p>
+                  <p className="font-display text-2xl text-sa-blue-deep group-hover:text-sa-orange transition-colors">
+                    {t.name}
+                  </p>
+                </div>
+              </Link>
+              {isAdmin && (
+                <div className="absolute top-3 right-3 flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 bg-white/80 backdrop-blur hover:bg-white"
+                    onClick={() => openEdit(t)}
+                    title="Edit team"
+                  >
+                    <Pencil className="w-4 h-4 text-sa-blue" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 bg-white/80 backdrop-blur hover:bg-white"
+                    onClick={() => remove(t)}
+                    title="Delete team"
+                  >
+                    <Trash2 className="w-4 h-4 text-destructive" />
+                  </Button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
