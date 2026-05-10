@@ -152,7 +152,8 @@ export function DefensiveDiamond({
       {/* Pitcher's mound */}
       <circle cx="50" cy="60" r="2.2" fill="#c9a47a" stroke="#1f3252" strokeWidth="0.3" opacity="0.9" />
 
-      {/* Bases (rotated squares; orange when occupied) */}
+      {/* Bases (rotated squares; orange when occupied). When tappable, a
+          chevron above the runner label hints at the runner-action sheet. */}
       {(["first", "second", "third"] as const).map((b) => {
         const [bx, by] = BASE_XY[b];
         const runner = state.bases[b];
@@ -165,6 +166,9 @@ export function DefensiveDiamond({
             style={tappable ? { cursor: "pointer" } : undefined}
             data-base={b}
           >
+            {tappable && (
+              <title>Tap to record runner action</title>
+            )}
             <g transform={`translate(${bx} ${by}) rotate(45)`}>
               <rect
                 x={-2.2} y={-2.2} width={4.4} height={4.4}
@@ -174,7 +178,7 @@ export function DefensiveDiamond({
             </g>
             {occupied && (
               <text
-                x={bx} y={by - 4}
+                x={bx} y={by - 5}
                 textAnchor="middle"
                 fontSize="2.2"
                 fontWeight="700"
@@ -183,6 +187,16 @@ export function DefensiveDiamond({
               >
                 {runnerLabel(b, runner?.player_id ?? null, names, weAreBatting)}
               </text>
+            )}
+            {tappable && (
+              // Hit target intentionally — chevron clicks bubble to the
+              // parent <g>'s onClick, expanding the otherwise small base
+              // rect (~20px on iPad) to a more finger-friendly area.
+              <polygon
+                points={`${bx},${by - 9.5} ${bx - 1.4},${by - 7.2} ${bx + 1.4},${by - 7.2}`}
+                fill="#ee8233"
+                opacity="0.95"
+              />
             )}
           </g>
         );
