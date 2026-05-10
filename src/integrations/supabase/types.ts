@@ -53,6 +53,9 @@ export type Database = {
           secondary_color: string | null;
           is_discoverable: boolean;
           public_scores_enabled: boolean;
+          association: string | null;
+          classification: string | null;
+          division: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -66,6 +69,9 @@ export type Database = {
           secondary_color?: string | null;
           is_discoverable?: boolean;
           public_scores_enabled?: boolean;
+          association?: string | null;
+          classification?: string | null;
+          division?: string | null;
           created_at?: string;
           updated_at?: string;
         };

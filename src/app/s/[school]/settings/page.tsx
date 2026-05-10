@@ -9,9 +9,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ArrowLeft } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
 import { useAuth } from "@/contexts/auth";
+import {
+  ASSOCIATIONS,
+  CLASSIFICATIONS,
+  DIVISIONS,
+} from "@/lib/school-classifications";
 
 const supabase = createClient();
 
@@ -30,6 +42,9 @@ export default function SchoolSettingsPage() {
     secondary_color: school.secondary_color ?? DEFAULT_SECONDARY,
     is_discoverable: school.is_discoverable,
     public_scores_enabled: school.public_scores_enabled,
+    association: school.association ?? "",
+    classification: school.classification ?? "",
+    division: school.division ?? "",
   });
   const [busy, setBusy] = useState(false);
   const [allowCoachContact, setAllowCoachContact] = useState<boolean | null>(null);
@@ -44,6 +59,9 @@ export default function SchoolSettingsPage() {
       secondary_color: school.secondary_color ?? DEFAULT_SECONDARY,
       is_discoverable: school.is_discoverable,
       public_scores_enabled: school.public_scores_enabled,
+      association: school.association ?? "",
+      classification: school.classification ?? "",
+      division: school.division ?? "",
     });
   }, [school]);
 
@@ -108,6 +126,13 @@ export default function SchoolSettingsPage() {
       toast.error("School name is required");
       return;
     }
+    if (
+      form.public_scores_enabled &&
+      (!form.association || !form.classification || !form.division)
+    ) {
+      toast.error("Set association, classification, and division before publishing scores");
+      return;
+    }
     setBusy(true);
     const { error } = await supabase
       .from("schools")
@@ -119,6 +144,9 @@ export default function SchoolSettingsPage() {
         secondary_color: form.secondary_color || null,
         is_discoverable: form.is_discoverable,
         public_scores_enabled: form.public_scores_enabled,
+        association: form.association || null,
+        classification: form.classification || null,
+        division: form.division || null,
       })
       .eq("id", school.id);
     setBusy(false);
@@ -262,6 +290,69 @@ export default function SchoolSettingsPage() {
               checked={form.is_discoverable}
               onCheckedChange={(v) => setForm({ ...form, is_discoverable: v })}
             />
+          </div>
+
+          <div className="pt-2">
+            <p className="text-sm font-semibold">Classification</p>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">
+              Required when publishing scores. Lets visitors filter the public Scores page to find games in your association, class, and division.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <Label htmlFor="association" className="mb-1.5 block text-xs">Association</Label>
+                <Select
+                  value={form.association}
+                  onValueChange={(v) => setForm({ ...form, association: v })}
+                >
+                  <SelectTrigger id="association">
+                    <SelectValue placeholder="Select…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ASSOCIATIONS.map((a) => (
+                      <SelectItem key={a} value={a}>{a}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="classification" className="mb-1.5 block text-xs">Classification</Label>
+                <Select
+                  value={form.classification}
+                  onValueChange={(v) => setForm({ ...form, classification: v })}
+                >
+                  <SelectTrigger id="classification">
+                    <SelectValue placeholder="Select…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CLASSIFICATIONS.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="division" className="mb-1.5 block text-xs">Division</Label>
+                <Select
+                  value={form.division}
+                  onValueChange={(v) => setForm({ ...form, division: v })}
+                >
+                  <SelectTrigger id="division">
+                    <SelectValue placeholder="Select…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DIVISIONS.map((d) => (
+                      <SelectItem key={d} value={d}>{d}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {form.public_scores_enabled &&
+              (!form.association || !form.classification || !form.division) && (
+                <p className="text-xs text-destructive mt-2">
+                  All three are required while public scores are turned on.
+                </p>
+              )}
           </div>
         </div>
 
