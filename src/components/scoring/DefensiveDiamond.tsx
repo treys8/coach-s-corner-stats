@@ -2,29 +2,9 @@
 
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { ReplayState } from "@/lib/scoring/types";
+import { BASE_XY, FIELDER_POSITIONS, POSITION_XY, type FielderPosition } from "./diamond-geometry";
 
-export const FIELDER_POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"] as const;
-export type FielderPosition = (typeof FIELDER_POSITIONS)[number];
-
-// Canonical fielder centers in a 100x100 viewBox with home at the bottom-center
-// and CF at the top-center. Drag-to-score uses these as starting points.
-const POSITION_XY: Record<FielderPosition, [number, number]> = {
-  P:  [50, 60],
-  C:  [50, 95],
-  "1B": [62, 65],
-  "2B": [58, 50],
-  SS: [42, 50],
-  "3B": [38, 65],
-  LF: [22, 32],
-  CF: [50, 22],
-  RF: [78, 32],
-};
-
-const BASE_XY = {
-  first:  [66, 70],
-  second: [50, 54],
-  third:  [34, 70],
-} as const;
+export { FIELDER_POSITIONS, type FielderPosition };
 
 interface DefensiveDiamondProps {
   state: ReplayState;
