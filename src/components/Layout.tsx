@@ -38,6 +38,7 @@ export function Layout({
     { href: `${base}/records`, label: "Records" },
     { href: `${base}/schedule`, label: "Schedule" },
     { href: `${base}/score`, label: "Score" },
+    { href: `${base}/opponents`, label: "Opponents" },
     { href: `${base}/upload`, label: "Upload" },
     { href: `/s/${schoolSlug}/settings`, label: "Settings" },
   ];
