@@ -16,7 +16,8 @@ import type { GameEventPayload } from "@/lib/scoring/types";
 import type { GameEventType } from "@/integrations/supabase/types";
 
 const EVENT_TYPES: GameEventType[] = [
-  "at_bat", "stolen_base", "caught_stealing", "pickoff",
+  "at_bat", "pitch",
+  "stolen_base", "caught_stealing", "pickoff",
   "wild_pitch", "passed_ball", "balk", "error_advance",
   "substitution", "pitching_change", "position_change",
   "game_started", "inning_end", "game_finalized", "correction",
@@ -24,7 +25,6 @@ const EVENT_TYPES: GameEventType[] = [
 
 const eventSchema = z.object({
   client_event_id: z.string().min(1).max(128),
-  sequence_number: z.number().int().nonnegative(),
   event_type: z.enum(EVENT_TYPES as [GameEventType, ...GameEventType[]]),
   // Payload is validated structurally inside the replay engine; the route
   // just makes sure it's an object.
@@ -62,7 +62,6 @@ export async function POST(
   try {
     const result = await applyEvent(userClient, gameId, {
       client_event_id: parsed.data.client_event_id,
-      sequence_number: parsed.data.sequence_number,
       event_type: parsed.data.event_type,
       payload: parsed.data.payload as GameEventPayload,
       supersedes_event_id: parsed.data.supersedes_event_id ?? null,

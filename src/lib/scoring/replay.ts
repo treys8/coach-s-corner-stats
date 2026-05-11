@@ -7,11 +7,13 @@
 // function of the input event sequence. `last_event_at` mirrors the event's
 // `created_at`.
 //
-// Phase 1 handles: game_started, at_bat, substitution (regular only),
+// Handles: game_started, at_bat (legacy PA-level events), pitch (new
+// pitch-by-pitch GameChanger-style flow), substitution (regular only),
 // pitching_change, inning_end, game_finalized, correction. Edge-case event
-// types from the design (stolen_base, courtesy runners, etc.) light up in
-// Phase 3 by extending `applyEvent`.
+// types from the design (stolen_base, courtesy runners, etc.) light up
+// later by extending `applyEvent`.
 
+import { defaultAdvances } from "./advances";
 import type {
   AtBatPayload,
   AtBatResult,
@@ -21,8 +23,11 @@ import type {
   GameEventRecord,
   GameStartedPayload,
   InningEndPayload,
+  PitchKind,
+  PitchPayload,
   PitchingChangePayload,
   ReplayState,
+  RunnerAdvance,
   SubstitutionPayload,
 } from "./types";
 import { EMPTY_BASES, INITIAL_STATE } from "./types";
@@ -78,6 +83,8 @@ function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
       return applyGameStarted(next, event.payload as GameStartedPayload);
     case "at_bat":
       return applyAtBat(next, event.id, event.payload as AtBatPayload);
+    case "pitch":
+      return applyPitch(next, event.id, event.payload as PitchPayload);
     case "substitution":
       return applySubstitution(next, event.payload as SubstitutionPayload);
     case "pitching_change":
@@ -175,9 +182,57 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     team_score,
     opponent_score,
     current_batter_slot: next_batter_slot,
+    // PA resolved — count resets for the next batter.
+    balls: 0,
+    strikes: 0,
+    current_pa_pitches: 0,
     last_play_text: p.description,
     at_bats: [...state.at_bats, derived],
   };
+}
+
+// Pitch event: most pitches just bump the count; the terminal pitch of a PA
+// (in_play, hbp, intentional_walk, foul_tip_out, dropped_third_strike,
+// catcher_interference, or the 4th-ball / 3rd-strike pitch) resolves the PA
+// by synthesizing an AtBatPayload and routing through applyAtBat — which
+// already knows how to advance bases, score runs, advance the lineup, and
+// reset the count.
+function applyPitch(state: ReplayState, eventId: string, p: PitchPayload): ReplayState {
+  const nextBalls = nextBallCount(state.balls, p.kind);
+  const nextStrikes = nextStrikeCount(state.strikes, p.kind);
+  const nextPaPitches = countsAsPitch(p.kind) ? state.current_pa_pitches + 1 : state.current_pa_pitches;
+
+  const resolution = resolvePitch(p, nextBalls, nextStrikes, state.bases);
+  if (resolution === null) {
+    // PA not over — just update count + pitch tally.
+    return {
+      ...state,
+      status: state.status === "draft" ? "in_progress" : state.status,
+      balls: nextBalls,
+      strikes: nextStrikes,
+      current_pa_pitches: nextPaPitches,
+    };
+  }
+
+  const synthAtBat: AtBatPayload = {
+    inning: p.inning,
+    half: p.half,
+    batter_id: p.batter_id,
+    pitcher_id: p.pitcher_id,
+    opponent_pitcher_id: p.opponent_pitcher_id,
+    batting_order: p.batting_order,
+    result: resolution.result,
+    rbi: resolution.rbi,
+    pitch_count: nextPaPitches,
+    balls: nextBalls,
+    strikes: nextStrikes,
+    spray_x: resolution.spray_x,
+    spray_y: resolution.spray_y,
+    fielder_position: resolution.fielder_position,
+    runner_advances: resolution.runner_advances,
+    description: p.description,
+  };
+  return applyAtBat(state, eventId, synthAtBat);
 }
 
 function applySubstitution(state: ReplayState, p: SubstitutionPayload): ReplayState {
@@ -206,6 +261,12 @@ function applyInningEnd(state: ReplayState, p: InningEndPayload): ReplayState {
     half: nextHalf,
     outs: 0,
     bases: { ...EMPTY_BASES },
+    // Mid-PA pitches don't carry across half-innings. (In real baseball
+    // they actually do for the same batter, but inning_end is only emitted
+    // after the third out — so any pending count is moot.)
+    balls: 0,
+    strikes: 0,
+    current_pa_pitches: 0,
   };
 }
 
@@ -262,6 +323,164 @@ function resolveRunnerAdvances(prev: Bases, p: AtBatPayload): ResolvedAdvances {
   }
 
   return { bases: next, runsScored, outsAdded };
+}
+
+// ---- Pitch helpers ---------------------------------------------------------
+
+// `intentional_walk` is the GC shortcut button: no pitch is thrown, the
+// PA resolves directly. Every other kind counts toward the pitcher's
+// thrown-pitch tally and the PA's pitch count.
+function countsAsPitch(kind: PitchKind): boolean {
+  return kind !== "intentional_walk";
+}
+
+function nextBallCount(balls: number, kind: PitchKind): number {
+  switch (kind) {
+    case "ball":
+    case "intentional_ball":
+    case "illegal_pitch":
+      return balls + 1;
+    default:
+      return balls;
+  }
+}
+
+function nextStrikeCount(strikes: number, kind: PitchKind): number {
+  switch (kind) {
+    case "called_strike":
+    case "swinging_strike":
+      return strikes + 1;
+    case "foul":
+      // Fouls cap at two strikes (a foul with two strikes leaves the count
+      // unchanged). foul_tip_out is the exception — it's a kind of its own.
+      return Math.min(2, strikes + 1);
+    default:
+      return strikes;
+  }
+}
+
+interface PaResolution {
+  result: AtBatResult;
+  rbi: number;
+  spray_x: number | null;
+  spray_y: number | null;
+  fielder_position: string | null;
+  runner_advances: RunnerAdvance[];
+}
+
+// Decide whether this pitch terminates the PA, and if so, build the
+// resolution payload. Terminal kinds (in_play, hbp, etc.) resolve regardless
+// of count; ball / called_strike / swinging_strike resolve only when the
+// count hits 4 or 3 respectively.
+function resolvePitch(
+  p: PitchPayload,
+  balls: number,
+  strikes: number,
+  prevBases: Bases,
+): PaResolution | null {
+  switch (p.kind) {
+    case "in_play": {
+      // Malformed payload — the UI is responsible for picking a result
+      // during the drill-down before posting an in_play pitch.
+      if (!p.result) return null;
+      return {
+        result: p.result,
+        rbi: p.rbi,
+        spray_x: p.spray_x,
+        spray_y: p.spray_y,
+        fielder_position: p.fielder_position,
+        runner_advances: p.runner_advances,
+      };
+    }
+    case "hbp": {
+      const advances = defaultAdvances(prevBases, p.batter_id, "HBP");
+      return {
+        result: "HBP",
+        rbi: countRuns(advances),
+        spray_x: null,
+        spray_y: null,
+        fielder_position: null,
+        runner_advances: advances,
+      };
+    }
+    case "intentional_walk": {
+      const advances = defaultAdvances(prevBases, p.batter_id, "IBB");
+      return {
+        result: "IBB",
+        rbi: countRuns(advances),
+        spray_x: null,
+        spray_y: null,
+        fielder_position: null,
+        runner_advances: advances,
+      };
+    }
+    case "foul_tip_out":
+      // Caught foul tip with two strikes — batter out, charged a strikeout.
+      return {
+        result: "K_swinging",
+        rbi: 0,
+        spray_x: null,
+        spray_y: null,
+        fielder_position: null,
+        runner_advances: [],
+      };
+    case "catcher_interference":
+      // Batter awarded 1B, no AB charge. Until we model ROE separately,
+      // record as "E" with batter on 1B; rollup excludes E from AB count.
+      return {
+        result: "E",
+        rbi: 0,
+        spray_x: null,
+        spray_y: null,
+        fielder_position: "C",
+        runner_advances: [{ from: "batter", to: "first", player_id: p.batter_id }],
+      };
+    case "dropped_third_strike":
+      // V1: treat as a strikeout. The GameChanger drill-down (safe at 1st /
+      // out at 1st / error) lights up later as a follow-up sub-menu.
+      return {
+        result: "K_swinging",
+        rbi: 0,
+        spray_x: null,
+        spray_y: null,
+        fielder_position: null,
+        runner_advances: [],
+      };
+  }
+
+  // Count-driven resolution for plain pitches.
+  if (balls >= 4) {
+    const advances = defaultAdvances(prevBases, p.batter_id, "BB");
+    return {
+      result: "BB",
+      rbi: countRuns(advances),
+      spray_x: null,
+      spray_y: null,
+      fielder_position: null,
+      runner_advances: advances,
+    };
+  }
+  if (strikes >= 3) {
+    // K_looking only if the terminating pitch was actually called; otherwise
+    // a foul couldn't have made it the third strike (capped at 2), so the
+    // remaining culprit is a swinging strike.
+    const result: AtBatResult = p.kind === "called_strike" ? "K_looking" : "K_swinging";
+    return {
+      result,
+      rbi: 0,
+      spray_x: null,
+      spray_y: null,
+      fielder_position: null,
+      runner_advances: [],
+    };
+  }
+  return null;
+}
+
+function countRuns(advances: RunnerAdvance[]): number {
+  let runs = 0;
+  for (const a of advances) if (a.to === "home") runs += 1;
+  return runs;
 }
 
 export { INITIAL_STATE } from "./types";

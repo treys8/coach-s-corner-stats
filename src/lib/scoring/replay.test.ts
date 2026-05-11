@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { replay } from "./replay";
-import type { GameEventRecord, GameStartedPayload, AtBatPayload, InningEndPayload } from "./types";
+import type {
+  AtBatPayload,
+  GameEventRecord,
+  GameStartedPayload,
+  InningEndPayload,
+  PitchPayload,
+} from "./types";
 
 let seq = 0;
 function evt<P>(type: GameEventRecord["event_type"], payload: P, id?: string): GameEventRecord {
@@ -41,10 +47,31 @@ const atBat = (p: Partial<AtBatPayload>): AtBatPayload => ({
   result: "K_swinging",
   rbi: 0,
   pitch_count: 0,
+  balls: 0,
+  strikes: 0,
   spray_x: null,
   spray_y: null,
   fielder_position: null,
   runner_advances: [],
+  description: null,
+  ...p,
+});
+
+const pitch = (p: Partial<PitchPayload>): PitchPayload => ({
+  inning: 1,
+  half: "top",
+  batter_id: null,
+  pitcher_id: null,
+  opponent_pitcher_id: null,
+  batting_order: null,
+  kind: "ball",
+  trajectory: null,
+  result: null,
+  spray_x: null,
+  spray_y: null,
+  fielder_position: null,
+  runner_advances: [],
+  rbi: 0,
   description: null,
   ...p,
 });
@@ -223,6 +250,142 @@ describe("replay()", () => {
 
     const state = replay([start, original, correction]);
     expect(state.opponent_score).toBe(0);
+    expect(state.outs).toBe(1);
+  });
+
+  // ---- Pitch events (GameChanger-style pitch-by-pitch flow) ---------------
+
+  it("four balls resolves the PA as a walk and resets the count", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "ball", batter_id: "p1" })),
+      evt("pitch", pitch({ kind: "ball", batter_id: "p1" })),
+      evt("pitch", pitch({ kind: "ball", batter_id: "p1" })),
+      evt("pitch", pitch({ kind: "ball", batter_id: "p1" })),
+    ]);
+    expect(state.at_bats).toHaveLength(1);
+    expect(state.at_bats[0].result).toBe("BB");
+    expect(state.bases.first).toBe("p1");
+    expect(state.balls).toBe(0);
+    expect(state.strikes).toBe(0);
+    expect(state.current_pa_pitches).toBe(0);
+  });
+
+  it("three called strikes resolves as K_looking", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "called_strike" })),
+      evt("pitch", pitch({ kind: "called_strike" })),
+      evt("pitch", pitch({ kind: "called_strike" })),
+    ]);
+    expect(state.at_bats[0].result).toBe("K_looking");
+    expect(state.outs).toBe(1);
+  });
+
+  it("three swinging strikes resolves as K_swinging", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "swinging_strike" })),
+      evt("pitch", pitch({ kind: "swinging_strike" })),
+      evt("pitch", pitch({ kind: "swinging_strike" })),
+    ]);
+    expect(state.at_bats[0].result).toBe("K_swinging");
+  });
+
+  it("foul ball at 0-2 leaves the count at 0-2 and does not end the PA", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "called_strike" })),
+      evt("pitch", pitch({ kind: "swinging_strike" })),
+      evt("pitch", pitch({ kind: "foul" })),
+      evt("pitch", pitch({ kind: "foul" })),
+      evt("pitch", pitch({ kind: "foul" })),
+    ]);
+    expect(state.at_bats).toHaveLength(0);
+    expect(state.balls).toBe(0);
+    expect(state.strikes).toBe(2);
+    expect(state.current_pa_pitches).toBe(5);
+  });
+
+  it("hbp resolves immediately as HBP regardless of count", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "ball", batter_id: "p1" })),
+      evt("pitch", pitch({ kind: "hbp", batter_id: "p1" })),
+    ]);
+    expect(state.at_bats[0].result).toBe("HBP");
+    expect(state.bases.first).toBe("p1");
+  });
+
+  it("intentional_walk shortcut resolves as IBB without throwing pitches", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "intentional_walk", batter_id: "p1" })),
+    ]);
+    expect(state.at_bats[0].result).toBe("IBB");
+    expect(state.at_bats[0].pitch_count).toBe(0);
+    expect(state.bases.first).toBe("p1");
+  });
+
+  it("in_play pitch carries result + advances + spray through to the at_bat", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "ball" })),
+      evt("pitch", pitch({
+        kind: "in_play",
+        trajectory: "line",
+        result: "2B",
+        batter_id: "p1",
+        spray_x: 60, spray_y: 30,
+        fielder_position: "LF",
+        runner_advances: [{ from: "batter", to: "second", player_id: "p1" }],
+        rbi: 0,
+      })),
+    ]);
+    expect(state.at_bats[0].result).toBe("2B");
+    expect(state.at_bats[0].spray_x).toBe(60);
+    expect(state.at_bats[0].fielder_position).toBe("LF");
+    expect(state.bases.second).toBe("p1");
+    expect(state.at_bats[0].pitch_count).toBe(2);
+  });
+
+  it("count resets between consecutive plate appearances", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      // PA 1: 4 balls → BB
+      evt("pitch", pitch({ kind: "ball" })),
+      evt("pitch", pitch({ kind: "ball" })),
+      evt("pitch", pitch({ kind: "ball" })),
+      evt("pitch", pitch({ kind: "ball" })),
+      // PA 2: should start at 0-0
+      evt("pitch", pitch({ kind: "called_strike" })),
+    ]);
+    expect(state.at_bats).toHaveLength(1);
+    expect(state.balls).toBe(0);
+    expect(state.strikes).toBe(1);
+    expect(state.current_pa_pitches).toBe(1);
+  });
+
+  it("inning_end clears any in-progress count", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "ball" })),
+      evt("pitch", pitch({ kind: "ball" })),
+      evt<InningEndPayload>("inning_end", { inning: 1, half: "top" }),
+    ]);
+    expect(state.balls).toBe(0);
+    expect(state.strikes).toBe(0);
+    expect(state.current_pa_pitches).toBe(0);
+  });
+
+  it("foul_tip_out resolves as K_swinging and records an out", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("pitch", pitch({ kind: "called_strike" })),
+      evt("pitch", pitch({ kind: "swinging_strike" })),
+      evt("pitch", pitch({ kind: "foul_tip_out" })),
+    ]);
+    expect(state.at_bats[0].result).toBe("K_swinging");
     expect(state.outs).toBe(1);
   });
 

@@ -63,6 +63,65 @@ export interface AtBatPayload {
   description: string | null;
 }
 
+// ---- Pitch event (GameChanger-style drill-down terminal selection) ---------
+//
+// Each tap on the pitch picker emits one `pitch` event. Most pitches (Ball,
+// Called Strike, Swinging Strike, Foul) just advance the count. The terminal
+// kind of a plate appearance (in_play / hbp / intentional_walk /
+// catcher_interference / foul_tip_out / dropped_third_strike) carries the
+// resolution data (result, spray, fielder, runner advances) and the replay
+// engine emits a DerivedAtBat for that PA.
+//
+// The replay engine derives balls/strikes counts from the stream of pitch
+// events for the current PA — the UI does not maintain them locally.
+
+export type PitchKind =
+  | "ball"
+  | "called_strike"
+  | "swinging_strike"
+  | "foul"
+  | "in_play"
+  | "hbp"
+  | "intentional_ball"
+  | "intentional_walk"          // shortcut: skip remaining balls, resolve as IBB
+  | "catcher_interference"      // batter awarded 1B
+  | "illegal_pitch"             // ball + (advance baserunners — TODO)
+  | "dropped_third_strike"
+  | "foul_tip_out";             // foul tip caught for strike 3 = K_swinging
+
+// Ball trajectory selected in the GC "Ball In Play" submenu. Captured so we
+// can compute hard-hit %, line-drive rate, bunt success, etc. — richer than
+// the FO/GO/LO/PO bucketing we had on AtBatResult.
+export type PitchTrajectory =
+  | "ground"
+  | "hard_ground"
+  | "fly"
+  | "line"
+  | "bunt"
+  | "pop";
+
+export interface PitchPayload {
+  inning: number;
+  half: InningHalf;
+  batter_id: string | null;
+  pitcher_id: string | null;
+  opponent_pitcher_id: string | null;
+  batting_order: number | null;
+  kind: PitchKind;
+
+  // In-play resolution. Only present when kind === "in_play". The result
+  // reuses AtBatResult so the existing rollup logic keeps working.
+  trajectory: PitchTrajectory | null;
+  result: AtBatResult | null;
+  spray_x: number | null;
+  spray_y: number | null;
+  fielder_position: string | null;
+  runner_advances: RunnerAdvance[];
+  rbi: number;
+
+  description: string | null;
+}
+
 export interface SubstitutionPayload {
   out_player_id: string;
   in_player_id: string;
@@ -100,6 +159,7 @@ export interface CorrectionPayload {
 export type GameEventPayload =
   | GameStartedPayload
   | AtBatPayload
+  | PitchPayload
   | SubstitutionPayload
   | PitchingChangePayload
   | InningEndPayload
@@ -171,6 +231,15 @@ export interface ReplayState {
    *  resumes where it left off. */
   current_batter_slot: number | null;
 
+  // Pitch-by-pitch count for the current plate appearance. Reset to 0-0
+  // each time a PA resolves (in_play, BB, K, HBP, etc.) or at inning_end.
+  // Drives the live count display in the UI; the UI no longer maintains
+  // its own balls/strikes state.
+  balls: number;
+  strikes: number;
+  /** Number of pitches in the current PA. Reset alongside balls/strikes. */
+  current_pa_pitches: number;
+
   last_play_text: string | null;
   last_event_at: string | null;
 
@@ -193,6 +262,9 @@ export const INITIAL_STATE: ReplayState = {
   current_pitcher_id: null,
   current_opponent_pitcher_id: null,
   current_batter_slot: null,
+  balls: 0,
+  strikes: 0,
+  current_pa_pitches: 0,
   last_play_text: null,
   last_event_at: null,
   at_bats: [],

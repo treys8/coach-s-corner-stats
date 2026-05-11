@@ -256,12 +256,12 @@ function PreGameForm({
       opponent_starting_pitcher_id: opponentPitcherId,
     };
 
+    // Deterministic client_event_id: retrying "start game" must idempotent-collide.
     const res = await fetch(`/api/games/${game.id}/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         client_event_id: `gs-${game.id}`,
-        sequence_number: 1,
         event_type: "game_started",
         payload: eventPayload,
       }),
@@ -382,30 +382,30 @@ function FinalStub({ game, onUnfinalized }: { game: GameRow; onUnfinalized: () =
     setSubmitting(true);
     const eventsRes = await supabase
       .from("game_events")
-      .select("id, event_type, sequence_number")
+      .select("id, event_type")
       .eq("game_id", game.id)
-      .order("sequence_number", { ascending: false });
+      .eq("event_type", "game_finalized")
+      .order("created_at", { ascending: false })
+      .limit(1);
     if (eventsRes.error) {
       setSubmitting(false);
       toast.error(`Couldn't load events: ${eventsRes.error.message}`);
       return;
     }
-    const events = (eventsRes.data ?? []) as Array<{
-      id: string; event_type: string; sequence_number: number;
-    }>;
-    const finalizeEvent = events.find((e) => e.event_type === "game_finalized");
+    const rows = (eventsRes.data ?? []) as Array<{ id: string; event_type: string }>;
+    const finalizeEvent = rows[0];
     if (!finalizeEvent) {
       setSubmitting(false);
       toast.error("Couldn't find the finalize event for this game.");
       return;
     }
-    const nextSeq = (events[0]?.sequence_number ?? 0) + 1;
+    // Deterministic id keyed on the finalize event we're undoing — repeated
+    // taps idempotent-collide on the server's UNIQUE(client_event_id).
     const res = await fetch(`/api/games/${game.id}/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        client_event_id: `unfinal-${nextSeq}`,
-        sequence_number: nextSeq,
+        client_event_id: `unfinal-${finalizeEvent.id}`,
         event_type: "correction",
         payload: {
           superseded_event_id: finalizeEvent.id,

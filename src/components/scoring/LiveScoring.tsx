@@ -1,423 +1,139 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import { createClient } from "@/lib/supabase/client";
-import { replay } from "@/lib/scoring/replay";
-import { defaultAdvances } from "@/lib/scoring/advances";
-import { INITIAL_STATE } from "@/lib/scoring/types";
-import type {
-  AtBatPayload,
-  AtBatResult,
-  CorrectionPayload,
-  DerivedAtBat,
-  GameEventRecord,
-  PitchingChangePayload,
-  ReplayState,
-  SubstitutionPayload,
-} from "@/lib/scoring/types";
-import { DefensiveDiamond, type FielderPosition } from "@/components/scoring/DefensiveDiamond";
+import { DefensiveDiamond } from "@/components/scoring/DefensiveDiamond";
 import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
-import { toast } from "sonner";
+import { useGameEvents } from "./hooks/useGameEvents";
+import type { RosterDisplay } from "./shared/lib";
+import { RESULT_DESC } from "./shared/constants";
+import { TopBar } from "./panels/TopBar";
+import { BatterCard } from "./panels/BatterCard";
+import { BallStrikeCounter } from "./panels/BallStrikeCounter";
+import { OutcomeGrid } from "./panels/OutcomeGrid";
+import { FlowControls } from "./panels/FlowControls";
+import { PitchingChangeDialog } from "./dialogs/PitchingChangeDialog";
+import { SubstitutionDialog } from "./dialogs/SubstitutionDialog";
+import { EditLastPlayDialog } from "./dialogs/EditLastPlayDialog";
+import { FinalizeDialog } from "./dialogs/FinalizeDialog";
 
-export interface RosterDisplay {
-  id: string;
-  first_name: string;
-  last_name: string;
-  jersey_number: string | null;
-}
+export type { RosterDisplay } from "./shared/lib";
 
 interface LiveScoringProps {
   gameId: string;
   roster: RosterDisplay[];
 }
 
-function nameById(roster: RosterDisplay[]): Map<string, string> {
-  const m = new Map<string, string>();
-  for (const p of roster) {
-    const num = p.jersey_number ? `#${p.jersey_number} ` : "";
-    m.set(p.id, `${num}${p.first_name} ${p.last_name}`);
-  }
-  return m;
-}
-
-const supabase = createClient();
-
-// Non-contact outcomes are one-tap. In-play outcomes arm drag mode on the
-// defensive diamond — the user drags the fielder who made the play to the
-// ball location, and the drop captures spray (x, y) + fielder_position.
-const NON_CONTACT: AtBatResult[] = ["K_swinging", "K_looking", "BB", "HBP"];
-const HITS: AtBatResult[] = ["1B", "2B", "3B", "HR"];
-const OUTS_IN_PLAY: AtBatResult[] = ["FO", "GO", "LO", "PO"];
-const IN_PLAY: AtBatResult[] = [...HITS, ...OUTS_IN_PLAY];
-const isInPlay = (r: AtBatResult) => (IN_PLAY as AtBatResult[]).includes(r);
-
-const RESULT_LABEL: Record<AtBatResult, string> = {
-  K_swinging: "K↘", K_looking: "Kᴸ",
-  BB: "BB", IBB: "IBB", HBP: "HBP",
-  "1B": "1B", "2B": "2B", "3B": "3B", HR: "HR",
-  FO: "Fly out", GO: "Ground out", LO: "Line out", PO: "Popout", IF: "Infield fly",
-  FC: "FC", SAC: "SAC", SF: "SF", E: "Error", DP: "DP", TP: "TP",
-};
-
-const RESULT_DESC: Partial<Record<AtBatResult, string>> = {
-  K_swinging: "Strikeout swinging",
-  K_looking: "Strikeout looking",
-  BB: "Walk", IBB: "Intentional walk", HBP: "Hit by pitch",
-  "1B": "Single", "2B": "Double", "3B": "Triple", HR: "Home run",
-  FO: "Flyout", GO: "Groundout", LO: "Lineout", PO: "Popout",
-};
-
 export function LiveScoring({ gameId, roster }: LiveScoringProps) {
-  const router = useRouter();
-  const [state, setState] = useState<ReplayState>(INITIAL_STATE);
-  const [lastSeq, setLastSeq] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [balls, setBalls] = useState(0);
-  const [strikes, setStrikes] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
-  const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const game = useGameEvents({ gameId, roster });
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
-  const names = useMemo(() => nameById(roster), [roster]);
+  const [confirmFinalize, setConfirmFinalize] = useState(false);
 
-  // Load all events for this game and run replay() to get the canonical
-  // live state. Cheap — Phase 1 has at most a few hundred events per game.
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const { data, error } = await supabase
-        .from("game_events")
-        .select("*")
-        .eq("game_id", gameId)
-        .order("sequence_number", { ascending: true });
-      if (!active) return;
-      if (error) {
-        toast.error(`Couldn't load events: ${error.message}`);
-        setLoading(false);
-        return;
-      }
-      const events = (data ?? []) as unknown as GameEventRecord[];
-      setState(replay(events));
-      setLastSeq(events.reduce((m, e) => Math.max(m, e.sequence_number), 0));
-      setLoading(false);
-    })();
-    return () => { active = false; };
-  }, [gameId]);
-
-  const weAreBatting = state.current_batter_slot !== null && isOurHalf(state.we_are_home, state.half);
-  const currentSlot = useMemo(
-    () => state.our_lineup.find((s) => s.batting_order === state.current_batter_slot) ?? null,
-    [state.our_lineup, state.current_batter_slot],
-  );
-
-  const onOutcomePicked = (result: AtBatResult) => {
-    if (submitting) return;
-    if (isInPlay(result)) {
-      // Arm drag mode on the diamond; drop will capture spray + fielder.
-      setArmedResult(result);
-      return;
-    }
-    void submitAtBat(result, null);
-  };
-
-  const submitAtBat = async (
-    result: AtBatResult,
-    spray: { x: number; y: number; fielder: FielderPosition } | null,
-  ) => {
-    if (submitting) return;
-    setSubmitting(true);
-    const advances = defaultAdvances(state.bases, weAreBatting ? currentSlot?.player_id ?? null : null, result);
-    const runs = advances.filter((a) => a.to === "home").length;
-    const { balls: finalBalls, strikes: finalStrikes } = finalCount(result, balls, strikes);
-
-    const payload: AtBatPayload = {
-      inning: state.inning,
-      half: state.half,
-      batter_id: weAreBatting ? currentSlot?.player_id ?? null : null,
-      pitcher_id: weAreBatting ? null : state.current_pitcher_id,
-      opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
-      batting_order: weAreBatting ? state.current_batter_slot : null,
-      result,
-      rbi: runs,
-      pitch_count: finalBalls + finalStrikes,
-      balls: finalBalls,
-      strikes: finalStrikes,
-      spray_x: spray?.x ?? null,
-      spray_y: spray?.y ?? null,
-      fielder_position: spray?.fielder ?? null,
-      runner_advances: advances,
-      description: describePlay(result, runs, currentSlot?.player_id ?? null, names),
-    };
-
-    const nextSeq = lastSeq + 1;
-    const clientEventId = `ab-${state.inning}-${state.half}-${nextSeq}`;
-    const ok = await postEvent(gameId, {
-      client_event_id: clientEventId,
-      sequence_number: nextSeq,
-      event_type: "at_bat",
-      payload,
-    });
-    setSubmitting(false);
-    if (!ok) return;
-
-    setBalls(0);
-    setStrikes(0);
-    setArmedResult(null);
-    await refresh();
-  };
-
-  const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
-    if (!armedResult) return;
-    void submitAtBat(armedResult, { x, y, fielder });
-  };
-
-  const endHalfInning = async () => {
-    if (submitting) return;
-    setSubmitting(true);
-    const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
-      client_event_id: `ie-${state.inning}-${state.half}-${nextSeq}`,
-      sequence_number: nextSeq,
-      event_type: "inning_end",
-      payload: { inning: state.inning, half: state.half },
-    });
-    setSubmitting(false);
-    if (!ok) return;
-    await refresh();
-  };
-
-  const submitPitchingChange = async (newPitcherId: string) => {
-    if (submitting) return;
-    if (newPitcherId === state.current_pitcher_id) return;
-    setSubmitting(true);
-    const payload: PitchingChangePayload = {
-      out_pitcher_id: state.current_pitcher_id,
-      in_pitcher_id: newPitcherId,
-    };
-    const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
-      client_event_id: `pc-${nextSeq}`,
-      sequence_number: nextSeq,
-      event_type: "pitching_change",
-      payload,
-    });
-    setSubmitting(false);
-    setPitchChangeOpen(false);
-    if (!ok) return;
-    toast.success(`Pitcher: ${names.get(newPitcherId) ?? "updated"}`);
-    await refresh();
-  };
-
-  const submitSubstitution = async (payload: SubstitutionPayload) => {
-    if (submitting) return;
-    setSubmitting(true);
-    const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
-      client_event_id: `sub-${nextSeq}`,
-      sequence_number: nextSeq,
-      event_type: "substitution",
-      payload,
-    });
-    setSubmitting(false);
-    setSubOpen(false);
-    if (!ok) return;
-    toast.success(`Sub: ${names.get(payload.in_player_id) ?? "updated"} → slot ${payload.batting_order}`);
-    await refresh();
-  };
-
-  // Edit the most recent at-bat by issuing a correction event. Recomputes
-  // runner advances against the bases as they were before that play, so a
-  // 1B → 2B edit (etc.) updates scoring/outs/bases consistently after replay.
-  const editLastPlay = async (newResult: AtBatResult) => {
-    if (submitting) return;
-    const last = state.at_bats[state.at_bats.length - 1];
-    if (!last) return;
-    setSubmitting(true);
-
-    const { data, error } = await supabase
-      .from("game_events")
-      .select("*")
-      .eq("game_id", gameId)
-      .order("sequence_number", { ascending: true });
-    if (error) {
-      setSubmitting(false);
-      toast.error(`Couldn't load events: ${error.message}`);
-      return;
-    }
-    const events = (data ?? []) as unknown as GameEventRecord[];
-    const target = events.find((e) => e.id === last.event_id);
-    if (!target) {
-      setSubmitting(false);
-      toast.error("Couldn't find the original event to correct.");
-      return;
-    }
-    const before = events.filter((e) => e.sequence_number < target.sequence_number);
-    const stateBefore = replay(before);
-    const newAdvances = defaultAdvances(stateBefore.bases, last.batter_id, newResult);
-    const rbi = newAdvances.filter((a) => a.to === "home").length;
-
-    const correctedAtBat: AtBatPayload = {
-      inning: last.inning,
-      half: last.half,
-      batter_id: last.batter_id,
-      pitcher_id: last.pitcher_id,
-      opponent_pitcher_id: last.opponent_pitcher_id,
-      batting_order: last.batting_order,
-      result: newResult,
-      rbi,
-      pitch_count: last.pitch_count,
-      balls: last.balls,
-      strikes: last.strikes,
-      spray_x: last.spray_x,
-      spray_y: last.spray_y,
-      fielder_position: last.fielder_position,
-      runner_advances: newAdvances,
-      description: describePlay(newResult, rbi, last.batter_id, names),
-    };
-
-    const correction: CorrectionPayload = {
-      superseded_event_id: target.id,
-      corrected_event_type: "at_bat",
-      corrected_payload: correctedAtBat,
-    };
-
-    const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
-      client_event_id: `corr-${nextSeq}`,
-      sequence_number: nextSeq,
-      event_type: "correction",
-      payload: correction,
-    });
-    setSubmitting(false);
-    setEditOpen(false);
-    if (!ok) return;
-    toast.success("Last play updated");
-    await refresh();
-  };
-
-  const finalize = async () => {
-    if (submitting) return;
-    setSubmitting(true);
-    const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
-      client_event_id: `gf-${gameId}`,
-      sequence_number: nextSeq,
-      event_type: "game_finalized",
-      payload: {},
-    });
-    setSubmitting(false);
-    setConfirmFinalize(false);
-    if (!ok) return;
-    toast.success("Game finalized");
-    // Parent page reads game.status from the games table; trigger a refetch.
-    router.refresh();
-  };
-
-  const refresh = async () => {
-    const { data } = await supabase
-      .from("game_events")
-      .select("*")
-      .eq("game_id", gameId)
-      .order("sequence_number", { ascending: true });
-    const events = (data ?? []) as unknown as GameEventRecord[];
-    setState(replay(events));
-    setLastSeq(events.reduce((m, e) => Math.max(m, e.sequence_number), 0));
-  };
-
-  if (loading) {
+  if (game.loading) {
     return <div className="text-sm text-muted-foreground">Loading live state…</div>;
   }
 
+  const onPickPitcher = async (id: string) => {
+    await game.submitPitchingChange(id);
+    setPitchChangeOpen(false);
+  };
+  const onSubmitSub = async (payload: Parameters<typeof game.submitSubstitution>[0]) => {
+    await game.submitSubstitution(payload);
+    setSubOpen(false);
+  };
+  const onPickEdit = async (r: Parameters<typeof game.editLastPlay>[0]) => {
+    await game.editLastPlay(r);
+    setEditOpen(false);
+  };
+  const onConfirmFinalize = async () => {
+    await game.finalize();
+    setConfirmFinalize(false);
+  };
+
   return (
     <div className="space-y-4">
-      <TopBar state={state} weAreBatting={weAreBatting} />
+      <TopBar state={game.state} weAreBatting={game.weAreBatting} />
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
         <div className="space-y-4">
           <Card className="p-3">
-            {armedResult && (
+            {game.armedResult && (
               <div className="mb-2 flex items-center justify-between flex-wrap gap-2 text-sm">
                 <span>
                   <span className="text-muted-foreground">Recording </span>
-                  <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
+                  <span className="font-semibold text-sa-blue-deep">
+                    {RESULT_DESC[game.armedResult] ?? game.armedResult}
+                  </span>
                   <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
                 </span>
                 <div className="flex items-center gap-2">
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => void submitAtBat(armedResult, null)}
-                    disabled={submitting}
+                    onClick={() => void game.submitAtBat(game.armedResult!, null)}
+                    disabled={game.submitting}
                   >
                     Skip location
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => game.setArmedResult(null)}
+                    disabled={game.submitting}
+                  >
                     Cancel
                   </Button>
                 </div>
               </div>
             )}
             <DefensiveDiamond
-              state={state}
-              names={names}
-              weAreBatting={weAreBatting}
-              dragMode={!!armedResult && !submitting}
-              onFielderDrop={onFielderDrop}
+              state={game.state}
+              names={game.names}
+              weAreBatting={game.weAreBatting}
+              dragMode={!!game.armedResult && !game.submitting}
+              onFielderDrop={game.onFielderDrop}
             />
           </Card>
-          <BatterCard state={state} weAreBatting={weAreBatting} currentSlot={currentSlot} names={names} />
+          <BatterCard
+            state={game.state}
+            weAreBatting={game.weAreBatting}
+            currentSlot={game.currentSlot}
+            names={game.names}
+          />
           <BallStrikeCounter
-            balls={balls}
-            strikes={strikes}
-            onBalls={setBalls}
-            onStrikes={setStrikes}
+            balls={game.balls}
+            strikes={game.strikes}
+            onBalls={game.setBalls}
+            onStrikes={game.setStrikes}
           />
           <OutcomeGrid
-            disabled={submitting || state.outs >= 3}
-            onPick={onOutcomePicked}
-            armedResult={armedResult}
+            disabled={game.submitting || game.state.outs >= 3}
+            onPick={game.onOutcomePicked}
+            armedResult={game.armedResult}
           />
           <FlowControls
-            onEndHalf={endHalfInning}
+            onEndHalf={game.endHalfInning}
             onPitchingChange={() => setPitchChangeOpen(true)}
             onSubstitution={() => setSubOpen(true)}
             onEditLastPlay={() => setEditOpen(true)}
             onFinalize={() => setConfirmFinalize(true)}
-            disabled={submitting}
-            outs={state.outs}
-            canEdit={state.at_bats.length > 0}
+            disabled={game.submitting}
+            outs={game.state.outs}
+            canEdit={game.state.at_bats.length > 0}
           />
-          {state.last_play_text && (
+          {game.state.last_play_text && (
             <Card className="p-3 bg-muted/40 text-sm">
               <span className="text-muted-foreground">Last play: </span>
-              {state.last_play_text}
+              {game.state.last_play_text}
             </Card>
           )}
         </div>
         <aside className="lg:sticky lg:top-4 lg:self-start space-y-4">
           <Card className="p-3">
             <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
-            <LiveSprayChart state={state} />
+            <LiveSprayChart state={game.state} />
           </Card>
         </aside>
       </div>
@@ -425,617 +141,34 @@ export function LiveScoring({ gameId, roster }: LiveScoringProps) {
         open={pitchChangeOpen}
         onOpenChange={setPitchChangeOpen}
         roster={roster}
-        currentPitcherId={state.current_pitcher_id}
-        names={names}
-        onPick={submitPitchingChange}
-        disabled={submitting}
+        currentPitcherId={game.state.current_pitcher_id}
+        names={game.names}
+        onPick={onPickPitcher}
+        disabled={game.submitting}
       />
       <SubstitutionDialog
         open={subOpen}
         onOpenChange={setSubOpen}
-        state={state}
+        state={game.state}
         roster={roster}
-        names={names}
-        onSubmit={submitSubstitution}
-        disabled={submitting}
+        names={game.names}
+        onSubmit={onSubmitSub}
+        disabled={game.submitting}
       />
       <EditLastPlayDialog
         open={editOpen}
         onOpenChange={setEditOpen}
-        lastAtBat={state.at_bats[state.at_bats.length - 1] ?? null}
-        onPick={editLastPlay}
-        disabled={submitting}
+        lastAtBat={game.state.at_bats[game.state.at_bats.length - 1] ?? null}
+        onPick={onPickEdit}
+        disabled={game.submitting}
       />
       <FinalizeDialog
         open={confirmFinalize}
         onOpenChange={setConfirmFinalize}
-        state={state}
-        onConfirm={finalize}
-        disabled={submitting}
+        state={game.state}
+        onConfirm={onConfirmFinalize}
+        disabled={game.submitting}
       />
     </div>
   );
-}
-
-// ---- Sub-components --------------------------------------------------------
-
-function TopBar({ state, weAreBatting }: { state: ReplayState; weAreBatting: boolean }) {
-  const teamLabel = weAreBatting ? "↑ batting" : "fielding";
-  return (
-    <Card className="p-4">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="font-mono-stat text-3xl text-sa-blue-deep">
-          <span className="text-muted-foreground text-base mr-2">us</span>
-          {state.team_score}
-          <span className="text-muted-foreground mx-2">–</span>
-          {state.opponent_score}
-          <span className="text-muted-foreground text-base ml-2">opp</span>
-        </div>
-        <div className="text-sm text-sa-blue uppercase tracking-wider font-semibold">
-          {state.half === "top" ? "Top" : "Bot"} {state.inning} · {state.outs} out{state.outs === 1 ? "" : "s"} · {teamLabel}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function BatterCard({
-  state,
-  weAreBatting,
-  currentSlot,
-  names,
-}: {
-  state: ReplayState;
-  weAreBatting: boolean;
-  currentSlot: ReplayState["our_lineup"][number] | null;
-  names: Map<string, string>;
-}) {
-  if (!weAreBatting) {
-    const pitcherName = state.current_pitcher_id ? names.get(state.current_pitcher_id) : null;
-    return (
-      <Card className="p-4">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground">Opponent at bat</p>
-        <p className="font-display text-xl text-sa-blue-deep">
-          Pitching: {pitcherName ?? "(no pitcher set)"}
-        </p>
-      </Card>
-    );
-  }
-  const batterName = currentSlot?.player_id ? names.get(currentSlot.player_id) : null;
-  return (
-    <Card className="p-4">
-      <p className="text-xs uppercase tracking-wider text-muted-foreground">At bat — slot {state.current_batter_slot}</p>
-      <p className="font-display text-xl text-sa-blue-deep">
-        {batterName ?? "(empty slot)"}
-        {currentSlot?.position ? <span className="text-muted-foreground text-sm ml-2">{currentSlot.position}</span> : null}
-      </p>
-    </Card>
-  );
-}
-
-function BallStrikeCounter({
-  balls,
-  strikes,
-  onBalls,
-  onStrikes,
-}: {
-  balls: number;
-  strikes: number;
-  onBalls: (n: number) => void;
-  onStrikes: (n: number) => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-      <Counter label="Balls" max={4} value={balls} onChange={onBalls} />
-      <Counter label="Strikes" max={3} value={strikes} onChange={onStrikes} />
-      <span className="font-mono-stat text-2xl text-sa-blue-deep">{balls}-{strikes}</span>
-      <span className="text-xs text-muted-foreground">resets after each at-bat</span>
-    </div>
-  );
-}
-
-function Counter({
-  label,
-  value,
-  max,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  max: number;
-  onChange: (n: number) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs uppercase tracking-wider text-muted-foreground w-12">{label}</span>
-      <Button size="sm" variant="outline" onClick={() => onChange(Math.max(0, value - 1))} disabled={value <= 0}>−</Button>
-      <span className="font-mono-stat text-xl w-6 text-center">{value}</span>
-      <Button size="sm" variant="outline" onClick={() => onChange(Math.min(max, value + 1))} disabled={value >= max}>+</Button>
-    </div>
-  );
-}
-
-function OutcomeGrid({
-  disabled,
-  onPick,
-  armedResult,
-}: {
-  disabled: boolean;
-  onPick: (r: AtBatResult) => void;
-  armedResult: AtBatResult | null;
-}) {
-  return (
-    <div className="space-y-2">
-      <ButtonRow disabled={disabled} onPick={onPick} results={NON_CONTACT} variant="default" armedResult={armedResult} />
-      <ButtonRow disabled={disabled} onPick={onPick} results={HITS} variant="hit" armedResult={armedResult} />
-      <ButtonRow disabled={disabled} onPick={onPick} results={OUTS_IN_PLAY} variant="out" armedResult={armedResult} />
-    </div>
-  );
-}
-
-function ButtonRow({
-  disabled,
-  onPick,
-  results,
-  variant,
-  armedResult,
-}: {
-  disabled: boolean;
-  onPick: (r: AtBatResult) => void;
-  results: AtBatResult[];
-  variant: "default" | "hit" | "out";
-  armedResult: AtBatResult | null;
-}) {
-  const cls =
-    variant === "hit"
-      ? "bg-sa-orange hover:bg-sa-orange/90 text-white"
-      : variant === "out"
-        ? "bg-muted hover:bg-muted/80 text-foreground"
-        : "bg-sa-blue hover:bg-sa-blue/90 text-white";
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-      {results.map((r) => {
-        const isArmed = armedResult === r;
-        return (
-          <Button
-            key={r}
-            disabled={disabled || (armedResult !== null && !isArmed)}
-            onClick={() => onPick(r)}
-            className={`h-16 text-lg font-bold ${cls} ${isArmed ? "ring-4 ring-sa-blue-deep ring-offset-2" : ""}`}
-            title={RESULT_DESC[r] ?? r}
-          >
-            {RESULT_LABEL[r]}
-          </Button>
-        );
-      })}
-    </div>
-  );
-}
-
-function FlowControls({
-  onEndHalf,
-  onPitchingChange,
-  onSubstitution,
-  onEditLastPlay,
-  onFinalize,
-  disabled,
-  outs,
-  canEdit,
-}: {
-  onEndHalf: () => void;
-  onPitchingChange: () => void;
-  onSubstitution: () => void;
-  onEditLastPlay: () => void;
-  onFinalize: () => void;
-  disabled: boolean;
-  outs: number;
-  canEdit: boolean;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-3 pt-2 border-t">
-      <Button variant="outline" disabled={disabled} onClick={onEndHalf}>
-        End ½ inning
-      </Button>
-      <Button variant="outline" disabled={disabled} onClick={onSubstitution}>
-        Substitution
-      </Button>
-      <Button variant="outline" disabled={disabled} onClick={onPitchingChange}>
-        Pitching change
-      </Button>
-      <Button variant="outline" disabled={disabled || !canEdit} onClick={onEditLastPlay}>
-        Edit last play
-      </Button>
-      <Button
-        variant="outline"
-        disabled={disabled}
-        onClick={onFinalize}
-        className="border-sa-orange text-sa-orange hover:bg-sa-orange hover:text-white"
-      >
-        Finalize game
-      </Button>
-      {outs >= 3 && (
-        <span className="text-xs uppercase tracking-wider text-sa-orange font-semibold">
-          3 outs — end the half-inning to continue
-        </span>
-      )}
-    </div>
-  );
-}
-
-function PitchingChangeDialog({
-  open,
-  onOpenChange,
-  roster,
-  currentPitcherId,
-  names,
-  onPick,
-  disabled,
-}: {
-  open: boolean;
-  onOpenChange: (b: boolean) => void;
-  roster: RosterDisplay[];
-  currentPitcherId: string | null;
-  names: Map<string, string>;
-  onPick: (id: string) => void;
-  disabled: boolean;
-}) {
-  const currentName = currentPitcherId ? names.get(currentPitcherId) : null;
-  const candidates = roster.filter((p) => p.id !== currentPitcherId);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Pitching change</DialogTitle>
-          <DialogDescription>
-            {currentName ? <>Currently on the mound: <span className="font-semibold">{currentName}</span>. Tap a player to bring them in.</> : <>Tap a player to put them on the mound.</>}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="max-h-[60vh] overflow-y-auto -mx-2 px-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {candidates.map((p) => {
-              const num = p.jersey_number ? `#${p.jersey_number} ` : "";
-              return (
-                <Button
-                  key={p.id}
-                  variant="outline"
-                  disabled={disabled}
-                  onClick={() => onPick(p.id)}
-                  className="h-14 justify-start text-left"
-                >
-                  <span className="font-mono-stat text-sa-blue-deep mr-2">{num}</span>
-                  <span>{p.first_name} {p.last_name}</span>
-                </Button>
-              );
-            })}
-          </div>
-          {candidates.length === 0 && (
-            <p className="text-sm text-muted-foreground text-center py-6">
-              No other players on the roster.
-            </p>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-const SUB_POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"] as const;
-
-function SubstitutionDialog({
-  open,
-  onOpenChange,
-  state,
-  roster,
-  names,
-  onSubmit,
-  disabled,
-}: {
-  open: boolean;
-  onOpenChange: (b: boolean) => void;
-  state: ReplayState;
-  roster: RosterDisplay[];
-  names: Map<string, string>;
-  onSubmit: (payload: SubstitutionPayload) => void;
-  disabled: boolean;
-}) {
-  const [slotOrder, setSlotOrder] = useState<number | null>(null);
-  const [inPlayerId, setInPlayerId] = useState<string | null>(null);
-  const [position, setPosition] = useState<string | null>(null);
-
-  // Reset state when the dialog closes so reopening starts fresh.
-  useEffect(() => {
-    if (!open) {
-      setSlotOrder(null);
-      setInPlayerId(null);
-      setPosition(null);
-    }
-  }, [open]);
-
-  const slot = state.our_lineup.find((s) => s.batting_order === slotOrder) ?? null;
-  const lineupIds = new Set(
-    state.our_lineup.map((s) => s.player_id).filter(Boolean) as string[],
-  );
-  const benchPlayers = roster.filter(
-    (p) => !lineupIds.has(p.id) && p.id !== state.current_pitcher_id,
-  );
-
-  const outName = slot?.player_id ? names.get(slot.player_id) ?? null : null;
-  const canSubmit =
-    !disabled && slot?.player_id && inPlayerId && inPlayerId !== slot.player_id;
-
-  const handleSubmit = () => {
-    if (!slot?.player_id || !inPlayerId || !slotOrder) return;
-    onSubmit({
-      out_player_id: slot.player_id,
-      in_player_id: inPlayerId,
-      batting_order: slotOrder,
-      position: position ?? slot.position ?? null,
-      sub_type: "regular",
-    });
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Substitution</DialogTitle>
-          <DialogDescription>
-            Replace a player in the lineup. The new player keeps the slot&apos;s batting order.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          <div>
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Lineup slot</Label>
-            <Select
-              value={slotOrder ? String(slotOrder) : ""}
-              onValueChange={(v) => {
-                const n = Number(v);
-                setSlotOrder(n);
-                const target = state.our_lineup.find((s) => s.batting_order === n);
-                setPosition(target?.position ?? null);
-              }}
-            >
-              <SelectTrigger><SelectValue placeholder="— pick slot —" /></SelectTrigger>
-              <SelectContent>
-                {state.our_lineup.map((s) => {
-                  const who = s.player_id ? names.get(s.player_id) ?? "—" : "(empty)";
-                  return (
-                    <SelectItem key={s.batting_order} value={String(s.batting_order)}>
-                      {s.batting_order}. {who}{s.position ? ` (${s.position})` : ""}
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-            {outName && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Coming out: <span className="font-semibold text-sa-blue-deep">{outName}</span>
-              </p>
-            )}
-          </div>
-
-          <div>
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Coming in</Label>
-            <Select
-              value={inPlayerId ?? ""}
-              onValueChange={(v) => setInPlayerId(v || null)}
-              disabled={!slotOrder}
-            >
-              <SelectTrigger><SelectValue placeholder={slotOrder ? "— pick bench player —" : "Pick a slot first"} /></SelectTrigger>
-              <SelectContent>
-                {benchPlayers.length === 0 && (
-                  <div className="px-2 py-1.5 text-sm text-muted-foreground">No bench players available.</div>
-                )}
-                {benchPlayers.map((p) => {
-                  const num = p.jersey_number ? `#${p.jersey_number} ` : "";
-                  return (
-                    <SelectItem key={p.id} value={p.id}>
-                      {num}{p.first_name} {p.last_name}
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">Position</Label>
-            <Select
-              value={position ?? ""}
-              onValueChange={(v) => setPosition(v || null)}
-              disabled={!slotOrder}
-            >
-              <SelectTrigger><SelectValue placeholder="— position —" /></SelectTrigger>
-              <SelectContent>
-                {SUB_POSITIONS.filter((pos) => pos !== "DH" || state.use_dh).map((pos) => (
-                  <SelectItem key={pos} value={pos}>{pos}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">
-              Defaults to the slot&apos;s current position. Pitching changes are handled separately.
-            </p>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button disabled={!canSubmit} onClick={handleSubmit} className="bg-sa-orange hover:bg-sa-orange/90">
-            Make substitution
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-const EDIT_RESULTS: AtBatResult[] = [
-  ...NON_CONTACT,
-  ...HITS,
-  ...OUTS_IN_PLAY,
-];
-
-function EditLastPlayDialog({
-  open,
-  onOpenChange,
-  lastAtBat,
-  onPick,
-  disabled,
-}: {
-  open: boolean;
-  onOpenChange: (b: boolean) => void;
-  lastAtBat: DerivedAtBat | null;
-  onPick: (r: AtBatResult) => void;
-  disabled: boolean;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Edit last play</DialogTitle>
-          <DialogDescription>
-            Replace the last at-bat&apos;s result. Bases, outs, and runs re-derive from the
-            new outcome. Spray location and fielder carry forward; re-record the play
-            from scratch if those need to change.
-          </DialogDescription>
-        </DialogHeader>
-        {lastAtBat && (
-          <p className="text-sm text-muted-foreground border-l-2 border-sa-blue pl-3 my-2">
-            Currently: <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[lastAtBat.result] ?? lastAtBat.result}</span>
-            {lastAtBat.description ? <> — {lastAtBat.description}</> : null}
-          </p>
-        )}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 py-2">
-          {EDIT_RESULTS.map((r) => (
-            <Button
-              key={r}
-              variant="outline"
-              disabled={disabled || !lastAtBat || lastAtBat.result === r}
-              onClick={() => onPick(r)}
-              className="h-12 font-bold"
-              title={RESULT_DESC[r] ?? r}
-            >
-              {RESULT_LABEL[r]}
-            </Button>
-          ))}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function FinalizeDialog({
-  open,
-  onOpenChange,
-  state,
-  onConfirm,
-  disabled,
-}: {
-  open: boolean;
-  onOpenChange: (b: boolean) => void;
-  state: ReplayState;
-  onConfirm: () => void;
-  disabled: boolean;
-}) {
-  const result =
-    state.team_score > state.opponent_score ? "Win"
-    : state.team_score < state.opponent_score ? "Loss"
-    : "Tie";
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Finalize this game?</DialogTitle>
-          <DialogDescription>
-            The game will appear as final on the public scoreboard. You can un-finalize from the
-            schedule page within 7 days if you need to fix something.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="py-4 text-center space-y-1">
-          <p className="font-mono-stat text-4xl text-sa-blue-deep">
-            {state.team_score} <span className="text-muted-foreground">–</span> {state.opponent_score}
-          </p>
-          <p className="text-xs uppercase tracking-wider text-muted-foreground">{result}</p>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button disabled={disabled} onClick={onConfirm} className="bg-sa-orange hover:bg-sa-orange/90">
-            {disabled ? "Finalizing…" : "Yes, finalize"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---- Helpers ---------------------------------------------------------------
-
-function isOurHalf(weAreHome: boolean, half: "top" | "bottom"): boolean {
-  return weAreHome ? half === "bottom" : half === "top";
-}
-
-interface PostBody {
-  client_event_id: string;
-  sequence_number: number;
-  event_type: string;
-  payload: unknown;
-}
-
-async function postEvent(gameId: string, body: PostBody): Promise<boolean> {
-  const res = await fetch(`/api/games/${gameId}/events`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => ({}));
-    toast.error(`Couldn't save event: ${detail.error ?? res.statusText}`);
-    return false;
-  }
-  return true;
-}
-
-// Auto-fill the count to match the outcome. Walks must be 4 balls; strikeouts
-// must be 3 strikes. For balls put in play (hits, in-play outs, FC, E,
-// sacs, DP/TP), the contact pitch counts as a strike — bump the strike
-// count by one if there's room. HBP is treated as neither.
-function finalCount(
-  result: AtBatResult,
-  balls: number,
-  strikes: number,
-): { balls: number; strikes: number } {
-  if (result === "BB" || result === "IBB") return { balls: 4, strikes };
-  if (result === "K_swinging" || result === "K_looking") return { balls, strikes: 3 };
-  if (result === "HBP") return { balls, strikes };
-  // Hits + in-play outs + FC + E + sacs + DP/TP — the in-play pitch is a strike.
-  return { balls, strikes: Math.min(3, strikes + 1) };
-}
-
-function describePlay(
-  result: AtBatResult,
-  runs: number,
-  batterId: string | null,
-  names: Map<string, string>,
-): string {
-  const base = RESULT_DESC[result] ?? result;
-  const who = batterId
-    ? ` by ${names.get(batterId) ?? "us"}`
-    : " (opp)";
-  if (runs === 0) return `${base}${who}`;
-  return `${base}${who} — ${runs} run${runs === 1 ? "" : "s"}`;
 }

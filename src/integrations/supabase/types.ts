@@ -20,6 +20,7 @@ export type InningHalf = "top" | "bottom";
 
 export type GameEventType =
   | "at_bat"
+  | "pitch"
   | "stolen_base"
   | "caught_stealing"
   | "pickoff"
@@ -227,11 +228,13 @@ export type Database = {
           created_by: string | null;
           created_at: string;
         };
+        // sequence_number is filled by the assign_game_event_sequence
+        // BEFORE INSERT trigger; clients omit it.
         Insert: {
           id?: string;
           game_id: string;
           client_event_id: string;
-          sequence_number: number;
+          sequence_number?: number;
           event_type: GameEventType;
           payload: Json;
           supersedes_event_id?: string | null;
