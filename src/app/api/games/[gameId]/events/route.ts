@@ -25,7 +25,6 @@ const EVENT_TYPES: GameEventType[] = [
 
 const eventSchema = z.object({
   client_event_id: z.string().min(1).max(128),
-  sequence_number: z.number().int().nonnegative(),
   event_type: z.enum(EVENT_TYPES as [GameEventType, ...GameEventType[]]),
   // Payload is validated structurally inside the replay engine; the route
   // just makes sure it's an object.
@@ -63,7 +62,6 @@ export async function POST(
   try {
     const result = await applyEvent(userClient, gameId, {
       client_event_id: parsed.data.client_event_id,
-      sequence_number: parsed.data.sequence_number,
       event_type: parsed.data.event_type,
       payload: parsed.data.payload as GameEventPayload,
       supersedes_event_id: parsed.data.supersedes_event_id ?? null,

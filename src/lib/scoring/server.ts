@@ -20,7 +20,6 @@ type AnyClient = any;
 
 export interface IncomingEvent {
   client_event_id: string;
-  sequence_number: number;
   event_type: GameEventType;
   payload: GameEventPayload;
   supersedes_event_id?: string | null;
@@ -47,12 +46,13 @@ export async function applyEvent(
   gameId: string,
   incoming: IncomingEvent,
 ): Promise<ApplyEventResult> {
+  // sequence_number is assigned by the assign_game_event_sequence
+  // BEFORE INSERT trigger under a per-game advisory lock.
   const insert = await userClient
     .from("game_events")
     .insert({
       game_id: gameId,
       client_event_id: incoming.client_event_id,
-      sequence_number: incoming.sequence_number,
       event_type: incoming.event_type,
       payload: incoming.payload as never,
       supersedes_event_id: incoming.supersedes_event_id ?? null,

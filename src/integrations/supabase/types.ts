@@ -135,6 +135,8 @@ export type Database = {
           sequence_number: number;
           supersedes_event_id: string | null;
         };
+        // sequence_number is filled by the assign_game_event_sequence
+        // BEFORE INSERT trigger; clients omit it.
         Insert: {
           client_event_id: string;
           created_at?: string;
@@ -143,7 +145,7 @@ export type Database = {
           game_id: string;
           id?: string;
           payload: Json;
-          sequence_number: number;
+          sequence_number?: number;
           supersedes_event_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["game_events"]["Insert"]>;
