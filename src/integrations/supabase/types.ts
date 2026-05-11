@@ -39,7 +39,8 @@ export type GameEventType =
   | "game_finalized"
   | "correction"
   | "pitch"
-  | "defensive_conference";
+  | "defensive_conference"
+  | "opposing_lineup_edit";
 
 // ---- Generated Database type (regenerated; do not hand-edit) ----------------
 
@@ -62,6 +63,7 @@ export type Database = {
           half: string;
           id: string;
           inning: number;
+          opponent_batter_id: string | null;
           opponent_pitcher_id: string | null;
           outs_recorded: number;
           pitch_count: number;
@@ -85,6 +87,7 @@ export type Database = {
           half: string;
           id?: string;
           inning: number;
+          opponent_batter_id?: string | null;
           opponent_pitcher_id?: string | null;
           outs_recorded?: number;
           pitch_count?: number;
@@ -97,6 +100,38 @@ export type Database = {
           strikes?: number;
         };
         Update: Partial<Database["public"]["Tables"]["at_bats"]["Insert"]>;
+        Relationships: [];
+      };
+      opponent_players: {
+        Row: {
+          bats: string | null;
+          created_at: string;
+          external_player_id: string | null;
+          first_name: string | null;
+          grad_year: number | null;
+          id: string;
+          jersey_number: string | null;
+          last_name: string | null;
+          opponent_team_id: string | null;
+          school_id: string;
+          throws: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          bats?: string | null;
+          created_at?: string;
+          external_player_id?: string | null;
+          first_name?: string | null;
+          grad_year?: number | null;
+          id?: string;
+          jersey_number?: string | null;
+          last_name?: string | null;
+          opponent_team_id?: string | null;
+          school_id: string;
+          throws?: string | null;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["opponent_players"]["Insert"]>;
         Relationships: [];
       };
       csv_uploads: {
@@ -207,12 +242,14 @@ export type Database = {
           game_id: string;
           id: string;
           name: string;
+          opponent_player_id: string | null;
         };
         Insert: {
           created_at?: string;
           game_id: string;
           id?: string;
           name: string;
+          opponent_player_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["game_opponent_pitchers"]["Insert"]>;
         Relationships: [];
@@ -335,6 +372,7 @@ export type Database = {
           division: string | null;
           id: string;
           is_discoverable: boolean;
+          is_public_roster: boolean;
           logo_url: string | null;
           name: string;
           primary_color: string | null;
@@ -342,6 +380,7 @@ export type Database = {
           secondary_color: string | null;
           short_name: string | null;
           slug: string;
+          timezone: string;
           updated_at: string;
         };
         Insert: {
@@ -351,6 +390,7 @@ export type Database = {
           division?: string | null;
           id?: string;
           is_discoverable?: boolean;
+          is_public_roster?: boolean;
           logo_url?: string | null;
           name: string;
           primary_color?: string | null;
@@ -358,6 +398,7 @@ export type Database = {
           secondary_color?: string | null;
           short_name?: string | null;
           slug: string;
+          timezone?: string;
           updated_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["schools"]["Insert"]>;
@@ -537,6 +578,17 @@ export type Database = {
           p_upload_date: string;
         };
         Returns: { snapshot_count: number; upload_id: string }[];
+      };
+      get_public_roster: {
+        Args: { p_team_id: string; p_season_year: number };
+        Returns: {
+          external_player_id: string;
+          first_name: string | null;
+          last_name: string | null;
+          jersey_number: string | null;
+          position: string | null;
+          grad_year: number | null;
+        }[];
       };
       is_school_admin: { Args: { p_school: string }; Returns: boolean };
       is_season_closed: { Args: { yr: number }; Returns: boolean };

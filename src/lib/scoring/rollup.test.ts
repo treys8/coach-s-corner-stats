@@ -25,6 +25,7 @@ function ab(overrides: Partial<DerivedAtBat>): DerivedAtBat {
     half: "top",
     batting_order: 1,
     batter_id: null,
+    opponent_batter_id: null,
     pitcher_id: null,
     opponent_pitcher_id: null,
     result: "GO",

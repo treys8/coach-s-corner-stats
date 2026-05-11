@@ -140,6 +140,7 @@ export async function rederive(gameId: string): Promise<ReplayState> {
       half: ab.half,
       batting_order: ab.batting_order,
       batter_id: ab.batter_id,
+      opponent_batter_id: ab.opponent_batter_id,
       pitcher_id: ab.pitcher_id,
       opponent_pitcher_id: ab.opponent_pitcher_id,
       result: ab.result,

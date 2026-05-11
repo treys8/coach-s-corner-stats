@@ -26,6 +26,7 @@ import type {
   GameStartedPayload,
   InningEndPayload,
   NonPaRunSource,
+  OpposingLineupEditPayload,
   PickoffPayload,
   PitchPayload,
   PitchingChangePayload,
@@ -130,6 +131,8 @@ function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
       return applyPitch(next, event.payload as PitchPayload);
     case "defensive_conference":
       return applyDefensiveConference(next, event.payload as DefensiveConferencePayload);
+    case "opposing_lineup_edit":
+      return applyOpposingLineupEdit(next, event.payload as OpposingLineupEditPayload);
     case "correction": {
       const p = event.payload as CorrectionPayload;
       // Void correction: original is in `superseded` and skipped; nothing to
@@ -177,12 +180,36 @@ function applyGameStarted(state: ReplayState, p: GameStartedPayload): ReplayStat
     current_pitcher_id: p.starting_pitcher_id,
     current_opponent_pitcher_id: p.opponent_starting_pitcher_id,
     current_batter_slot: 1,
+    opposing_lineup: p.opposing_lineup ?? [],
+    opponent_use_dh: p.opponent_use_dh ?? false,
+    current_opp_batter_slot: (p.opposing_lineup?.length ?? 0) > 0 ? 1 : null,
     inning: 1,
     half: "top",
     outs: 0,
     bases: { ...EMPTY_BASES },
     team_score: 0,
     opponent_score: 0,
+  };
+}
+
+/** Mid-game replacement of the opposing batting order. No validation —
+ *  opposing-side identity is much looser than ours (we never promise
+ *  complete stats for them). Resets `current_opp_batter_slot` to 1 only
+ *  when the lineup was previously empty; otherwise keeps the existing slot
+ *  pointer so a typo-fix mid-PA doesn't reset who's batting. */
+function applyOpposingLineupEdit(
+  state: ReplayState,
+  p: OpposingLineupEditPayload,
+): ReplayState {
+  const wasEmpty = state.opposing_lineup.length === 0;
+  return {
+    ...state,
+    opposing_lineup: p.opposing_lineup,
+    opponent_use_dh: p.opponent_use_dh ?? state.opponent_use_dh,
+    current_opp_batter_slot:
+      wasEmpty && p.opposing_lineup.length > 0
+        ? 1
+        : state.current_opp_batter_slot,
   };
 }
 
@@ -227,6 +254,13 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
       ? (state.current_batter_slot % lineupSize) + 1
       : state.current_batter_slot;
 
+  // Advance the opposing batter slot only when WE fielded (they batted).
+  const oppLineupSize = state.opposing_lineup.length || 9;
+  const next_opp_batter_slot =
+    !weAreBatting && state.current_opp_batter_slot !== null
+      ? (state.current_opp_batter_slot % oppLineupSize) + 1
+      : state.current_opp_batter_slot;
+
   // Pitch trail: when present, derive count from it; otherwise fall back
   // to the payload values for backward compatibility.
   const trail = state.current_pa_pitches;
@@ -238,6 +272,7 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     half: p.half,
     batting_order: p.batting_order,
     batter_id: p.batter_id,
+    opponent_batter_id: p.opponent_batter_id ?? null,
     pitcher_id: p.pitcher_id,
     opponent_pitcher_id: p.opponent_pitcher_id,
     result: p.result,
@@ -268,6 +303,7 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     team_score,
     opponent_score,
     current_batter_slot: next_batter_slot,
+    current_opp_batter_slot: next_opp_batter_slot,
     last_play_text: p.description,
     at_bats: [...state.at_bats, derived],
     current_balls: 0,

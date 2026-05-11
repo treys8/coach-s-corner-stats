@@ -57,12 +57,33 @@ export interface LineupSlot {
 
 export type LeagueType = "mlb" | "nfhs";
 
+/** A slot in the opposing batting order (set pre-game). Identity-fields are
+ *  optional: each slot must have jersey OR last_name (UI-validated). The
+ *  `opponent_player_id` references public.opponent_players — written by the
+ *  pre-game submit path after upserting opponent identity rows. */
+export interface OpposingLineupSlot {
+  batting_order: number;
+  opponent_player_id: string | null;
+  jersey_number: string | null;
+  last_name: string | null;
+  position: string | null;
+  is_dh: boolean;
+}
+
 export interface GameStartedPayload {
   we_are_home: boolean;
   use_dh: boolean;
   starting_lineup: LineupSlot[];
   starting_pitcher_id: string | null;            // ours
-  opponent_starting_pitcher_id: string | null;   // game_opponent_pitchers.id
+  opponent_starting_pitcher_id: string | null;   // game_opponent_pitchers.id (legacy) or opponent_players.id (post-phase-1)
+  /** Opposing batting order set pre-game. Mirrors `starting_lineup` for
+   *  symmetry. Absent on legacy game_started events emitted before phase 1
+   *  of opponent tracking shipped — the replay engine treats absence as
+   *  "no opposing lineup available." */
+  opposing_lineup?: OpposingLineupSlot[];
+  /** Opposing team's DH choice. Independent of `use_dh` (ours). Absent on
+   *  legacy events → engine defaults to false. */
+  opponent_use_dh?: boolean;
   /** Optional: league rule set for NFHS-specific behaviors (courtesy
    *  runner, re-entry validation, defensive-conference rule, pitch-count
    *  rest days). Defaults to "mlb" if absent. Phase 5. */
@@ -72,10 +93,20 @@ export interface GameStartedPayload {
   nfhs_state?: string | null;
 }
 
+/** Mid-game replacement of the opposing batting order. The replay engine
+ *  replaces ReplayState.opposing_lineup wholesale; no validation of starters
+ *  / re-entry (opposing identity is much looser than ours since we never
+ *  promise their stats are complete). */
+export interface OpposingLineupEditPayload {
+  opposing_lineup: OpposingLineupSlot[];
+  opponent_use_dh?: boolean;
+}
+
 export interface AtBatPayload {
   inning: number;
   half: InningHalf;
   batter_id: string | null;                 // null when opposing team is batting
+  opponent_batter_id?: string | null;       // opponent_players.id when opposing team is batting
   pitcher_id: string | null;                // our pitcher when fielding
   opponent_pitcher_id: string | null;       // opposing pitcher when batting
   batting_order: number | null;
@@ -196,7 +227,8 @@ export type GameEventPayload =
   | PickoffPayload
   | RunnerMovePayload
   | PitchPayload
-  | DefensiveConferencePayload;
+  | DefensiveConferencePayload
+  | OpposingLineupEditPayload;
 
 // ---- Persisted shape used by the engine ------------------------------------
 
@@ -238,6 +270,9 @@ export interface DerivedAtBat {
   half: InningHalf;
   batting_order: number | null;
   batter_id: string | null;
+  /** Set on opposing PAs to identify the opposing batter. Mutually
+   *  exclusive with batter_id (CHECK enforced in DB). */
+  opponent_batter_id: string | null;
   pitcher_id: string | null;
   opponent_pitcher_id: string | null;
   result: AtBatResult;
@@ -302,6 +337,16 @@ export interface ReplayState {
    *  before game_started. Persists across half-innings since the order
    *  resumes where it left off. */
   current_batter_slot: number | null;
+
+  /** Opposing batting order set pre-game (and mutable mid-game via
+   *  `opposing_lineup_edit` events). Empty array before game_started or on
+   *  legacy game_started events that predate opponent tracking. */
+  opposing_lineup: OpposingLineupSlot[];
+  /** Opposing team's DH choice. */
+  opponent_use_dh: boolean;
+  /** 1-based slot in opposing_lineup that's up next when we're fielding.
+   *  Null before game_started or when opposing_lineup is empty. */
+  current_opp_batter_slot: number | null;
 
   last_play_text: string | null;
   last_event_at: string | null;
@@ -395,6 +440,9 @@ export const INITIAL_STATE: ReplayState = {
   current_pitcher_id: null,
   current_opponent_pitcher_id: null,
   current_batter_slot: null,
+  opposing_lineup: [],
+  opponent_use_dh: false,
+  current_opp_batter_slot: null,
   last_play_text: null,
   last_event_at: null,
   at_bats: [],
