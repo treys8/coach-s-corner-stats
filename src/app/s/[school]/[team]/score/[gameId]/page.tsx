@@ -11,6 +11,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { currentSeasonYear } from "@/lib/season";
 import { formatGameTime } from "@/lib/date-display";
@@ -245,11 +255,21 @@ function PreGameForm({
     setLineup((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
   };
 
-  const addSlot = () => {
+  const [confirmEhOpen, setConfirmEhOpen] = useState(false);
+
+  const appendSlot = () => {
     setLineup((prev) => {
       if (prev.length >= MAX_LINEUP_SIZE) return prev;
       return [...prev, { batting_order: prev.length + 1, player_id: null, position: null }];
     });
+  };
+
+  const addSlot = () => {
+    if (lineup.length === MIN_LINEUP_SIZE) {
+      setConfirmEhOpen(true);
+      return;
+    }
+    appendSlot();
   };
 
   const removeLastSlot = () => {
@@ -431,6 +451,7 @@ function PreGameForm({
   if (pitcherId) usedIds.add(pitcherId);
 
   return (
+    <>
     <Card className="p-6 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h3 className="font-display text-2xl text-sa-blue-deep">Pre-game setup</h3>
@@ -569,6 +590,23 @@ function PreGameForm({
         )}
       </div>
     </Card>
+    <AlertDialog open={confirmEhOpen} onOpenChange={setConfirmEhOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Add a 10th batter?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Standard lineups are 9. Slot 10 will be an extra hitter (EH) — they bat
+            but don&apos;t take a defensive position. Add it only if your team is
+            using an EH.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={appendSlot}>Add EH</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 
