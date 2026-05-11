@@ -7,7 +7,14 @@ import {
   isClassification,
   isDivision,
 } from "@/lib/school-classifications";
+import { formatDatePart } from "@/lib/date-display";
 import { ScoresFilters } from "./ScoresFilters";
+
+// Public scores groups tiles by raw game_date string, and a single group
+// header may span schools in different timezones. Default the header label
+// to the app-wide Central TZ — per-school TZ wouldn't make sense for a
+// shared header.
+const SCORES_DISPLAY_TZ = "America/Chicago";
 
 export const metadata: Metadata = {
   title: "Scores — Statly",
@@ -329,12 +336,7 @@ const groupByDate = (tiles: Tile[]) => {
   return Array.from(map.entries()).sort(([a], [b]) => (a < b ? 1 : -1));
 };
 
-const fmtDate = (iso: string) =>
-  new Date(iso + "T12:00:00").toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
+const fmtDate = (iso: string) => formatDatePart(iso, "long", SCORES_DISPLAY_TZ);
 
 interface ScoresPageProps {
   searchParams: Promise<{

@@ -30,6 +30,16 @@ const supabase = createClient();
 const DEFAULT_PRIMARY = "#0021A5";
 const DEFAULT_SECONDARY = "#FF4A00";
 
+const TIMEZONES: { value: string; label: string }[] = [
+  { value: "America/New_York", label: "Eastern (New York)" },
+  { value: "America/Chicago", label: "Central (Chicago)" },
+  { value: "America/Denver", label: "Mountain (Denver)" },
+  { value: "America/Phoenix", label: "Arizona (no DST)" },
+  { value: "America/Los_Angeles", label: "Pacific (Los Angeles)" },
+  { value: "America/Anchorage", label: "Alaska" },
+  { value: "Pacific/Honolulu", label: "Hawaii" },
+];
+
 export default function SchoolSettingsPage() {
   const { school, isAdmin } = useSchool();
   const { session } = useAuth();
@@ -45,6 +55,7 @@ export default function SchoolSettingsPage() {
     association: school.association ?? "",
     classification: school.classification ?? "",
     division: school.division ?? "",
+    timezone: school.timezone,
   });
   const [busy, setBusy] = useState(false);
   const [allowCoachContact, setAllowCoachContact] = useState<boolean | null>(null);
@@ -146,6 +157,7 @@ export default function SchoolSettingsPage() {
       association: school.association ?? "",
       classification: school.classification ?? "",
       division: school.division ?? "",
+      timezone: school.timezone,
     });
   }, [school]);
 
@@ -343,6 +355,7 @@ export default function SchoolSettingsPage() {
         association: form.association || null,
         classification: form.classification || null,
         division: form.division || null,
+        timezone: form.timezone,
       })
       .eq("id", school.id);
     setBusy(false);
@@ -390,6 +403,25 @@ export default function SchoolSettingsPage() {
           />
           <p className="text-xs text-muted-foreground mt-1">
             Used in compact header labels. Defaults to the full name if empty.
+          </p>
+        </div>
+        <div>
+          <Label htmlFor="timezone" className="mb-1.5 block">Timezone</Label>
+          <Select
+            value={form.timezone}
+            onValueChange={(v) => setForm({ ...form, timezone: v })}
+          >
+            <SelectTrigger id="timezone" className="w-full sm:w-[280px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TIMEZONES.map((tz) => (
+                <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground mt-1">
+            Game dates and times across this school&apos;s pages render in this zone.
           </p>
         </div>
         <div>

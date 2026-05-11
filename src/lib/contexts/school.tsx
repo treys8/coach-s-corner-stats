@@ -15,6 +15,7 @@ export interface School {
   association: string | null;
   classification: string | null;
   division: string | null;
+  timezone: string;
 }
 
 export interface SchoolContextValue {

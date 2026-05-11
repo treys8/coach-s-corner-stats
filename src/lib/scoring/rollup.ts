@@ -567,7 +567,14 @@ export function rollupFielding(
   // batted-ball outs credit the primary fielder.
   for (const ab of atBats) {
     if (STRIKEOUT_RESULTS.has(ab.result)) {
-      if (ab.catcher_player_id) ensure(ab.catcher_player_id).PO += 1;
+      // Uncaught K3 (batter_reached_on_k3 set) means the catcher did NOT
+      // catch the third strike — no PO credit, even though the pitcher
+      // still gets the K. The fielder who eventually retired the runner
+      // (if any) would land on the corresponding `error_advance` or a
+      // follow-up play; we don't fabricate that credit here.
+      if (ab.catcher_player_id && !ab.batter_reached_on_k3) {
+        ensure(ab.catcher_player_id).PO += 1;
+      }
       continue;
     }
     if (ab.result === "CI") {

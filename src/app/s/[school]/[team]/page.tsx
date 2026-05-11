@@ -179,7 +179,7 @@ export default function RosterPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs uppercase tracking-wider text-muted-foreground">
-                    #{p.jersey_number || "—"} · {p.first_name}
+                    {p.first_name}
                   </p>
                   <p className="font-display text-2xl text-sa-blue-deep truncate group-hover:text-sa-orange transition-colors">
                     {p.last_name}

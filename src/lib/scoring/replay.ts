@@ -731,34 +731,32 @@ function ourCatcherIfFielding(state: ReplayState): string | null {
 }
 
 // Returns the player_id occupying `fielderPosition` in our current
-// defensive lineup. Falls back to current_pitcher_id when the position is
-// 'P' and no lineup slot tags the pitcher (typical with use_dh=true).
+// defensive lineup. For 'P' we ALWAYS prefer current_pitcher_id over the
+// lineup slot — pitching_change updates current_pitcher_id but doesn't
+// touch the lineup, so a stale slot at 'P' would otherwise yield the
+// outgoing pitcher.
 function resolveFielderPlayerId(state: ReplayState, fielderPosition: string): string | null {
+  if (fielderPosition === "P") return state.current_pitcher_id;
   for (const slot of state.our_lineup) {
     if (slot.position === fielderPosition && slot.player_id) return slot.player_id;
   }
-  if (fielderPosition === "P") return state.current_pitcher_id;
   return null;
 }
 
-// Snapshot of every player currently fielding a position for us, plus the
-// pitcher at 'P' when use_dh hides them from the batting lineup. Used by
-// the defensive-innings ledger so each defender gets credit for outs
-// recorded while they're on the field.
+// Snapshot of every player currently fielding a position for us. The
+// pitcher is always credited at 'P' via current_pitcher_id; lineup slots
+// at 'P' are skipped to avoid double-counting after a pitching_change
+// that left the slot stale (use_dh=false case).
 function defensivePositionsAtMoment(
   state: ReplayState,
 ): Array<{ player_id: string; position: string }> {
   const out: Array<{ player_id: string; position: string }> = [];
-  let pitcherCovered = false;
   for (const slot of state.our_lineup) {
-    if (slot.position && slot.player_id) {
+    if (slot.position && slot.player_id && slot.position !== "P") {
       out.push({ player_id: slot.player_id, position: slot.position });
-      if (slot.position === "P" && slot.player_id === state.current_pitcher_id) {
-        pitcherCovered = true;
-      }
     }
   }
-  if (!pitcherCovered && state.current_pitcher_id) {
+  if (state.current_pitcher_id) {
     out.push({ player_id: state.current_pitcher_id, position: "P" });
   }
   return out;

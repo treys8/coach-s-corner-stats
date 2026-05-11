@@ -15,7 +15,8 @@ import { formatStat } from "@/lib/csvParser";
 import { GLOSSARY } from "@/lib/glossary";
 import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
-import { aggregateByDate, RATE_STATS } from "@/lib/aggregate";
+import { aggregateByDate } from "@/lib/aggregate";
+import { buildLeaderboard, qualifierNote } from "@/lib/team-stats";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
@@ -34,9 +35,6 @@ interface PlayerInfo {
   jersey_number: string | null;
   season_year: number;
 }
-
-const MIN_AB = 5;
-const MIN_IP = 3;
 
 const KEY_DISPLAY: Record<Section, string[]> = {
   batting: ["GP","H","HR","RBI","R","BB","SO","SB","AVG","OBP","SLG","OPS"],
@@ -142,34 +140,6 @@ export default function TeamTotalsPage() {
     return { latestByPlayer, statKeys };
   }, [snapshots]);
 
-  const buildLeaderboard = (section: Section, stat: string) => {
-    const isBattingRate = section === "batting" && RATE_STATS.batting.includes(stat);
-    const isPitchingRate = section === "pitching" && RATE_STATS.pitching.includes(stat);
-    const rows: { player_id: string; value: number }[] = [];
-    for (const [pid, snap] of Object.entries(latestByPlayer)) {
-      const block = sectionOf(snap.stats, section);
-      const v = block[stat];
-      if (typeof v !== "number" || !Number.isFinite(v)) continue;
-
-      if (isBattingRate) {
-        const ab = sectionOf(snap.stats, "batting")["AB"];
-        if (typeof ab !== "number" || ab < MIN_AB) continue;
-      }
-      if (isPitchingRate) {
-        const ip = sectionOf(snap.stats, "pitching")["IP"];
-        if (typeof ip !== "number" || ip < MIN_IP) continue;
-      }
-      rows.push({ player_id: pid, value: v });
-    }
-    return rows;
-  };
-
-  const qualifierNote = (section: Section, stat: string): string | null => {
-    if (section === "batting" && RATE_STATS.batting.includes(stat)) return `Min ${MIN_AB} AB to qualify`;
-    if (section === "pitching" && RATE_STATS.pitching.includes(stat)) return `Min ${MIN_IP} IP to qualify`;
-    return null;
-  };
-
   if (loading) return <div className="container mx-auto px-6 py-10"><Skeleton className="h-96" /></div>;
 
   const renderTrend = (section: Section, keys: string[]) => {
@@ -247,7 +217,7 @@ export default function TeamTotalsPage() {
             const dir = leaderDir[sec];
             const available = statKeys[sec];
             const activeStat = available.includes(stat) ? stat : (available[0] ?? "");
-            const board = activeStat ? buildLeaderboard(sec, activeStat) : [];
+            const board = activeStat ? buildLeaderboard(latestByPlayer, sec, activeStat) : [];
             board.sort((a, b) => dir === "desc" ? b.value - a.value : a.value - b.value);
             return (
             <TabsContent key={sec} value={sec} className="space-y-6 mt-6">

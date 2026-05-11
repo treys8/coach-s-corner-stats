@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { currentSeasonYear } from "@/lib/season";
+import { formatGameTime } from "@/lib/date-display";
 import type { GameStatus, GameLocation } from "@/integrations/supabase/types";
 
 interface ScorableGame {
@@ -57,7 +58,10 @@ export default function ScoreIndexPage() {
     }
     setLoading(false);
   };
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [team.id]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [team.id]);
 
   const createAdHoc = async () => {
     if (!form.opponent.trim()) {
@@ -115,7 +119,7 @@ export default function ScoreIndexPage() {
                         {new Date(g.game_date + "T12:00:00").toLocaleDateString(undefined, {
                           weekday: "short", month: "short", day: "numeric",
                         })}
-                        {g.game_time ? ` · ${g.game_time.slice(0, 5)}` : ""}
+                        {g.game_time ? ` · ${formatGameTime(g.game_time)}` : ""}
                       </p>
                       <p className="font-display text-xl text-sa-blue-deep truncate">
                         {g.location === "home" ? "vs" : g.location === "away" ? "@" : "neutral"}{" "}

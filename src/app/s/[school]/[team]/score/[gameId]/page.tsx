@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { currentSeasonYear } from "@/lib/season";
+import { formatGameTime } from "@/lib/date-display";
 import type { GameStatus, GameLocation } from "@/integrations/supabase/types";
 import type { GameStartedPayload, LineupSlot } from "@/lib/scoring/types";
 import { LiveScoring } from "@/components/scoring/LiveScoring";
@@ -160,7 +161,7 @@ function GameHeader({ game, backHref }: { game: GameRow; backHref: string }) {
           {new Date(game.game_date + "T12:00:00").toLocaleDateString(undefined, {
             weekday: "long", month: "short", day: "numeric",
           })}
-          {game.game_time ? ` · ${game.game_time.slice(0, 5)}` : ""}
+          {game.game_time ? ` · ${formatGameTime(game.game_time)}` : ""}
         </p>
         <h2 className="font-display text-3xl text-sa-blue-deep">
           {game.location === "home" ? "vs" : game.location === "away" ? "@" : "neutral"}{" "}

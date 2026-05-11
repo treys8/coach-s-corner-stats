@@ -7,6 +7,7 @@ import { Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { TeamLevel } from "@/integrations/supabase/types";
+import { formatGameTime } from "@/lib/date-display";
 
 interface SuggestionRow {
   game_id: string;
@@ -201,7 +202,7 @@ export function RelinkSuggestionsBanner({ teamId, onChange }: RelinkSuggestionsB
                         />
                         <span className={skipped ? "line-through text-muted-foreground" : ""}>
                           {gm.date}
-                          {gm.time ? ` · ${gm.time.slice(0, 5)}` : ""}
+                          {gm.time ? ` · ${formatGameTime(gm.time)}` : ""}
                           <span className="text-muted-foreground"> · &quot;{gm.text}&quot;</span>
                         </span>
                       </li>

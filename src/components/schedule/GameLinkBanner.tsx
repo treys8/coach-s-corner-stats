@@ -7,6 +7,7 @@ import { Link2, Link2Off, AlertCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { GameStatus } from "@/integrations/supabase/types";
+import { formatGameTime } from "@/lib/date-display";
 
 type LinkRow = {
   id: string;
@@ -41,15 +42,8 @@ interface GameLinkBannerProps {
 
 const supabase = createClient();
 
-const fmtTime = (t: string | null): string => {
-  if (!t) return "no time set";
-  // game_time comes back as 'HH:MM:SS' from Postgres TIME.
-  const [hh, mm] = t.split(":");
-  const h = Number(hh);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const h12 = ((h + 11) % 12) + 1;
-  return `${h12}:${mm} ${ampm}`;
-};
+const fmtTime = (t: string | null): string =>
+  t ? formatGameTime(t) : "no time set";
 
 const statusBadge = (s: GameStatus) =>
   s === "final" ? "Final" : s === "in_progress" ? "Live" : "Draft";
