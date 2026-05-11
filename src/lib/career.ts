@@ -78,10 +78,18 @@ export function aggregateCareer(
   if (section === "batting") {
     const ab = summed.AB ?? 0;
     const h  = summed.H  ?? 0;
+    const hr = summed.HR ?? 0;
+    const so = summed.SO ?? 0;
     const bb = summed.BB ?? 0;
     const hbp = summed.HBP ?? 0;
     const sf = summed.SF ?? 0;
     const tb = summed.TB ?? 0;
+    const pa = summed.PA ?? 0;
+    const ps = summed.PS ?? 0;
+    const twoS3 = summed["2S+3"] ?? 0;
+    const sixPlus = summed["6+"] ?? 0;
+    const sb = summed.SB ?? 0;
+    const cs = summed.CS ?? 0;
 
     if (ab > 0) summed.AVG = h / ab;
     if (ab > 0) summed.SLG = tb / ab;
@@ -90,6 +98,17 @@ export function aggregateCareer(
     if (summed.OBP !== undefined && summed.SLG !== undefined) {
       summed.OPS = summed.OBP + summed.SLG;
     }
+    const babipDen = ab - so - hr + sf;
+    if (babipDen > 0) summed.BABIP = (h - hr) / babipDen;
+    if (ab > 0) summed["C%"] = (ab - so) / ab;
+    if (hr > 0) summed["AB/HR"] = ab / hr;
+    if (so > 0) summed["BB/K"] = bb / so;
+    if (pa > 0) {
+      summed["PS/PA"] = ps / pa;
+      summed["2S+3%"] = twoS3 / pa;
+      summed["6+%"] = sixPlus / pa;
+    }
+    if (sb + cs > 0) summed["SB%"] = sb / (sb + cs);
   } else if (section === "pitching") {
     if (ipSeen) summed.IP = outsToIp(outsTotal);
     const ipReal = outsTotal / 3;

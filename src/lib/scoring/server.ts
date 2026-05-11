@@ -9,7 +9,7 @@
 
 import { adminClient } from "@/lib/supabase/admin";
 import { replay } from "./replay";
-import { computeWLS, rollupBatting, rollupPitching } from "./rollup";
+import { computeWLS, rollupBatting, rollupFielding, rollupPitching } from "./rollup";
 import type { GameEventPayload, GameEventRecord, ReplayState } from "./types";
 import type { GameEventType } from "@/integrations/supabase/types";
 
@@ -215,8 +215,18 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     const game_date = gameRow.data.game_date as string;
     const season_year = new Date(game_date).getFullYear();
 
-    const batting = rollupBatting(state.at_bats);
+    const batting = rollupBatting(state.at_bats, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+    });
     const pitching = rollupPitching(state.at_bats, state.non_pa_runs);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
     const wls = computeWLS(
       state.at_bats,
       state.non_pa_runs,
@@ -228,7 +238,11 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     if (wls.W) { const line = pitching.get(wls.W); if (line) line.W = 1; }
     if (wls.L) { const line = pitching.get(wls.L); if (line) line.L = 1; }
     if (wls.SV) { const line = pitching.get(wls.SV); if (line) line.SV = 1; }
-    const playerIds = new Set<string>([...batting.keys(), ...pitching.keys()]);
+    const playerIds = new Set<string>([
+      ...batting.keys(),
+      ...pitching.keys(),
+      ...fielding.keys(),
+    ]);
 
     if (playerIds.size > 0) {
       const rows = [...playerIds].map((player_id) => ({
@@ -242,7 +256,7 @@ export async function rederive(gameId: string): Promise<ReplayState> {
         stats: {
           batting: batting.get(player_id) ?? {},
           pitching: pitching.get(player_id) ?? {},
-          fielding: {},
+          fielding: fielding.get(player_id) ?? {},
         },
       }));
       const ins = await admin.from("stat_snapshots").insert(rows as never[]);

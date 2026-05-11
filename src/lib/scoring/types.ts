@@ -267,6 +267,17 @@ export interface DerivedAtBat {
   pitches: PitchPayload[];
   /** Set when batter reached on uncaught K3 (mirrors AtBatPayload). */
   batter_reached_on_k3?: K3ReachSource;
+  /** Snapshot of the player who occupied `fielder_position` in our defensive
+   *  lineup at the moment of this PA, resolved at replay time. Used by
+   *  rollupFielding to credit PO/E/DP/TP to a specific player. Null when
+   *  our team was batting (the fielder belongs to the opponent) or when
+   *  fielder_position is null. In-memory only — not persisted to the
+   *  at_bats DB table. */
+  fielder_player_id?: string | null;
+  /** Snapshot of our catcher (player at position 'C') at the moment of this
+   *  PA. Used by rollupFielding to credit catcher PO on strikeouts and CI
+   *  on catcher's interference. Null when we were batting. In-memory only. */
+  catcher_player_id?: string | null;
 }
 
 export interface ReplayState {
@@ -326,6 +337,30 @@ export interface ReplayState {
     role: "pitcher" | "catcher";
     inning: number;
   }[];
+
+  /** Per-runner stolen base / caught stealing / pickoff logs, populated
+   *  by the corresponding event handlers. Used by rollupBatting to
+   *  credit SB/CS/PIK per batter. Runner_id may be null when the event
+   *  payload omitted it (legacy events); such entries are ignored by
+   *  the rollup. `catcher_id` is the player at 'C' in our defensive
+   *  lineup at the moment of the event when we were fielding, null when
+   *  we were batting — rollupFielding uses it to credit catcher SB
+   *  (allowed) / CS / PIK. */
+  stolen_bases: { runner_id: string | null; event_id: string; catcher_id: string | null }[];
+  caught_stealing: { runner_id: string | null; event_id: string; catcher_id: string | null }[];
+  pickoffs: { runner_id: string | null; event_id: string; catcher_id: string | null }[];
+
+  /** Passed-ball events logged so rollupFielding can credit each one to
+   *  the catcher in play at the moment. Only populated when we were
+   *  fielding. PB-derived runs continue to flow through `non_pa_runs`. */
+  passed_balls: { event_id: string; catcher_id: string | null }[];
+
+  /** Defensive outs accumulated per (player_id, position). Every at_bat
+   *  with outs_recorded > 0 during a half we were fielding contributes
+   *  those outs to each player currently in our defensive lineup (the 8
+   *  LineupSlots with a position plus current_pitcher_id at 'P').
+   *  Converted to innings (outs / 3) by rollupFielding. */
+  defensive_innings_outs: { [player_id: string]: { [position: string]: number } };
 }
 
 export type NonPaRunSource =
@@ -369,4 +404,9 @@ export const INITIAL_STATE: ReplayState = {
   non_pa_runs: [],
   defensive_conferences: [],
   courtesy_runners_used: [],
+  stolen_bases: [],
+  caught_stealing: [],
+  pickoffs: [],
+  passed_balls: [],
+  defensive_innings_outs: {},
 };

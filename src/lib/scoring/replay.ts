@@ -69,6 +69,8 @@ export function replay(events: GameEventRecord[]): ReplayState {
     at_bats: [],
     current_pa_pitches: [],
     non_pa_runs: [],
+    passed_balls: [],
+    defensive_innings_outs: {},
   };
 
   for (const e of sorted) {
@@ -89,6 +91,11 @@ function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
     at_bats: state.at_bats,
     current_pa_pitches: state.current_pa_pitches,
     non_pa_runs: state.non_pa_runs,
+    stolen_bases: state.stolen_bases,
+    caught_stealing: state.caught_stealing,
+    pickoffs: state.pickoffs,
+    passed_balls: state.passed_balls,
+    defensive_innings_outs: state.defensive_innings_outs,
     last_event_at: event.created_at,
   };
 
@@ -106,11 +113,11 @@ function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
     case "game_finalized":
       return { ...next, status: "final" };
     case "stolen_base":
-      return applyStolenBase(next, event.payload as StolenBasePayload);
+      return applyStolenBase(next, event.id, event.payload as StolenBasePayload);
     case "caught_stealing":
-      return applyCaughtStealing(next, event.payload as CaughtStealingPayload);
+      return applyCaughtStealing(next, event.id, event.payload as CaughtStealingPayload);
     case "pickoff":
-      return applyPickoff(next, event.payload as PickoffPayload);
+      return applyPickoff(next, event.id, event.payload as PickoffPayload);
     case "wild_pitch":
       return applyRunnerMove(next, event.id, "wild_pitch", event.payload as RunnerMovePayload);
     case "passed_ball":
@@ -187,6 +194,29 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
   const basesBefore: Bases = { ...state.bases };
   const { bases, runsScored, outsAdded } = resolveRunnerAdvances(state.bases, p, pitcherOfRecord);
 
+  // Fielder + catcher snapshots: only meaningful when we were fielding.
+  // When we batted, the fielder/catcher in play are the opponent's.
+  const fielderPlayerId =
+    !weAreBatting && p.fielder_position
+      ? resolveFielderPlayerId(state, p.fielder_position)
+      : null;
+  const catcherPlayerId = weAreBatting ? null : resolveFielderPlayerId(state, "C");
+
+  // Defensive-innings ledger: accrue outs to each player currently in our
+  // defensive lineup. Only when we were fielding (outs we recorded against
+  // the opposing batter).
+  let defensive_innings_outs = state.defensive_innings_outs;
+  if (!weAreBatting && outsAdded > 0) {
+    defensive_innings_outs = { ...state.defensive_innings_outs };
+    for (const { player_id, position } of defensivePositionsAtMoment(state)) {
+      const existing = defensive_innings_outs[player_id] ?? {};
+      defensive_innings_outs[player_id] = {
+        ...existing,
+        [position]: (existing[position] ?? 0) + outsAdded,
+      };
+    }
+  }
+
   const team_score = weAreBatting ? state.team_score + runsScored : state.team_score;
   const opponent_score = weAreBatting ? state.opponent_score : state.opponent_score + runsScored;
 
@@ -226,6 +256,8 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     description: p.description,
     pitches: trail.slice(),
     batter_reached_on_k3: p.batter_reached_on_k3,
+    fielder_player_id: fielderPlayerId,
+    catcher_player_id: catcherPlayerId,
   };
 
   return {
@@ -241,6 +273,7 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     current_balls: 0,
     current_strikes: 0,
     current_pa_pitches: [],
+    defensive_innings_outs,
   };
 }
 
@@ -405,8 +438,10 @@ function applyDefensiveConference(
 
 // ---- Mid-PA running events -------------------------------------------------
 
-function applyStolenBase(state: ReplayState, p: StolenBasePayload): ReplayState {
+function applyStolenBase(state: ReplayState, eventId: string, p: StolenBasePayload): ReplayState {
   const sourceRunner = state.bases[p.from];
+  const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
+  const catcherId = ourCatcherIfFielding(state);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
   let runsScored = 0;
@@ -417,19 +452,46 @@ function applyStolenBase(state: ReplayState, p: StolenBasePayload): ReplayState 
       ? sourceRunner
       : makeBaseRunner(p.runner_id ?? "", pitcherOfRecordFor(state), false);
   }
-  return creditRunningEvent(state, "", "stolen_base", bases, runsScored, 0);
+  const credited = creditRunningEvent(state, eventId, "stolen_base", bases, runsScored, 0);
+  return {
+    ...credited,
+    stolen_bases: [
+      ...state.stolen_bases,
+      { runner_id: runnerId, event_id: eventId, catcher_id: catcherId },
+    ],
+  };
 }
 
-function applyCaughtStealing(state: ReplayState, p: CaughtStealingPayload): ReplayState {
+function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtStealingPayload): ReplayState {
+  const sourceRunner = state.bases[p.from];
+  const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
+  const catcherId = ourCatcherIfFielding(state);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
-  return creditRunningEvent(state, "", "stolen_base", bases, 0, 1);
+  const credited = creditRunningEvent(state, eventId, "stolen_base", bases, 0, 1);
+  return {
+    ...credited,
+    caught_stealing: [
+      ...state.caught_stealing,
+      { runner_id: runnerId, event_id: eventId, catcher_id: catcherId },
+    ],
+  };
 }
 
-function applyPickoff(state: ReplayState, p: PickoffPayload): ReplayState {
+function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): ReplayState {
+  const sourceRunner = state.bases[p.from];
+  const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
+  const catcherId = ourCatcherIfFielding(state);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
-  return creditRunningEvent(state, "", "stolen_base", bases, 0, 1);
+  const credited = creditRunningEvent(state, eventId, "stolen_base", bases, 0, 1);
+  return {
+    ...credited,
+    pickoffs: [
+      ...state.pickoffs,
+      { runner_id: runnerId, event_id: eventId, catcher_id: catcherId },
+    ],
+  };
 }
 
 function applyRunnerMove(
@@ -442,13 +504,24 @@ function applyRunnerMove(
   // unearned (PDF §17, criteria 1 & 2). WP/balk runs are earned, so they
   // do NOT taint the runner.
   const taint = source === "passed_ball" || source === "error_advance";
+  const catcherId = source === "passed_ball" ? ourCatcherIfFielding(state) : null;
   const { bases, runsScored, outsAdded } = applyAdvances(
     state.bases,
     p.advances,
     pitcherOfRecordFor(state),
     taint,
   );
-  return creditRunningEvent(state, eventId, source, bases, runsScored, outsAdded);
+  const credited = creditRunningEvent(state, eventId, source, bases, runsScored, outsAdded);
+  if (source === "passed_ball") {
+    return {
+      ...credited,
+      passed_balls: [
+        ...state.passed_balls,
+        { event_id: eventId, catcher_id: catcherId },
+      ],
+    };
+  }
+  return credited;
 }
 
 // Shared bookkeeping for non-PA events: route runs to whichever team is
@@ -644,6 +717,51 @@ function makeBaseRunner(
   reachedOnError: boolean,
 ): BaseRunner {
   return { player_id: playerId, pitcher_of_record_id: pitcherOfRecordId, reached_on_error: reachedOnError };
+}
+
+// Returns our catcher (player_id at position 'C' in our_lineup) when the
+// half is opponent's bat (we're fielding). Returns null when we're batting
+// — the catcher in play is the opponent's and we don't track them.
+function ourCatcherIfFielding(state: ReplayState): string | null {
+  if (isOurHalf(state.we_are_home, state.half)) return null;
+  for (const slot of state.our_lineup) {
+    if (slot.position === "C" && slot.player_id) return slot.player_id;
+  }
+  return null;
+}
+
+// Returns the player_id occupying `fielderPosition` in our current
+// defensive lineup. Falls back to current_pitcher_id when the position is
+// 'P' and no lineup slot tags the pitcher (typical with use_dh=true).
+function resolveFielderPlayerId(state: ReplayState, fielderPosition: string): string | null {
+  for (const slot of state.our_lineup) {
+    if (slot.position === fielderPosition && slot.player_id) return slot.player_id;
+  }
+  if (fielderPosition === "P") return state.current_pitcher_id;
+  return null;
+}
+
+// Snapshot of every player currently fielding a position for us, plus the
+// pitcher at 'P' when use_dh hides them from the batting lineup. Used by
+// the defensive-innings ledger so each defender gets credit for outs
+// recorded while they're on the field.
+function defensivePositionsAtMoment(
+  state: ReplayState,
+): Array<{ player_id: string; position: string }> {
+  const out: Array<{ player_id: string; position: string }> = [];
+  let pitcherCovered = false;
+  for (const slot of state.our_lineup) {
+    if (slot.position && slot.player_id) {
+      out.push({ player_id: slot.player_id, position: slot.position });
+      if (slot.position === "P" && slot.player_id === state.current_pitcher_id) {
+        pitcherCovered = true;
+      }
+    }
+  }
+  if (!pitcherCovered && state.current_pitcher_id) {
+    out.push({ player_id: state.current_pitcher_id, position: "P" });
+  }
+  return out;
 }
 
 export { INITIAL_STATE } from "./types";

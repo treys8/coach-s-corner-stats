@@ -41,6 +41,8 @@ const atBat = (p: Partial<AtBatPayload>): AtBatPayload => ({
   result: "K_swinging",
   rbi: 0,
   pitch_count: 0,
+  balls: 0,
+  strikes: 0,
   spray_x: null,
   spray_y: null,
   fielder_position: null,
@@ -818,5 +820,32 @@ describe("replay()", () => {
       evt("balk", { advances: [{ from: "first", to: "second", player_id: "opp1" }] }),
     ]);
     expect(balkState.bases.second?.reached_on_error).toBe(false);
+  });
+
+  it("logs SB / CS / PIK events on ReplayState with runner_id and event_id", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+      evt("stolen_base", { runner_id: "p1", from: "first", to: "second" }, "sb-1"),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", batter_id: "p2",
+        runner_advances: [
+          { from: "second", to: "third", player_id: "p1" },
+          { from: "batter", to: "first", player_id: "p2" },
+        ],
+      })),
+      evt("caught_stealing", { runner_id: "p2", from: "first" }, "cs-1"),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", batter_id: "p3",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p3" }],
+      })),
+      evt("pickoff", { runner_id: "p3", from: "first" }, "pk-1"),
+    ]);
+    expect(state.stolen_bases).toEqual([{ runner_id: "p1", event_id: "sb-1" }]);
+    expect(state.caught_stealing).toEqual([{ runner_id: "p2", event_id: "cs-1" }]);
+    expect(state.pickoffs).toEqual([{ runner_id: "p3", event_id: "pk-1" }]);
   });
 });

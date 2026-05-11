@@ -12,7 +12,7 @@ export const SUM_STATS: Record<Section, Set<string>> = {
 
 /** Rate stats — averaged across the roster (rough team average). */
 export const RATE_STATS: Record<Section, string[]> = {
-  batting: ["AVG","OBP","SLG","OPS","BABIP","BA/RISP","SB%","QAB%","C%","BB/K","LD%","FB%","GB%"],
+  batting: ["AVG","OBP","SLG","OPS","BABIP","BA/RISP","SB%","QAB%","C%","BB/K","LD%","FB%","GB%","PS/PA","2S+3%","6+%","AB/HR"],
   pitching: ["ERA","WHIP","BAA","SV%","P/IP","P/BF","FIP","S%","FPS%","SM%","K/BF","K/BB","WEAK%","HHB%","GO/AO","BABIP","BA/RISP","SB%","FBS%","FBSW%","FBSM%","CBS%","CTS%","SLS%","CHS%","OSS%"],
   fielding: ["FPCT","CS%"],
 };
@@ -94,6 +94,27 @@ export const aggregateByDate = (snapshots: AggregateInput[]): DateAggregation[] 
       if (typeof b.OBP === "number" && typeof b.SLG === "number") {
         b.OPS = b.OBP + b.SLG;
       }
+      // BABIP, C%, AB/HR depend only on AB-side counts.
+      if (typeof b.H === "number" && typeof b.HR === "number" && typeof b.SO === "number") {
+        const babipDen = b.AB - b.SO - b.HR + (b.SF ?? 0);
+        if (babipDen > 0) b.BABIP = (b.H - b.HR) / babipDen;
+      }
+      if (typeof b.SO === "number") b["C%"] = (b.AB - b.SO) / b.AB;
+      if (typeof b.HR === "number" && b.HR > 0) b["AB/HR"] = b.AB / b.HR;
+    }
+    // BB/K depends only on BB and SO.
+    if (typeof b.BB === "number" && typeof b.SO === "number" && b.SO > 0) {
+      b["BB/K"] = b.BB / b.SO;
+    }
+    // Pitch-count discipline rates per PA.
+    if (typeof b.PA === "number" && b.PA > 0) {
+      if (typeof b.PS === "number") b["PS/PA"] = b.PS / b.PA;
+      if (typeof b["2S+3"] === "number") b["2S+3%"] = b["2S+3"] / b.PA;
+      if (typeof b["6+"] === "number") b["6+%"] = b["6+"] / b.PA;
+    }
+    // SB% from SB and CS counts.
+    if (typeof b.SB === "number" && typeof b.CS === "number" && b.SB + b.CS > 0) {
+      b["SB%"] = b.SB / (b.SB + b.CS);
     }
 
     result.push({ date, agg });
