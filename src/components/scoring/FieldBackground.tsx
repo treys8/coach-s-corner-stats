@@ -12,8 +12,10 @@
 export const FIELD_OUTFIELD_PATH = "M 50,92 L 95,30 A 70,40 0 0 0 5,30 Z";
 export const FIELD_OUTFIELD_ARC = "M 95,30 A 70,40 0 0 0 5,30";
 // Skinned-infield arc: pie wedge centered at home along the foul-line
-// directions. Radius 38 places 2B at (50,54) exactly on the back edge.
-export const FIELD_INFIELD_DIRT_PATH = "M 50,92 L 72.31,61.26 A 38,38 0 0 0 27.69,61.26 Z";
+// directions. Radius 48 puts 2B (at y=54) comfortably inside the dirt
+// with ~10 units of dirt extending past it toward CF, matching real
+// fields where the dirt arc sits past the bases.
+export const FIELD_INFIELD_DIRT_PATH = "M 50,92 L 78.18,53.17 A 48,48 0 0 0 21.82,53.17 Z";
 
 interface FieldBackgroundProps {
   /** Unique suffix appended to <defs> ids (pattern, clipPath) so multiple
@@ -35,8 +37,8 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
           height="100"
           patternUnits="userSpaceOnUse"
         >
-          <rect width="6" height="100" fill="#cfe1bb" />
-          <rect x="3" width="3" height="100" fill="#c6d8af" />
+          <rect width="6" height="100" fill="#9bc278" />
+          <rect x="3" width="3" height="100" fill="#82ad5f" />
         </pattern>
         <clipPath id={clipId}>
           <path d={FIELD_OUTFIELD_PATH} />
@@ -70,15 +72,29 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
       {/* Infield dirt — skinned-infield curved arc */}
       <path d={FIELD_INFIELD_DIRT_PATH} fill="#c9a47a" />
 
-      {/* Batter's-box dirt around home plate so home isn't floating in cream */}
-      <ellipse cx="50" cy="92" rx="8" ry="5.5" fill="#c9a47a" />
+      {/* Home-plate dirt: flat top flush with home plate, rounded bottom
+          for the catcher / umpire area. Covers the C chip at (50,96). */}
+      <path d="M 41,91 L 59,91 L 59,96 A 9,4 0 0 1 41,96 Z" fill="#c9a47a" />
 
       {/* Infield grass diamond — corners aligned with the bases */}
-      <polygon points="50,86 66,70 50,54 34,70" fill="#bfd5a4" />
+      <polygon points="50,86 66,70 50,54 34,70" fill="#a8d18c" />
+
+      {/* Pitcher's path: dirt strip from mound to home through the grass
+          (old-school "keyhole"). Drawn over the grass; mound + home plate
+          dirt overlap its ends so the transitions are seamless. */}
+      <rect x="47" y="75" width="6" height="16" fill="#c9a47a" />
+
+      {/* Foul lines: home through 1B/3B out to the wall corners */}
+      <line x1="50" y1="92" x2="95" y2="30" stroke="#fff" strokeWidth="0.4" opacity="0.85" />
+      <line x1="50" y1="92" x2="5" y2="30" stroke="#fff" strokeWidth="0.4" opacity="0.85" />
 
       {/* Pitcher's mound */}
-      <circle cx="50" cy="73" r="2.6" fill="#c9a47a" />
-      <rect x="48.6" y="72.7" width="2.8" height="0.6" fill="#fff" opacity="0.9" />
+      <circle cx="50" cy="73" r="5" fill="#c9a47a" />
+      <rect x="48.2" y="72.65" width="3.6" height="0.7" fill="#fff" opacity="0.95" />
+
+      {/* Batter's boxes flanking home plate (centered on plate vertically) */}
+      <rect x="43.5" y="91" width="3" height="5" fill="#fff" opacity="0.9" stroke="#1f3252" strokeWidth="0.18" />
+      <rect x="53.5" y="91" width="3" height="5" fill="#fff" opacity="0.9" stroke="#1f3252" strokeWidth="0.18" />
 
       {/* Home plate */}
       <polygon
