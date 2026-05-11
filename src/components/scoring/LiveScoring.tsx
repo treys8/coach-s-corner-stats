@@ -46,6 +46,8 @@ import type {
 import type { GameEventType } from "@/integrations/supabase/types";
 import { DefensiveDiamond, type FielderPosition } from "@/components/scoring/DefensiveDiamond";
 import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
+import { OpposingBatterPanel } from "@/components/score/OpposingBatterPanel";
+import type { OpposingLineupSlot } from "@/lib/scoring/types";
 import { GameStatusBar } from "@/components/scoring/GameStatusBar";
 import {
   Sheet,
@@ -199,6 +201,11 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
     () => state.our_lineup.find((s) => s.batting_order === state.current_batter_slot) ?? null,
     [state.our_lineup, state.current_batter_slot],
   );
+  const currentOppSlot = useMemo(
+    () => state.opposing_lineup.find((s) => s.batting_order === state.current_opp_batter_slot) ?? null,
+    [state.opposing_lineup, state.current_opp_batter_slot],
+  );
+  const currentOpponentBatterId = !weAreBatting ? currentOppSlot?.opponent_player_id ?? null : null;
 
   // The most recent event a coach can revert. Walks the event log backwards,
   // skipping void/correction events and events already superseded by a prior
@@ -286,9 +293,10 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
       inning: state.inning,
       half: state.half,
       batter_id: weAreBatting ? currentSlot?.player_id ?? null : null,
+      opponent_batter_id: currentOpponentBatterId,
       pitcher_id: weAreBatting ? null : state.current_pitcher_id,
       opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
-      batting_order: weAreBatting ? state.current_batter_slot : null,
+      batting_order: weAreBatting ? state.current_batter_slot : state.current_opp_batter_slot,
       result,
       rbi,
       pitch_count: finalBalls + finalStrikes,
@@ -364,9 +372,10 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
         inning: state.inning,
         half: state.half,
         batter_id: batterId,
+        opponent_batter_id: currentOpponentBatterId,
         pitcher_id: weAreBatting ? null : state.current_pitcher_id,
         opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
-        batting_order: weAreBatting ? state.current_batter_slot : null,
+        batting_order: weAreBatting ? state.current_batter_slot : state.current_opp_batter_slot,
         result: closing,
         rbi,
         pitch_count: fallback.balls + fallback.strikes,
@@ -730,6 +739,16 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
           />
         </div>
         <aside className="lg:sticky lg:top-[6rem] lg:self-start space-y-4">
+          {!weAreBatting && (
+            <OpposingBatterPanel
+              opponentPlayerId={currentOpponentBatterId}
+              slotLabel={
+                currentOppSlot
+                  ? formatOpposingSlotLabel(currentOppSlot)
+                  : "Set opposing lineup to track batters."
+              }
+            />
+          )}
           <Card className="p-3">
             <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
             <LiveSprayChart state={state} />
@@ -2177,6 +2196,13 @@ function FinalizeDialog({
 
 function isOurHalf(weAreHome: boolean, half: "top" | "bottom"): boolean {
   return weAreHome ? half === "bottom" : half === "top";
+}
+
+function formatOpposingSlotLabel(slot: OpposingLineupSlot): string {
+  const num = slot.jersey_number ? `#${slot.jersey_number} ` : "";
+  const name = slot.last_name ?? "";
+  const pos = slot.position ? ` · ${slot.position}` : "";
+  return `${num}${name}${pos}`.trim() || `Slot ${slot.batting_order}`;
 }
 
 interface PostBody {
