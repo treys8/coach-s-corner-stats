@@ -114,14 +114,21 @@ export async function rederive(gameId: string): Promise<ReplayState> {
   const state = replay(events);
 
   // Upsert live state (one row per game; PK is game_id).
+  // runner_first/second/third are FK'd to players(id), so only emit them when
+  // our team is batting. When the opposing team is batting, the player_ids on
+  // base are either opponent_players UUIDs or synthesized per-PA strings —
+  // both would break the FK / UUID column. inning_end clears bases, so the
+  // invariant "runners on base belong to the team batting this half" holds.
+  const weAreBatting =
+    state.we_are_home ? state.half === "bottom" : state.half === "top";
   const liveUpsert = await admin.from("game_live_state").upsert({
     game_id: gameId,
     inning: state.inning,
     half: state.half,
     outs: state.outs,
-    runner_first: state.bases.first?.player_id ?? null,
-    runner_second: state.bases.second?.player_id ?? null,
-    runner_third: state.bases.third?.player_id ?? null,
+    runner_first: weAreBatting ? state.bases.first?.player_id ?? null : null,
+    runner_second: weAreBatting ? state.bases.second?.player_id ?? null : null,
+    runner_third: weAreBatting ? state.bases.third?.player_id ?? null : null,
     team_score: state.team_score,
     opponent_score: state.opponent_score,
     last_play_text: state.last_play_text,
