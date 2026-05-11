@@ -213,7 +213,6 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     }
     const team_id = gameRow.data.team_id as string;
     const game_date = gameRow.data.game_date as string;
-    const season_year = new Date(game_date).getFullYear();
 
     const batting = rollupBatting(state.at_bats, {
       stolen_bases: state.stolen_bases,
@@ -248,7 +247,6 @@ export async function rederive(gameId: string): Promise<ReplayState> {
       const rows = [...playerIds].map((player_id) => ({
         team_id,
         player_id,
-        season_year,
         upload_date: game_date,
         game_id: gameId,
         source: "tablet" as const,

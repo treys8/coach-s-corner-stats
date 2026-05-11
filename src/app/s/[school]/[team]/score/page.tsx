@@ -13,7 +13,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { currentSeasonYear } from "@/lib/season";
 import { formatGameTime } from "@/lib/date-display";
 import type { GameStatus, GameLocation } from "@/integrations/supabase/types";
 
@@ -73,7 +72,6 @@ export default function ScoreIndexPage() {
       .from("games")
       .insert({
         team_id: team.id,
-        season_year: currentSeasonYear(),
         game_date: todayIso(),
         game_time: form.time || null,
         opponent: form.opponent.trim(),
