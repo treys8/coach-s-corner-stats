@@ -6,7 +6,6 @@ import { createClient } from "@/lib/supabase/client";
 import { useTeam } from "@/lib/contexts/team";
 import { useSchool } from "@/lib/contexts/school";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,9 +14,11 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { currentSeasonYear } from "@/lib/season";
 import { formatGameTime } from "@/lib/date-display";
-import type { GameStatus, GameLocation } from "@/integrations/supabase/types";
-import type { GameStartedPayload, LineupSlot } from "@/lib/scoring/types";
+import type { GameStatus, GameLocation, Json } from "@/integrations/supabase/types";
+import type { GameStartedPayload, LineupSlot, OpposingLineupSlot } from "@/lib/scoring/types";
 import { LiveScoring } from "@/components/scoring/LiveScoring";
+import { OpposingLineupPicker } from "@/components/score/OpposingLineupPicker";
+import { buildEmpty, slotHasIdentity, toLineupSlot, type OpposingSlotDraft } from "@/lib/opponents/lineup-sources";
 
 interface GameRow {
   id: string;
@@ -25,6 +26,7 @@ interface GameRow {
   game_date: string;
   game_time: string | null;
   opponent: string;
+  opponent_team_id: string | null;
   location: GameLocation;
   status: GameStatus;
   team_score: number | null;
@@ -64,7 +66,7 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
       const [gameRes, rosterRes] = await Promise.all([
         supabase
           .from("games")
-          .select("id, team_id, game_date, game_time, opponent, location, status, team_score, opponent_score, finalized_at")
+          .select("id, team_id, game_date, game_time, opponent, opponent_team_id, location, status, team_score, opponent_score, finalized_at")
           .eq("id", gameId)
           .maybeSingle(),
         supabase
@@ -201,11 +203,37 @@ function PreGameForm({
   onStarted: () => void;
 }) {
   const { team } = useTeam();
+  const { school } = useSchool();
   const [useDh, setUseDh] = useState(true);
   const [lineup, setLineup] = useState<SlotState[]>(emptyLineup);
   const [pitcherId, setPitcherId] = useState<string | null>(null);
+  const [opposingDraft, setOpposingDraft] = useState<OpposingSlotDraft[]>(() => buildEmpty());
+  const [oppUseDh, setOppUseDh] = useState(true);
   const [opposingPitcher, setOpposingPitcher] = useState("");
+  const [opposingPitcherJersey, setOpposingPitcherJersey] = useState("");
+  const [opponentIsPublicRoster, setOpponentIsPublicRoster] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Detect whether the opposing school has a public roster so the Pull
+  // button can advertise (or hide) the affordance accurately.
+  useEffect(() => {
+    if (!game.opponent_team_id) {
+      setOpponentIsPublicRoster(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("teams")
+        .select("schools!inner(is_public_roster)")
+        .eq("id", game.opponent_team_id)
+        .maybeSingle();
+      if (cancelled) return;
+      const row = data as unknown as { schools: { is_public_roster: boolean } } | null;
+      setOpponentIsPublicRoster(row?.schools.is_public_roster ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [game.opponent_team_id]);
 
   const weAreHome = game.location === "home" || game.location === "neutral";
 
@@ -244,6 +272,19 @@ function PreGameForm({
     if (!useDh && !lineup.some((s) => s.position === "P")) {
       return "Without DH, one of the batters must play P.";
     }
+
+    // Opposing-side hard gate: every slot needs jersey OR last name (the
+    // identity minimum). Defensive position is optional pre-game.
+    const oppMissing = opposingDraft.findIndex((s) => !slotHasIdentity(s));
+    if (oppMissing !== -1) {
+      return `Opposing slot ${oppMissing + 1} needs a jersey number or last name.`;
+    }
+    if (oppUseDh && !opposingPitcher.trim() && !opposingPitcherJersey.trim()) {
+      return "Opposing starting pitcher: enter a jersey number or last name.";
+    }
+    if (!oppUseDh && !opposingDraft.some((s) => s.position === "P")) {
+      return "Opposing side: without DH, one batting slot must be tagged P.";
+    }
     return null;
   };
 
@@ -262,23 +303,85 @@ function PreGameForm({
       position: s.position,
     }));
 
-    const payload: GameStartedPayload = {
-      we_are_home: weAreHome,
-      use_dh: useDh,
-      starting_lineup: lineupPayload,
-      starting_pitcher_id: startingPitcherId,
-      opponent_starting_pitcher_id: null,
-      league_type: team.league_type,
-      nfhs_state: team.nfhs_state,
+    setSubmitting(true);
+
+    // Step 1: upsert opponent_players for every opposing slot + the
+    // opposing starting pitcher (when present). Single round-trip via RPC.
+    // The client_ref maps results back to slot indices.
+    type UpsertRow = {
+      client_ref: string;
+      opponent_team_id: string | null;
+      external_player_id: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      jersey_number: string | null;
+      bats: string | null;
+      throws: string | null;
+      grad_year: number | null;
     };
 
-    setSubmitting(true);
+    const upsertRows: UpsertRow[] = opposingDraft.map((s, i) => ({
+      client_ref: `slot-${i}`,
+      opponent_team_id: s.opponent_team_id,
+      external_player_id: s.external_player_id,
+      first_name: s.first_name?.trim() || null,
+      last_name: s.last_name?.trim() || null,
+      jersey_number: s.jersey_number?.trim() || null,
+      bats: null,
+      throws: null,
+      grad_year: null,
+    }));
+
+    if (oppUseDh && (opposingPitcher.trim() || opposingPitcherJersey.trim())) {
+      upsertRows.push({
+        client_ref: "pitcher",
+        opponent_team_id: game.opponent_team_id,
+        external_player_id: null,
+        first_name: null,
+        last_name: opposingPitcher.trim() || null,
+        jersey_number: opposingPitcherJersey.trim() || null,
+        bats: null,
+        throws: null,
+        grad_year: null,
+      });
+    }
+
+    const upsertRes = await supabase.rpc("upsert_opponent_players", {
+      p_school: school.id,
+      p_rows: upsertRows as unknown as Json,
+    });
+    if (upsertRes.error) {
+      setSubmitting(false);
+      toast.error(`Couldn't save opposing lineup: ${upsertRes.error.message}`);
+      return;
+    }
+    const idByRef = new Map<string, string>();
+    for (const r of upsertRes.data ?? []) {
+      idByRef.set(r.client_ref, r.opponent_player_id);
+    }
+
+    const opposingLineup: OpposingLineupSlot[] = opposingDraft.map((s, i) => {
+      const oppId = idByRef.get(`slot-${i}`) ?? null;
+      return toLineupSlot({ ...s, opponent_player_id: oppId });
+    });
+
+    // Step 2: opposing starting pitcher. The legacy game_opponent_pitchers
+    // table still backs at_bats.opponent_pitcher_id, so we mirror the
+    // pitcher row into it (linked to the new opponent_players record via
+    // opponent_player_id). Phase 1.5 retires this once at_bats migrates.
     let opponentPitcherId: string | null = null;
-    const oppName = opposingPitcher.trim();
-    if (oppName) {
+    const pitcherOppPlayerId = oppUseDh ? idByRef.get("pitcher") ?? null : null;
+    const pitcherDisplayName = oppUseDh
+      ? (opposingPitcher.trim() || opposingPitcherJersey.trim())
+      : null;
+    if (pitcherDisplayName) {
       const { data, error } = await supabase
         .from("game_opponent_pitchers")
-        .insert({ game_id: game.id, name: oppName })
+        .insert({
+          game_id: game.id,
+          name: pitcherDisplayName,
+          opponent_player_id: pitcherOppPlayerId,
+        })
         .select("id")
         .single();
       if (error || !data) {
@@ -290,8 +393,15 @@ function PreGameForm({
     }
 
     const eventPayload: GameStartedPayload = {
-      ...payload,
+      we_are_home: weAreHome,
+      use_dh: useDh,
+      starting_lineup: lineupPayload,
+      starting_pitcher_id: startingPitcherId,
       opponent_starting_pitcher_id: opponentPitcherId,
+      opposing_lineup: opposingLineup,
+      opponent_use_dh: oppUseDh,
+      league_type: team.league_type,
+      nfhs_state: team.nfhs_state,
     };
 
     const res = await fetch(`/api/games/${game.id}/events`, {
@@ -419,13 +529,21 @@ function PreGameForm({
         </div>
       )}
 
-      <div className="max-w-md">
-        <Label htmlFor="opp-pitch">Opposing starting pitcher (optional)</Label>
-        <Input
-          id="opp-pitch"
-          placeholder="e.g. Smith"
-          value={opposingPitcher}
-          onChange={(e) => setOpposingPitcher(e.target.value)}
+      <div className="border-t pt-6">
+        <OpposingLineupPicker
+          myTeamId={team.id}
+          gameId={game.id}
+          opponentName={game.opponent}
+          opponentTeamId={game.opponent_team_id}
+          opponentIsPublicRoster={opponentIsPublicRoster}
+          draft={opposingDraft}
+          setDraft={setOpposingDraft}
+          useDh={oppUseDh}
+          setUseDh={setOppUseDh}
+          opposingPitcherName={opposingPitcher}
+          setOpposingPitcherName={setOpposingPitcher}
+          opposingPitcherJersey={opposingPitcherJersey}
+          setOpposingPitcherJersey={setOpposingPitcherJersey}
         />
       </div>
 

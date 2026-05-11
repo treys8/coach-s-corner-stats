@@ -590,6 +590,10 @@ export type Database = {
           grad_year: number | null;
         }[];
       };
+      upsert_opponent_players: {
+        Args: { p_school: string; p_rows: Json };
+        Returns: { client_ref: string; opponent_player_id: string }[];
+      };
       is_school_admin: { Args: { p_school: string }; Returns: boolean };
       is_season_closed: { Args: { yr: number }; Returns: boolean };
       is_team_member: { Args: { p_team: string }; Returns: boolean };
