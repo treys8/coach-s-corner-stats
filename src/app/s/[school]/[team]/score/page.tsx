@@ -76,6 +76,7 @@ export default function ScoreIndexPage() {
         game_time: form.time || null,
         opponent: form.opponent.trim(),
         location: form.location,
+        is_home: form.location !== "away",
         status: "draft",
       })
       .select("id")
