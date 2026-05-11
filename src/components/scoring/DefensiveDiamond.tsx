@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { ReplayState } from "@/lib/scoring/types";
 import { BASE_XY, FIELDER_POSITIONS, POSITION_XY, type FielderPosition } from "./diamond-geometry";
+import { FieldBackground } from "./FieldBackground";
 
 export { FIELDER_POSITIONS, type FielderPosition };
 
@@ -41,6 +42,17 @@ function lastNameOf(full: string): string {
   const noJersey = full.replace(/^#\S+\s+/, "");
   const parts = noJersey.trim().split(/\s+/);
   return parts[parts.length - 1] ?? full;
+}
+
+// "#22 Rollins Burke" → "#22 Burke"; "Rollins Burke" → "Burke". Truncates
+// past 11 chars so neighboring fielder labels (SS / 2B are 20 SVG units
+// apart) don't overlap.
+function shortFielderLabel(full: string): string {
+  const m = full.match(/^(#\S+)\s+(.+)$/);
+  const compact = m
+    ? `${m[1]} ${lastNameOf(m[2])}`
+    : lastNameOf(full);
+  return compact.length > 11 ? compact.slice(0, 10) + "…" : compact;
 }
 
 function runnerLabel(
@@ -133,24 +145,7 @@ export function DefensiveDiamond({
       role="img"
       aria-label={dragMode ? "Drag the fielder who made the play to the ball location" : "Defensive alignment"}
     >
-      {/* Fair territory (outfield grass) */}
-      <path
-        d="M 50,92 L 95,30 A 70,40 0 0 0 5,30 Z"
-        fill="#4d8c3f"
-        opacity="0.22"
-      />
-      {/* Infield dirt diamond */}
-      <path
-        d="M 50,92 L 66,70 L 50,54 L 34,70 Z"
-        fill="#c9a47a"
-        opacity="0.55"
-      />
-      {/* Foul lines */}
-      <line x1="50" y1="92" x2="95" y2="30" stroke="#fff" strokeWidth="0.4" opacity="0.7" />
-      <line x1="50" y1="92" x2="5"  y2="30" stroke="#fff" strokeWidth="0.4" opacity="0.7" />
-
-      {/* Pitcher's mound */}
-      <circle cx="50" cy="60" r="2.2" fill="#c9a47a" stroke="#1f3252" strokeWidth="0.3" opacity="0.9" />
+      <FieldBackground idSuffix="defense" />
 
       {/* Bases (rotated squares; orange when occupied). When tappable, a
           chevron above the runner label hints at the runner-action sheet. */}
@@ -201,12 +196,6 @@ export function DefensiveDiamond({
           </g>
         );
       })}
-      {/* Home plate */}
-      <polygon
-        points="47.5,91 52.5,91 53.5,94 50,96 46.5,94"
-        fill="#fff" stroke="#1f3252" strokeWidth="0.35"
-      />
-
       {/* Ghost markers at canonical positions while dragging — show where each
           fielder started so the user has spatial context as they pull one out. */}
       {dragMode && drag && FIELDER_POSITIONS.map((pos) => {
@@ -233,7 +222,10 @@ export function DefensiveDiamond({
         const cy = isDragging ? drag!.y : py;
         const f = fielderByPos.get(pos);
         const name = f?.player_id ? names.get(f.player_id) ?? null : null;
-        const shortName = name && name.length > 14 ? name.slice(0, 13) + "…" : name;
+        // C sits right behind home plate; a name label there would be
+        // clipped at the bottom of the viewBox, so just lean on the "C"
+        // inside the chip.
+        const shortName = name && pos !== "C" ? shortFielderLabel(name) : null;
         const grabbable = dragMode;
         return (
           <g
@@ -261,7 +253,7 @@ export function DefensiveDiamond({
             </text>
             {shortName && !isDragging && (
               <text
-                x={cx} y={cy + 7}
+                x={cx} y={cy + 6.5}
                 textAnchor="middle"
                 fontSize="2.1"
                 fill="#1f3252"

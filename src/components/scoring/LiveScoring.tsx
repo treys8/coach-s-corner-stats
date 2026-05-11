@@ -291,13 +291,23 @@ export function LiveScoring({
     if (submitting) return;
     setSubmitting(true);
     const prevOuts = state.outs;
-    const batterId = weAreBatting ? currentSlot?.player_id ?? null : null;
+    const nextSeq = lastSeq + 1;
+    const ourBatterId = weAreBatting ? currentSlot?.player_id ?? null : null;
+    // ID used for the runner_advance that puts the BATTER on a base.
+    // For our team: their roster id (may be null on an empty slot).
+    // For the opposing team: prefer their opposing-lineup id (when entered);
+    // otherwise synthesize a per-PA id so the base still lights up — the
+    // engine's null-guard would otherwise silently drop the runner. Display
+    // already falls back to R1/R2/R3 for IDs not in our roster Map.
+    const reachId = weAreBatting
+      ? ourBatterId
+      : currentOpponentBatterId ?? `opp-pa-${state.inning}-${state.half}-${nextSeq}`;
     // K3-reach: pitcher gets the K, batter goes to first instead of being out.
     // Override defaultAdvances with an explicit batter→first plan; downstream
     // RBI logic excludes runs from the tainted batter (E/PB) automatically.
     const advances = k3Reach
-      ? [{ from: "batter" as const, to: "first" as const, player_id: batterId }]
-      : defaultAdvances(state.bases, batterId, result);
+      ? [{ from: "batter" as const, to: "first" as const, player_id: reachId }]
+      : defaultAdvances(state.bases, reachId, result);
     const runs = advances.filter((a) => a.to === "home").length;
     const rbi = autoRBI(advances, result, state.bases);
     // If pitches are logged for this PA, the engine will derive the final
@@ -311,7 +321,7 @@ export function LiveScoring({
     const payload: AtBatPayload = {
       inning: state.inning,
       half: state.half,
-      batter_id: weAreBatting ? currentSlot?.player_id ?? null : null,
+      batter_id: ourBatterId,
       opponent_batter_id: currentOpponentBatterId,
       pitcher_id: weAreBatting ? null : state.current_pitcher_id,
       opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
@@ -325,11 +335,10 @@ export function LiveScoring({
       spray_y: spray?.y ?? null,
       fielder_position: spray?.fielder ?? null,
       runner_advances: advances,
-      description: describePlay(result, runs, currentSlot?.player_id ?? null, names),
+      description: describePlay(result, runs, ourBatterId, names),
       batter_reached_on_k3: k3Reach,
     };
 
-    const nextSeq = lastSeq + 1;
     const clientEventId = `ab-${state.inning}-${state.half}-${nextSeq}`;
     const ok = await postEvent(gameId, {
       client_event_id: clientEventId,
@@ -387,15 +396,20 @@ export function LiveScoring({
     if (closing) {
       // The engine prefers the pitch trail over the payload balls/strikes
       // when deriving the AB count; we still pass finalCount as a fallback.
-      const batterId = weAreBatting ? currentSlot?.player_id ?? null : null;
-      const advances = defaultAdvances(state.bases, batterId, closing);
+      const ourBatterId = weAreBatting ? currentSlot?.player_id ?? null : null;
+      // See submitAtBat: synthesize a non-null reachId when the opposing
+      // team bats so a closing BB / HBP actually puts a runner on the base.
+      const reachId = weAreBatting
+        ? ourBatterId
+        : currentOpponentBatterId ?? `opp-pa-${state.inning}-${state.half}-${baseSeq + 1}`;
+      const advances = defaultAdvances(state.bases, reachId, closing);
       const runs = advances.filter((a) => a.to === "home").length;
       const rbi = autoRBI(advances, closing, state.bases);
       const fallback = finalCount(closing, state.current_balls, state.current_strikes);
       const abPayload: AtBatPayload = {
         inning: state.inning,
         half: state.half,
-        batter_id: batterId,
+        batter_id: ourBatterId,
         opponent_batter_id: currentOpponentBatterId,
         pitcher_id: weAreBatting ? null : state.current_pitcher_id,
         opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
@@ -409,7 +423,7 @@ export function LiveScoring({
         spray_y: null,
         fielder_position: null,
         runner_advances: advances,
-        description: describePlay(closing, runs, batterId, names),
+        description: describePlay(closing, runs, ourBatterId, names),
       };
       const okAB = await postEvent(gameId, {
         client_event_id: `ab-auto-${state.inning}-${state.half}-${baseSeq + 1}`,
