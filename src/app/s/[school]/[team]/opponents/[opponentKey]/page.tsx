@@ -8,11 +8,17 @@
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { Pencil } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
+import {
+  EditOpposingPlayerDialog,
+  type EditableOpponentPlayer,
+} from "@/components/opponents/EditOpposingPlayerDialog";
 
 interface OpponentRow {
   id: string;
@@ -47,6 +53,7 @@ export default function OpponentDetailPage({
   const [atBats, setAtBats] = useState<AbRow[]>([]);
   const [displayName, setDisplayName] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<EditableOpponentPlayer | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -179,7 +186,7 @@ export default function OpponentDetailPage({
         </p>
       ) : (
         <Card className="overflow-hidden">
-          <div className="grid grid-cols-[80px_minmax(0,1fr)_60px_60px_60px_60px_60px_60px_60px] gap-2 px-4 py-2 bg-muted/50 text-[11px] uppercase tracking-wider font-bold text-muted-foreground">
+          <div className="grid grid-cols-[80px_minmax(0,1fr)_60px_60px_60px_60px_60px_60px_60px_40px] gap-2 px-4 py-2 bg-muted/50 text-[11px] uppercase tracking-wider font-bold text-muted-foreground">
             <div>#</div>
             <div>Player</div>
             <div className="text-right">PA</div>
@@ -189,33 +196,57 @@ export default function OpponentDetailPage({
             <div className="text-right">BB</div>
             <div className="text-right">SO</div>
             <div className="text-right">RBI</div>
+            <div></div>
           </div>
           <ul>
             {rows.map(({ player, line }) => (
-              <li key={player.id} className="border-t border-border">
+              <li
+                key={player.id}
+                className="border-t border-border grid grid-cols-[80px_minmax(0,1fr)_60px_60px_60px_60px_60px_60px_60px_40px] gap-2 px-4 py-3 hover:bg-accent/40 transition-colors text-sm items-center"
+              >
                 <Link
                   href={`/s/${school.slug}/${team.slug}/opponents/${opponentKey}/${player.id}`}
-                  className="grid grid-cols-[80px_minmax(0,1fr)_60px_60px_60px_60px_60px_60px_60px] gap-2 px-4 py-3 hover:bg-accent/40 transition-colors text-sm"
+                  className="font-mono-stat font-bold hover:text-sa-orange"
                 >
-                  <div className="font-mono-stat font-bold">
-                    {player.jersey_number ?? "—"}
-                  </div>
-                  <div className="truncate">
-                    {[player.first_name, player.last_name].filter(Boolean).join(" ") || "—"}
-                  </div>
-                  <div className="text-right font-mono-stat">{line.PA}</div>
-                  <div className="text-right font-mono-stat">{line.AB}</div>
-                  <div className="text-right font-mono-stat">{line.H}</div>
-                  <div className="text-right font-mono-stat">{line.HR}</div>
-                  <div className="text-right font-mono-stat">{line.BB}</div>
-                  <div className="text-right font-mono-stat">{line.SO}</div>
-                  <div className="text-right font-mono-stat">{line.RBI}</div>
+                  {player.jersey_number ?? "—"}
                 </Link>
+                <Link
+                  href={`/s/${school.slug}/${team.slug}/opponents/${opponentKey}/${player.id}`}
+                  className="truncate hover:text-sa-orange"
+                >
+                  {[player.first_name, player.last_name].filter(Boolean).join(" ") || "—"}
+                </Link>
+                <div className="text-right font-mono-stat">{line.PA}</div>
+                <div className="text-right font-mono-stat">{line.AB}</div>
+                <div className="text-right font-mono-stat">{line.H}</div>
+                <div className="text-right font-mono-stat">{line.HR}</div>
+                <div className="text-right font-mono-stat">{line.BB}</div>
+                <div className="text-right font-mono-stat">{line.SO}</div>
+                <div className="text-right font-mono-stat">{line.RBI}</div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 justify-self-end"
+                  title="Edit name / jersey"
+                  onClick={() => setEditing(player)}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
               </li>
             ))}
           </ul>
         </Card>
       )}
+
+      <EditOpposingPlayerDialog
+        open={editing !== null}
+        onOpenChange={(o) => { if (!o) setEditing(null); }}
+        player={editing}
+        onSaved={(updated) => {
+          setPlayers((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
+          setEditing(null);
+        }}
+      />
     </main>
   );
 }

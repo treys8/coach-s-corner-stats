@@ -15,9 +15,14 @@ interface Props {
   /** Slot context — shown as the header when profile hasn't resolved yet
    *  or when the opponent has no prior PAs to derive stats from. */
   slotLabel: string | null;
+  /** Optional caller-owned cache. When provided, the panel will hydrate
+   *  immediately from the cache on hit and write back on successful fetch.
+   *  Live scoring lifts a Map ref here so cycling through a 9-deep lineup
+   *  fetches each batter once instead of once per cycle. */
+  cache?: Map<string, OpposingBatterProfile>;
 }
 
-export function OpposingBatterPanel({ opponentPlayerId, slotLabel }: Props) {
+export function OpposingBatterPanel({ opponentPlayerId, slotLabel, cache }: Props) {
   const [profile, setProfile] = useState<OpposingBatterProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +32,15 @@ export function OpposingBatterPanel({ opponentPlayerId, slotLabel }: Props) {
       setProfile(null);
       return;
     }
+    const cached = cache?.get(opponentPlayerId);
+    if (cached) {
+      setProfile(cached);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
+    setProfile(null);
     setLoading(true);
     setError(null);
     (async () => {
@@ -38,7 +51,9 @@ export function OpposingBatterPanel({ opponentPlayerId, slotLabel }: Props) {
           return;
         }
         const data = (await res.json()) as OpposingBatterProfile;
-        if (!cancelled) setProfile(data);
+        if (cancelled) return;
+        cache?.set(opponentPlayerId, data);
+        setProfile(data);
       } catch {
         if (!cancelled) setError("Couldn't load opponent profile");
       } finally {
@@ -46,7 +61,7 @@ export function OpposingBatterPanel({ opponentPlayerId, slotLabel }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, [opponentPlayerId]);
+  }, [opponentPlayerId, cache]);
 
   if (!opponentPlayerId) {
     return (

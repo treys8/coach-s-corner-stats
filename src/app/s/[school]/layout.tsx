@@ -51,7 +51,7 @@ export default function SchoolLayout({
     (async () => {
       const { data, error } = await supabase
         .from("schools")
-        .select("id, slug, name, short_name, logo_url, primary_color, secondary_color, is_discoverable, public_scores_enabled, association, classification, division, timezone")
+        .select("id, slug, name, short_name, logo_url, primary_color, secondary_color, is_discoverable, public_scores_enabled, is_public_roster, association, classification, division, timezone")
         .eq("slug", schoolSlug)
         .maybeSingle();
       if (!active) return;

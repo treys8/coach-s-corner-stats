@@ -52,6 +52,7 @@ export default function SchoolSettingsPage() {
     secondary_color: school.secondary_color ?? DEFAULT_SECONDARY,
     is_discoverable: school.is_discoverable,
     public_scores_enabled: school.public_scores_enabled,
+    is_public_roster: school.is_public_roster,
     association: school.association ?? "",
     classification: school.classification ?? "",
     division: school.division ?? "",
@@ -154,6 +155,7 @@ export default function SchoolSettingsPage() {
       secondary_color: school.secondary_color ?? DEFAULT_SECONDARY,
       is_discoverable: school.is_discoverable,
       public_scores_enabled: school.public_scores_enabled,
+      is_public_roster: school.is_public_roster,
       association: school.association ?? "",
       classification: school.classification ?? "",
       division: school.division ?? "",
@@ -352,6 +354,7 @@ export default function SchoolSettingsPage() {
         secondary_color: form.secondary_color || null,
         is_discoverable: form.is_discoverable,
         public_scores_enabled: form.public_scores_enabled,
+        is_public_roster: form.is_public_roster,
         association: form.association || null,
         classification: form.classification || null,
         division: form.division || null,
@@ -558,6 +561,21 @@ export default function SchoolSettingsPage() {
               id="discoverable"
               checked={form.is_discoverable}
               onCheckedChange={(v) => setForm({ ...form, is_discoverable: v })}
+            />
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <Label htmlFor="public-roster" className="text-sm font-semibold">
+                Public roster
+              </Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                When on, other Statly schools can import your active-season roster into their opposing-lineup picker when they schedule a game against you.
+              </p>
+            </div>
+            <Switch
+              id="public-roster"
+              checked={form.is_public_roster}
+              onCheckedChange={(v) => setForm({ ...form, is_public_roster: v })}
             />
           </div>
 

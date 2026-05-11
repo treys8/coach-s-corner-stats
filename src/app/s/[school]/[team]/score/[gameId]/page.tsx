@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useTeam } from "@/lib/contexts/team";
@@ -140,6 +140,10 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
           roster={roster}
           teamShortLabel={school.short_name ?? school.name}
           opponentName={game.opponent}
+          schoolId={school.id}
+          myTeamId={team.id}
+          gameDate={game.game_date}
+          opponentTeamId={game.opponent_team_id}
         />
       )}
       {game.status === "final" && (
@@ -255,7 +259,7 @@ function PreGameForm({
     });
   };
 
-  const validate = (): string | null => {
+  const validationError = useMemo<string | null>(() => {
     const filled = lineup.filter((s) => s.player_id);
     if (filled.length !== lineup.length) {
       return `All ${lineup.length} lineup slots need a player.`;
@@ -286,12 +290,11 @@ function PreGameForm({
       return "Opposing side: without DH, one batting slot must be tagged P.";
     }
     return null;
-  };
+  }, [lineup, pitcherId, useDh, opposingDraft, oppUseDh, opposingPitcher, opposingPitcherJersey]);
 
   const submit = async () => {
-    const err = validate();
-    if (err) {
-      toast.error(err);
+    if (validationError) {
+      toast.error(validationError);
       return;
     }
     const startingPitcherId =
@@ -533,6 +536,7 @@ function PreGameForm({
         <OpposingLineupPicker
           myTeamId={team.id}
           gameId={game.id}
+          gameDate={game.game_date}
           opponentName={game.opponent}
           opponentTeamId={game.opponent_team_id}
           opponentIsPublicRoster={opponentIsPublicRoster}
@@ -547,13 +551,22 @@ function PreGameForm({
         />
       </div>
 
-      <div className="flex items-center gap-3 pt-2 border-t">
-        <Button onClick={submit} disabled={submitting} className="bg-sa-orange hover:bg-sa-orange/90">
-          {submitting ? "Starting…" : "Start game"}
-        </Button>
-        <p className="text-xs text-muted-foreground">
-          {weAreHome ? "We bat in the bottom of each inning." : "We bat in the top of each inning."}
-        </p>
+      <div className="pt-2 border-t space-y-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button
+            onClick={submit}
+            disabled={submitting || validationError !== null}
+            className="bg-sa-orange hover:bg-sa-orange/90"
+          >
+            {submitting ? "Starting…" : "Start game"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {weAreHome ? "We bat in the bottom of each inning." : "We bat in the top of each inning."}
+          </p>
+        </div>
+        {validationError && (
+          <p className="text-sm text-amber-600">{validationError}</p>
+        )}
       </div>
     </Card>
   );

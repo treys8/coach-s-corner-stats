@@ -25,7 +25,7 @@ CREATE OR REPLACE FUNCTION public.get_public_roster(
   first_name         TEXT,
   last_name          TEXT,
   jersey_number      TEXT,
-  position           TEXT,
+  "position"         TEXT,
   grad_year          SMALLINT
 )
 LANGUAGE plpgsql

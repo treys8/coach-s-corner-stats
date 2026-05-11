@@ -20,13 +20,14 @@ import {
   pullFromStatly,
   slotHasIdentity,
 } from "@/lib/opponents/lineup-sources";
-import { currentSeasonYear } from "@/lib/season";
+import { seasonYearFor } from "@/lib/season";
 
 const POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"] as const;
 
 interface Props {
   myTeamId: string;
   gameId: string;
+  gameDate: string;
   opponentName: string;
   opponentTeamId: string | null;
   opponentIsPublicRoster: boolean | null;
@@ -38,11 +39,16 @@ interface Props {
   setOpposingPitcherName: (v: string) => void;
   opposingPitcherJersey: string;
   setOpposingPitcherJersey: (v: string) => void;
+  /** Hide the opposing starting pitcher fields. Used by the mid-game edit
+   *  dialog, since the pitcher is changed via the Pitching change flow, not
+   *  through opposing_lineup_edit. */
+  hidePitcher?: boolean;
 }
 
 export function OpposingLineupPicker({
   myTeamId,
   gameId,
+  gameDate,
   opponentName,
   opponentTeamId,
   opponentIsPublicRoster,
@@ -54,6 +60,7 @@ export function OpposingLineupPicker({
   setOpposingPitcherName,
   opposingPitcherJersey,
   setOpposingPitcherJersey,
+  hidePitcher = false,
 }: Props) {
   const [loadingSource, setLoadingSource] = useState<"pull" | "prior" | null>(null);
 
@@ -65,7 +72,7 @@ export function OpposingLineupPicker({
     if (!opponentTeamId) return;
     setLoadingSource("pull");
     try {
-      const next = await pullFromStatly(opponentTeamId, currentSeasonYear());
+      const next = await pullFromStatly(opponentTeamId, seasonYearFor(gameDate));
       if (next.length === 0) {
         toast.error(`${opponentName} hasn't published a current-season roster.`);
       } else {
@@ -198,7 +205,7 @@ export function OpposingLineupPicker({
         </p>
       </div>
 
-      {useDh && (
+      {useDh && !hidePitcher && (
         <div className="grid grid-cols-12 gap-2 items-end max-w-2xl">
           <div className="col-span-12">
             <Label className="text-xs uppercase tracking-wider text-sa-blue">

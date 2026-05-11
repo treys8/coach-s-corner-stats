@@ -36,6 +36,7 @@ export async function recognizeOpponentTeam(
 
   if (error) {
     // Soft-fail: recognition is a UX nicety; never block schedule entry.
+    console.warn("recognize_opponent_team failed:", error);
     return { kind: "none" };
   }
 

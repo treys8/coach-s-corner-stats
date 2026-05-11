@@ -12,6 +12,7 @@ export interface School {
   secondary_color: string | null;
   is_discoverable: boolean;
   public_scores_enabled: boolean;
+  is_public_roster: boolean;
   association: string | null;
   classification: string | null;
   division: string | null;

@@ -53,6 +53,22 @@ export async function POST(
     );
   }
 
+  // Defense in depth: every at_bat must identify a batter on at least one
+  // side. The CHECK constraint on the table allows both nulls (legacy data),
+  // so the live tablet could otherwise post a null/null PA if the opposing
+  // lineup is empty. The pre-game hard gate prevents that, but reject here too.
+  if (parsed.data.event_type === "at_bat") {
+    const p = parsed.data.payload as { batter_id?: unknown; opponent_batter_id?: unknown };
+    const noBatter = (p.batter_id ?? null) === null;
+    const noOppBatter = (p.opponent_batter_id ?? null) === null;
+    if (noBatter && noOppBatter) {
+      return NextResponse.json(
+        { error: "at_bat requires either batter_id or opponent_batter_id" },
+        { status: 400 },
+      );
+    }
+  }
+
   const userClient = await createClient();
   const { data: auth } = await userClient.auth.getUser();
   if (!auth.user) {

@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { replay } from "./replay";
-import type { GameEventRecord, GameStartedPayload, AtBatPayload, InningEndPayload } from "./types";
+import type {
+  GameEventRecord,
+  GameStartedPayload,
+  AtBatPayload,
+  InningEndPayload,
+  OpposingLineupEditPayload,
+  OpposingLineupSlot,
+} from "./types";
 
 let seq = 0;
 function evt<P>(type: GameEventRecord["event_type"], payload: P, id?: string): GameEventRecord {
@@ -820,6 +827,116 @@ describe("replay()", () => {
       evt("balk", { advances: [{ from: "first", to: "second", player_id: "opp1" }] }),
     ]);
     expect(balkState.bases.second?.reached_on_error).toBe(false);
+  });
+
+  // ---- Opposing-lineup tracking ------------------------------------------
+
+  const oppLineup = (): OpposingLineupSlot[] =>
+    Array.from({ length: 9 }, (_, i) => ({
+      batting_order: i + 1,
+      opponent_player_id: `opp${i + 1}`,
+      jersey_number: String(i + 1),
+      last_name: `Opp${i + 1}`,
+      position: null,
+      is_dh: false,
+    }));
+
+  it("opposing batter slot advances when we field, wraps 9→1", () => {
+    // We are home → opponents bat in top. Slot pointer must walk 1→2…→9→1.
+    const events: GameEventRecord[] = [
+      startGame({ we_are_home: true, opposing_lineup: oppLineup() }),
+    ];
+    for (let i = 0; i < 9; i++) {
+      events.push(evt("at_bat", atBat({ half: "top", result: "K_swinging" })));
+    }
+    let state = replay(events);
+    expect(state.current_opp_batter_slot).toBe(1);
+    // One more PA pushes 1→2.
+    state = replay([...events, evt("at_bat", atBat({ half: "top", result: "K_swinging" }))]);
+    expect(state.current_opp_batter_slot).toBe(2);
+  });
+
+  it("opposing batter slot does NOT advance when we are batting", () => {
+    // We are visitors → we bat in top, opponents field. Slot pointer stays at 1.
+    const state = replay([
+      startGame({ we_are_home: false, opposing_lineup: oppLineup() }),
+      evt("at_bat", atBat({ half: "top", result: "K_swinging", batter_id: "p1" })),
+      evt("at_bat", atBat({ half: "top", result: "K_swinging", batter_id: "p2" })),
+    ]);
+    expect(state.current_opp_batter_slot).toBe(1);
+  });
+
+  it("opposing batter slot survives inning_end", () => {
+    // We are home → opponents bat top. Two opp PAs (slot 1→2→3), then end half.
+    const state = replay([
+      startGame({ we_are_home: true, opposing_lineup: oppLineup() }),
+      evt("at_bat", atBat({ half: "top", result: "K_swinging" })),
+      evt("at_bat", atBat({ half: "top", result: "K_swinging" })),
+      evt<InningEndPayload>("inning_end", { inning: 1, half: "top" }),
+    ]);
+    expect(state.current_opp_batter_slot).toBe(3);
+  });
+
+  it("opposing_lineup_edit replaces lineup wholesale", () => {
+    const replaced: OpposingLineupSlot[] = oppLineup().map((s) => ({
+      ...s,
+      last_name: `New${s.batting_order}`,
+      jersey_number: `${50 + s.batting_order}`,
+    }));
+    const state = replay([
+      startGame({ we_are_home: true, opposing_lineup: oppLineup() }),
+      evt<OpposingLineupEditPayload>("opposing_lineup_edit", {
+        opposing_lineup: replaced,
+      }),
+    ]);
+    expect(state.opposing_lineup).toEqual(replaced);
+    expect(state.opposing_lineup[0].last_name).toBe("New1");
+    expect(state.opposing_lineup[0].jersey_number).toBe("51");
+  });
+
+  it("opposing_lineup_edit resets slot pointer to 1 only when the prior lineup was empty", () => {
+    // Case A: prior lineup was empty → pointer should jump to 1.
+    const stateA = replay([
+      startGame({ we_are_home: true, opposing_lineup: [] }),
+      evt<OpposingLineupEditPayload>("opposing_lineup_edit", {
+        opposing_lineup: oppLineup(),
+      }),
+    ]);
+    expect(stateA.current_opp_batter_slot).toBe(1);
+
+    // Case B: prior lineup non-empty and pointer is at 5 → must stay at 5
+    // through the edit (mid-PA typo fixes don't reset who's batting).
+    const events: GameEventRecord[] = [
+      startGame({ we_are_home: true, opposing_lineup: oppLineup() }),
+    ];
+    for (let i = 0; i < 4; i++) {
+      events.push(evt("at_bat", atBat({ half: "top", result: "K_swinging" })));
+    }
+    // After 4 PAs slot is 5.
+    const stateBeforeEdit = replay(events);
+    expect(stateBeforeEdit.current_opp_batter_slot).toBe(5);
+    const replaced: OpposingLineupSlot[] = oppLineup().map((s) =>
+      s.batting_order === 3 ? { ...s, last_name: "Fixed3" } : s,
+    );
+    const stateB = replay([
+      ...events,
+      evt<OpposingLineupEditPayload>("opposing_lineup_edit", {
+        opposing_lineup: replaced,
+      }),
+    ]);
+    expect(stateB.current_opp_batter_slot).toBe(5);
+    expect(stateB.opposing_lineup[2].last_name).toBe("Fixed3");
+  });
+
+  it("opposing_lineup_edit can update opponent_use_dh", () => {
+    const state = replay([
+      startGame({ we_are_home: true, opposing_lineup: oppLineup(), opponent_use_dh: false }),
+      evt<OpposingLineupEditPayload>("opposing_lineup_edit", {
+        opposing_lineup: oppLineup(),
+        opponent_use_dh: true,
+      }),
+    ]);
+    expect(state.opponent_use_dh).toBe(true);
   });
 
   it("logs SB / CS / PIK events on ReplayState with runner_id and event_id", () => {

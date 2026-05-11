@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -47,6 +47,8 @@ import type { GameEventType } from "@/integrations/supabase/types";
 import { DefensiveDiamond, type FielderPosition } from "@/components/scoring/DefensiveDiamond";
 import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
 import { OpposingBatterPanel } from "@/components/score/OpposingBatterPanel";
+import type { OpposingBatterProfile } from "@/lib/opponents/profile";
+import { EditOpposingLineupDialog } from "@/components/scoring/EditOpposingLineupDialog";
 import type { OpposingLineupSlot } from "@/lib/scoring/types";
 import { GameStatusBar } from "@/components/scoring/GameStatusBar";
 import {
@@ -72,6 +74,10 @@ interface LiveScoringProps {
   roster: RosterDisplay[];
   teamShortLabel: string;
   opponentName: string;
+  schoolId: string;
+  myTeamId: string;
+  gameDate: string;
+  opponentTeamId: string | null;
 }
 
 function nameById(roster: RosterDisplay[]): Map<string, string> {
@@ -144,7 +150,16 @@ const RESULT_DESC: Partial<Record<AtBatResult, string>> = {
   CI: "Catcher's interference",
 };
 
-export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: LiveScoringProps) {
+export function LiveScoring({
+  gameId,
+  roster,
+  teamShortLabel,
+  opponentName,
+  schoolId,
+  myTeamId,
+  gameDate,
+  opponentTeamId,
+}: LiveScoringProps) {
   const router = useRouter();
   const isMobile = useIsMobile();
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
@@ -157,6 +172,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
   const [subOpen, setSubOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [opposingLineupEditOpen, setOpposingLineupEditOpen] = useState(false);
   const [boxScoreOpen, setBoxScoreOpen] = useState(false);
   const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
   const [runnerAction, setRunnerAction] = useState<{
@@ -164,6 +180,9 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
     runnerId: string | null;
   } | null>(null);
   const names = useMemo(() => nameById(roster), [roster]);
+  // Cache opposing-batter profiles across batter changes so cycling through
+  // a 9-deep lineup doesn't refetch the same profiles on every loop.
+  const opposingProfileCache = useRef(new Map<string, OpposingBatterProfile>());
 
   // Box score defaults open on desktop, collapsed on mobile. `useIsMobile`
   // returns false on the SSR pass; sync once the breakpoint is known.
@@ -321,6 +340,11 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
     if (!ok) {
       setSubmitting(false);
       return;
+    }
+    // The just-recorded PA changes this opponent's career line. Drop the
+    // cached profile so the next cycle through the lineup refetches.
+    if (!weAreBatting && currentOpponentBatterId) {
+      opposingProfileCache.current.delete(currentOpponentBatterId);
     }
     setArmedResult(null);
     const snap = await refresh();
@@ -747,6 +771,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
                   ? formatOpposingSlotLabel(currentOppSlot)
                   : "Set opposing lineup to track batters."
               }
+              cache={opposingProfileCache.current}
             />
           )}
           <Card className="p-3">
@@ -776,6 +801,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
               onPitchingChange={() => { setPitchChangeOpen(true); setManageOpen(false); }}
               onSubstitution={() => { setSubOpen(true); setManageOpen(false); }}
               onEditLastPlay={() => { setEditOpen(true); setManageOpen(false); }}
+              onEditOpposingLineup={() => { setOpposingLineupEditOpen(true); setManageOpen(false); }}
               onFinalize={() => { setConfirmFinalize(true); setManageOpen(false); }}
               onMoundVisit={() => { void submitMoundVisit(); setManageOpen(false); }}
               conferencesThisGame={
@@ -831,6 +857,20 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
         bases={state.bases}
         onSubmit={submitMidPA}
         disabled={submitting}
+      />
+      <EditOpposingLineupDialog
+        open={opposingLineupEditOpen}
+        onOpenChange={setOpposingLineupEditOpen}
+        gameId={gameId}
+        schoolId={schoolId}
+        myTeamId={myTeamId}
+        gameDate={gameDate}
+        opponentName={opponentName}
+        opponentTeamId={opponentTeamId}
+        currentLineup={state.opposing_lineup}
+        currentOpponentUseDh={state.opponent_use_dh}
+        nextSeq={lastSeq + 1}
+        onSaved={async () => { await refresh(); }}
       />
     </div>
   );
@@ -1214,6 +1254,7 @@ function FlowControls({
   onPitchingChange,
   onSubstitution,
   onEditLastPlay,
+  onEditOpposingLineup,
   onFinalize,
   onMoundVisit,
   conferencesThisGame,
@@ -1225,6 +1266,7 @@ function FlowControls({
   onPitchingChange: () => void;
   onSubstitution: () => void;
   onEditLastPlay: () => void;
+  onEditOpposingLineup: () => void;
   onFinalize: () => void;
   onMoundVisit: () => void;
   /** Conferences charged to the CURRENT pitcher this game. Drives the
@@ -1275,6 +1317,14 @@ function FlowControls({
         className="justify-start"
       >
         Edit last play
+      </Button>
+      <Button
+        variant="outline"
+        disabled={disabled}
+        onClick={onEditOpposingLineup}
+        className="justify-start"
+      >
+        Edit opposing lineup
       </Button>
       <Button
         variant="outline"
