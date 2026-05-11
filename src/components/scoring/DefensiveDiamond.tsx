@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { ReplayState } from "@/lib/scoring/types";
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import type { OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
 import { BASE_XY, FIELDER_POSITIONS, POSITION_XY, type FielderPosition } from "./diamond-geometry";
 import { FieldBackground } from "./FieldBackground";
 
@@ -23,11 +23,6 @@ interface DefensiveDiamondProps {
   ) => void;
 }
 
-interface FielderRow {
-  position: FielderPosition;
-  player_id: string | null;
-}
-
 // When we're batting, runners are ours and we know names. When we're
 // fielding, the opposing team is on base — show generic R1/R2/R3 labels.
 const BASE_GENERIC: Record<"first" | "second" | "third", string> = {
@@ -44,39 +39,31 @@ function lastNameOf(full: string): string {
   return parts[parts.length - 1] ?? full;
 }
 
-// "#22 Rollins Burke" → "#22 Burke"; "Rollins Burke" → "Burke". Truncates
-// past 11 chars so neighboring fielder labels (SS / 2B are 20 SVG units
-// apart) don't overlap.
-function shortFielderLabel(full: string): string {
-  const m = full.match(/^(#\S+)\s+(.+)$/);
-  const compact = m
-    ? `${m[1]} ${lastNameOf(m[2])}`
-    : lastNameOf(full);
-  return compact.length > 11 ? compact.slice(0, 10) + "…" : compact;
-}
-
-function runnerLabel(
+// Prefer jersey for the chip label (compact, recognizable at a glance).
+// Falls back to last name when no jersey is known, and to the generic
+// R1/R2/R3 when the runner can't be resolved at all.
+function runnerChipLabel(
   base: "first" | "second" | "third",
   playerId: string | null,
   names: Map<string, string>,
   weAreBatting: boolean,
+  opposingLineup: OpposingLineupSlot[],
 ): string {
-  if (!weAreBatting) return BASE_GENERIC[base];
-  if (!playerId) return BASE_GENERIC[base];
-  const full = names.get(playerId);
-  return full ? lastNameOf(full) : BASE_GENERIC[base];
-}
-
-// Pitcher tracks current_pitcher_id (pitching_change events don't touch the
-// lineup). All other positions come from our_lineup.
-function ourFielders(state: ReplayState): FielderRow[] {
-  const fromLineup = state.our_lineup
-    .filter((s) => s.position && s.position !== "DH" && s.position !== "P")
-    .map((s) => ({ position: s.position as FielderPosition, player_id: s.player_id }));
-  return [
-    { position: "P", player_id: state.current_pitcher_id },
-    ...fromLineup,
-  ];
+  if (playerId) {
+    if (weAreBatting) {
+      const full = names.get(playerId);
+      if (full) {
+        const m = full.match(/^#(\S+)\s+/);
+        if (m) return m[1];
+        return lastNameOf(full);
+      }
+    } else {
+      const slot = opposingLineup.find((s) => s.opponent_player_id === playerId);
+      if (slot?.jersey_number) return slot.jersey_number;
+      if (slot?.last_name) return slot.last_name;
+    }
+  }
+  return BASE_GENERIC[base];
 }
 
 export function DefensiveDiamond({
@@ -93,12 +80,6 @@ export function DefensiveDiamond({
     x: number;
     y: number;
   } | null>(null);
-
-  const fielderByPos = useMemo(() => {
-    const m = new Map<FielderPosition, FielderRow>();
-    if (!weAreBatting) for (const f of ourFielders(state)) m.set(f.position, f);
-    return m;
-  }, [state, weAreBatting]);
 
   const svgCoords = (clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -147,13 +128,20 @@ export function DefensiveDiamond({
     >
       <FieldBackground idSuffix="defense" />
 
-      {/* Bases (rotated squares; orange when occupied). When tappable, a
-          chevron above the runner label hints at the runner-action sheet. */}
+      {/* Bases (rotated squares; orange when occupied). The runner's jersey
+          number (or last name / R1-3 fallback) sits inside the orange chip
+          so coaches can identify base-runners at a glance. */}
       {(["first", "second", "third"] as const).map((b) => {
         const [bx, by] = BASE_XY[b];
         const runner = state.bases[b];
         const occupied = runner !== null;
         const tappable = occupied && !dragMode && !!onRunnerAction;
+        const label = occupied
+          ? runnerChipLabel(b, runner?.player_id ?? null, names, weAreBatting, state.opposing_lineup)
+          : null;
+        // Shrink the label slightly when it's longer than two characters so
+        // jerseys / short last-name fallbacks still fit inside the chip.
+        const labelFont = label && label.length > 2 ? 2.2 : 2.8;
         return (
           <g
             key={b}
@@ -166,32 +154,22 @@ export function DefensiveDiamond({
             )}
             <g transform={`translate(${bx} ${by}) rotate(45)`}>
               <rect
-                x={-2.2} y={-2.2} width={4.4} height={4.4}
+                x={-2.6} y={-2.6} width={5.2} height={5.2}
                 fill={occupied ? "#ee8233" : "#fff"}
                 stroke="#1f3252" strokeWidth="0.35"
               />
             </g>
-            {occupied && (
+            {label && (
               <text
-                x={bx} y={by - 5}
+                x={bx} y={by + labelFont / 3}
                 textAnchor="middle"
-                fontSize="2.2"
+                fontSize={labelFont}
                 fontWeight="700"
-                fill="#1f3252"
+                fill="#fff"
                 pointerEvents="none"
               >
-                {runnerLabel(b, runner?.player_id ?? null, names, weAreBatting)}
+                {label}
               </text>
-            )}
-            {tappable && (
-              // Hit target intentionally — chevron clicks bubble to the
-              // parent <g>'s onClick, expanding the otherwise small base
-              // rect (~20px on iPad) to a more finger-friendly area.
-              <polygon
-                points={`${bx},${by - 9.5} ${bx - 1.4},${by - 7.2} ${bx + 1.4},${by - 7.2}`}
-                fill="#ee8233"
-                opacity="0.95"
-              />
             )}
           </g>
         );
@@ -220,12 +198,6 @@ export function DefensiveDiamond({
         const isDragging = drag?.position === pos;
         const cx = isDragging ? drag!.x : px;
         const cy = isDragging ? drag!.y : py;
-        const f = fielderByPos.get(pos);
-        const name = f?.player_id ? names.get(f.player_id) ?? null : null;
-        // C sits right behind home plate; a name label there would be
-        // clipped at the bottom of the viewBox, so just lean on the "C"
-        // inside the chip.
-        const shortName = name && pos !== "C" ? shortFielderLabel(name) : null;
         const grabbable = dragMode;
         return (
           <g
@@ -251,18 +223,6 @@ export function DefensiveDiamond({
             >
               {pos}
             </text>
-            {shortName && !isDragging && (
-              <text
-                x={cx} y={cy + 6.5}
-                textAnchor="middle"
-                fontSize="2.1"
-                fill="#1f3252"
-                opacity="0.9"
-                pointerEvents="none"
-              >
-                {shortName}
-              </text>
-            )}
           </g>
         );
       })}

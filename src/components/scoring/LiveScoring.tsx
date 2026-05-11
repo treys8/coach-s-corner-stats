@@ -790,7 +790,15 @@ export function LiveScoring({
           )}
           <Card className="p-3">
             <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
-            <LiveSprayChart state={state} />
+            <LiveSprayChart
+              state={state}
+              currentBatterId={
+                weAreBatting
+                  ? currentSlot?.player_id ?? null
+                  : currentOpponentBatterId
+              }
+              currentBatterIsOurs={weAreBatting}
+            />
           </Card>
         </aside>
       </div>
@@ -1020,7 +1028,7 @@ function PitchPad({
             key={p.type}
             disabled={disabled}
             onClick={() => onPitch(p.type)}
-            className={`h-12 text-sm font-bold ${p.cls}`}
+            className={`h-10 text-sm font-bold ${p.cls}`}
           >
             {p.label}
           </Button>
@@ -1033,7 +1041,7 @@ function PitchPad({
             variant="outline"
             disabled={disabled}
             onClick={() => onPitch(p.type)}
-            className="h-9 text-xs"
+            className="h-8 text-xs"
           >
             {p.label}
           </Button>
@@ -1150,7 +1158,7 @@ function ButtonRow({
             key={r}
             disabled={disabled || (armedResult !== null && !isArmed)}
             onClick={() => onPick(r)}
-            className={`h-16 text-lg font-bold ${cls} ${isArmed ? "ring-4 ring-sa-blue-deep ring-offset-2" : ""}`}
+            className={`h-12 text-base font-bold ${cls} ${isArmed ? "ring-4 ring-sa-blue-deep ring-offset-2" : ""}`}
             title={RESULT_DESC[r] ?? r}
           >
             {RESULT_LABEL[r]}
