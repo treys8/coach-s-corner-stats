@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertCircle, Trash2, AlertTriangle } from "lucide-react";
 import { OpponentPicker, type OpponentPickerValue } from "@/components/schedule/OpponentPicker";
+import { recognizeOpponentTeam } from "@/lib/opponents/recognition";
 import type { ParsedScheduleRow, ScheduleLocation } from "@/lib/csvParser";
 import type { Sport } from "@/integrations/supabase/types";
 
@@ -57,6 +58,52 @@ export function ScheduleUploadPreview({
     })),
   );
   const [conflictMode, setConflictMode] = useState<ConflictMode | "">("");
+  const [recognizing, setRecognizing] = useState(false);
+  const recognizedOnce = useRef(false);
+
+  // Auto-recognition: on first mount, dedupe opponent names across rows and
+  // resolve each unique name to a Statly tenant via the
+  // recognize_opponent_team RPC. Unambiguous matches fill opponent_team_id
+  // for every row sharing that name. Ambiguous / unmatched names stay null
+  // and the coach can fix them via the per-row OpponentPicker.
+  useEffect(() => {
+    if (recognizedOnce.current) return;
+    recognizedOnce.current = true;
+    const uniqueNames = Array.from(
+      new Set(rows.map((r) => r.opponent.trim()).filter((n) => n.length > 0)),
+    );
+    if (uniqueNames.length === 0) return;
+    let cancelled = false;
+    setRecognizing(true);
+    (async () => {
+      const resolved = new Map<string, string>();
+      await Promise.all(
+        uniqueNames.map(async (name) => {
+          const r = await recognizeOpponentTeam(teamId, name);
+          if (r.kind === "match") {
+            resolved.set(name, r.match.team_id);
+          }
+        }),
+      );
+      if (cancelled || resolved.size === 0) {
+        setRecognizing(false);
+        return;
+      }
+      setRows((prev) =>
+        prev.map((row) => {
+          const hit = resolved.get(row.opponent.trim());
+          return hit && row.opponent_team_id === null
+            ? { ...row, opponent_team_id: hit }
+            : row;
+        }),
+      );
+      setRecognizing(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamId]);
 
   const errors = useMemo(() => {
     const out: Record<string, string> = {};
@@ -93,6 +140,23 @@ export function ScheduleUploadPreview({
         </div>
         <Button variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
       </div>
+
+      {recognizing && (
+        <Card className="p-3 border-sa-blue/30 bg-sa-blue/5">
+          <p className="text-sm text-sa-blue-deep">
+            Recognizing opponents against Statly tenants…
+          </p>
+        </Card>
+      )}
+      {!recognizing && rows.some((r) => r.opponent_team_id !== null) && (
+        <Card className="p-3 border-emerald-500/30 bg-emerald-50/40">
+          <p className="text-sm text-emerald-900">
+            Auto-linked {rows.filter((r) => r.opponent_team_id !== null).length} opponent
+            {rows.filter((r) => r.opponent_team_id !== null).length === 1 ? "" : "s"} to
+            Statly tenants. Click any opponent below to override.
+          </p>
+        </Card>
+      )}
 
       {warnings.length > 0 && (
         <Card className="p-4 border-amber-500/40 bg-amber-50/40">

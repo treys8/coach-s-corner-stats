@@ -590,6 +590,15 @@ export type Database = {
           grad_year: number | null;
         }[];
       };
+      recognize_opponent_team: {
+        Args: { p_my_team_id: string; p_opponent_text: string };
+        Returns: {
+          team_id: string;
+          school_id: string;
+          school_name: string;
+          short_name: string | null;
+        }[];
+      };
       upsert_opponent_players: {
         Args: { p_school: string; p_rows: Json };
         Returns: { client_ref: string; opponent_player_id: string }[];

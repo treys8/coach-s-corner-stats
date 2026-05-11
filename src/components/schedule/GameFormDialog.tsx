@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { seasonYearFor, isSeasonClosed } from "@/lib/season";
+import { recognizeOpponentTeam } from "@/lib/opponents/recognition";
 import type { GameLocation, GameResult } from "@/integrations/supabase/types";
 import type { Game } from "./types";
 
@@ -86,14 +87,28 @@ export function GameFormDialog({ teamId, open, editingGame, onOpenChange, onSave
       toast.error(`The ${yr} season is closed.`);
       return;
     }
+    const trimmedOpponent = form.opponent.trim();
+
+    // Best-effort auto-recognition on Add: if a single Statly tenant exactly
+    // matches the opponent name (case-insensitive against name/short_name,
+    // same sport+level, opted into discovery), set opponent_team_id so the
+    // pre-game roster-pull affordance lights up. Ambiguous or unmatched
+    // stays null; the coach can fix via the OpponentPicker in the schedule
+    // table. Recognition failures are silently ignored.
+    //
+    // On Edit we skip recognition entirely — preserving a previously set
+    // opponent_team_id (or its absence) avoids surprise relinking when a
+    // coach edits date/time on an already-linked row. The schedule-row
+    // OpponentPicker remains the explicit override surface.
+
     // Provisional is_home derivation matching 20260509160000_..._backfill_is_home.sql:
     // home/neutral → true, away → false. Will be refined when the opponent picker
     // wire-up adds an explicit choice for neutral games.
-    const payload = {
+    const basePayload = {
       team_id: teamId,
       game_date: form.game_date,
       game_time: form.game_time || null,
-      opponent: form.opponent.trim(),
+      opponent: trimmedOpponent,
       location: form.location,
       is_home: form.location !== "away",
       team_score: form.team_score === "" ? null : Number(form.team_score),
@@ -101,9 +116,20 @@ export function GameFormDialog({ teamId, open, editingGame, onOpenChange, onSave
       result: form.result === "" ? null : form.result,
       notes: form.notes || null,
     };
-    const { error } = editingGame
-      ? await supabase.from("games").update(payload).eq("id", editingGame.id)
-      : await supabase.from("games").insert(payload);
+
+    let error: { message: string } | null = null;
+    if (editingGame) {
+      const res = await supabase.from("games").update(basePayload).eq("id", editingGame.id);
+      error = res.error;
+    } else {
+      const recognition = await recognizeOpponentTeam(teamId, trimmedOpponent);
+      const opponentTeamId =
+        recognition.kind === "match" ? recognition.match.team_id : null;
+      const res = await supabase
+        .from("games")
+        .insert({ ...basePayload, opponent_team_id: opponentTeamId });
+      error = res.error;
+    }
     if (error) {
       toast.error(error.message);
       return;
