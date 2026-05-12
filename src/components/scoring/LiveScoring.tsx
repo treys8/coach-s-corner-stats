@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ChevronRight, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -94,11 +95,14 @@ export function LiveScoring({
   const [manageOpen, setManageOpen] = useState(false);
   const [opposingLineupEditOpen, setOpposingLineupEditOpen] = useState(false);
   const [boxScoreOpen, setBoxScoreOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Box score defaults open on desktop, collapsed on mobile. `useIsMobile`
-  // returns false on the SSR pass; sync once the breakpoint is known.
+  // Box score and side panel default open on desktop, collapsed on mobile.
+  // `useIsMobile` returns false on the SSR pass; sync once the breakpoint
+  // is known.
   useEffect(() => {
     setBoxScoreOpen(!isMobile);
+    setSidebarOpen(!isMobile);
   }, [isMobile]);
 
   if (loading) {
@@ -107,6 +111,9 @@ export function LiveScoring({
 
   const currentBatterName = currentSlot?.player_id ? names.get(currentSlot.player_id) ?? null : null;
   const pitcherName = state.current_pitcher_id ? names.get(state.current_pitcher_id) ?? null : null;
+  const currentBatterIdForChip = weAreBatting
+    ? currentSlot?.player_id ?? null
+    : currentOpponentBatterId;
 
   return (
     <div className="space-y-3">
@@ -126,8 +133,14 @@ export function LiveScoring({
       <BoxScoreToggle open={boxScoreOpen} onToggle={() => setBoxScoreOpen((v) => !v)} />
       {boxScoreOpen && <LineScore state={state} />}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
-        <div className="space-y-3">
+      <div
+        className={
+          sidebarOpen
+            ? "grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)] gap-4"
+            : "grid grid-cols-1 gap-4"
+        }
+      >
+        <div className="space-y-3 relative">
           {armedResult && (
             <div className="flex items-center justify-between flex-wrap gap-2 text-sm rounded-md border bg-muted/40 px-3 py-2">
               <span>
@@ -150,10 +163,22 @@ export function LiveScoring({
               </div>
             </div>
           )}
+          {!sidebarOpen && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="hidden lg:inline-flex absolute right-0 top-0 z-10 h-8 px-2"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Show side panel"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+          )}
           <DefensiveDiamond
             state={state}
             names={names}
             weAreBatting={weAreBatting}
+            currentBatterId={currentBatterIdForChip}
             dragMode={!!armedResult && !submitting}
             onFielderDrop={onFielderDrop}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
@@ -171,31 +196,41 @@ export function LiveScoring({
             armedResult={armedResult}
           />
         </div>
-        <aside className="lg:sticky lg:top-[6rem] lg:self-start space-y-4">
-          {!weAreBatting && (
-            <OpposingBatterPanel
-              opponentPlayerId={currentOpponentBatterId}
-              slotLabel={
-                currentOppSlot
-                  ? formatOpposingSlotLabel(currentOppSlot)
-                  : "Set opposing lineup to track batters."
-              }
-              cache={opposingProfileCache.current}
-            />
-          )}
-          <Card className="p-3">
-            <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
-            <LiveSprayChart
-              state={state}
-              currentBatterId={
-                weAreBatting
-                  ? currentSlot?.player_id ?? null
-                  : currentOpponentBatterId
-              }
-              currentBatterIsOurs={weAreBatting}
-            />
-          </Card>
-        </aside>
+        {sidebarOpen && (
+          <aside className="lg:sticky lg:top-[6rem] lg:self-start space-y-4">
+            <div className="hidden lg:flex justify-end">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs text-muted-foreground"
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Hide side panel"
+              >
+                Hide
+                <ChevronRight className="ml-1 h-3.5 w-3.5" />
+              </Button>
+            </div>
+            {!weAreBatting && (
+              <OpposingBatterPanel
+                opponentPlayerId={currentOpponentBatterId}
+                slotLabel={
+                  currentOppSlot
+                    ? formatOpposingSlotLabel(currentOppSlot)
+                    : "Set opposing lineup to track batters."
+                }
+                cache={opposingProfileCache.current}
+              />
+            )}
+            <Card className="p-3">
+              <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
+              <LiveSprayChart
+                state={state}
+                currentBatterId={currentBatterIdForChip}
+                currentBatterIsOurs={weAreBatting}
+              />
+            </Card>
+          </aside>
+        )}
       </div>
 
       <Sheet open={manageOpen} onOpenChange={setManageOpen}>

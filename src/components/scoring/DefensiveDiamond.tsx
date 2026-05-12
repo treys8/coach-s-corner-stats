@@ -13,6 +13,10 @@ interface DefensiveDiamondProps {
   names: Map<string, string>;
   /** When we're batting we don't know opposing fielders — show position labels only. */
   weAreBatting: boolean;
+  /** Current batter for the on-field chip in the batter's box. When we are
+   *  batting this is one of our roster ids; when we are fielding it is an
+   *  `opponent_players.id` resolved via `state.opposing_lineup`. */
+  currentBatterId?: string | null;
   /** When set, fielders become draggable. Drop fires onFielderDrop. */
   dragMode?: boolean;
   onFielderDrop?: (x: number, y: number, fielderPosition: FielderPosition) => void;
@@ -66,10 +70,34 @@ function runnerChipLabel(
   return BASE_GENERIC[base];
 }
 
+// Batter chip label = "#NN Last" when both are known, "Last" or "#NN" alone
+// when only one is, falling back to "AB" if nothing can be resolved.
+function batterChipLabel(
+  playerId: string,
+  names: Map<string, string>,
+  weAreBatting: boolean,
+  opposingLineup: OpposingLineupSlot[],
+): string {
+  if (weAreBatting) {
+    const full = names.get(playerId);
+    if (!full) return "AB";
+    const jerseyMatch = full.match(/^#(\S+)\s+(.*)$/);
+    if (jerseyMatch) return `#${jerseyMatch[1]} ${lastNameOf(jerseyMatch[2])}`;
+    return lastNameOf(full);
+  }
+  const slot = opposingLineup.find((s) => s.opponent_player_id === playerId);
+  if (!slot) return "AB";
+  if (slot.jersey_number && slot.last_name) return `#${slot.jersey_number} ${slot.last_name}`;
+  if (slot.last_name) return slot.last_name;
+  if (slot.jersey_number) return `#${slot.jersey_number}`;
+  return "AB";
+}
+
 export function DefensiveDiamond({
   state,
   names,
   weAreBatting,
+  currentBatterId,
   dragMode = false,
   onFielderDrop,
   onRunnerAction,
@@ -122,11 +150,43 @@ export function DefensiveDiamond({
     <svg
       ref={svgRef}
       viewBox="0 0 100 100"
-      className={`w-full max-w-md mx-auto select-none touch-none ${dragMode ? "cursor-grab" : ""}`}
+      className={`w-full select-none touch-none ${dragMode ? "cursor-grab" : ""}`}
       role="img"
       aria-label={dragMode ? "Drag the fielder who made the play to the ball location" : "Defensive alignment"}
     >
       <FieldBackground idSuffix="defense" />
+
+      {/* Batter chip — sits just above home plate over the batter's box,
+          like a name tag for whoever is at the plate. Right side when we
+          are batting, left side when we are fielding, to mirror the way
+          the AB switches sides each half-inning. */}
+      {currentBatterId && (() => {
+        const label = batterChipLabel(currentBatterId, names, weAreBatting, state.opposing_lineup);
+        // Width scales loosely with label length so longer names don't clip.
+        const w = Math.max(11, Math.min(20, label.length * 1.2 + 2));
+        const cx = weAreBatting ? 56.5 : 43.5;
+        // y=90 keeps the chip clear of home plate (y=91+) and the catcher
+        // marker (y=96), while still visually anchoring to the batter's box.
+        const cy = 89.5;
+        return (
+          <g pointerEvents="none">
+            <rect
+              x={cx - w / 2} y={cy - 2.0}
+              width={w} height={4.0} rx={0.8}
+              fill="#1d6fb8" stroke="#fff" strokeWidth={0.3}
+            />
+            <text
+              x={cx} y={cy + 0.85}
+              textAnchor="middle"
+              fontSize={2.2}
+              fontWeight={700}
+              fill="#fff"
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })()}
 
       {/* Bases (rotated squares; orange when occupied). The runner's jersey
           number (or last name / R1-3 fallback) sits inside the orange chip

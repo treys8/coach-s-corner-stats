@@ -2,9 +2,10 @@
 
 // Shared field illustration used by both SprayField (charting surface) and
 // DefensiveDiamond (live defensive layout). Renders everything that's the
-// same between the two: grass + mow pattern, warning track, outfield wall,
-// skinned-infield arc, batter's box dirt, infield grass diamond, pitcher's
-// mound, and home plate. Callers overlay bases / fielders / dots on top.
+// same between the two: dark surround, cross-hatch outfield grass, warning
+// track, outfield wall, skinned-infield arc, infield grass diamond,
+// pitcher's mound, home plate, and batter's boxes. Callers overlay bases /
+// fielders / dots / batter chips on top.
 //
 // Returns SVG elements (not a wrapping <svg>); the parent owns the <svg>
 // with viewBox="0 0 100 100" so both views share one coordinate system.
@@ -29,68 +30,74 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
   return (
     <>
       <defs>
+        {/* Diamond mow pattern: a 2x2 checker in two slightly different
+            greens, rotated 45° so the squares read as diamonds on screen.
+            This is GameChanger's signature look — alternating light and
+            dark diamond-shaped patches across the grass. */}
         <pattern
           id={mowId}
           x="0"
           y="0"
-          width="6"
-          height="100"
+          width="14"
+          height="14"
           patternUnits="userSpaceOnUse"
+          patternTransform="rotate(45)"
         >
-          <rect width="6" height="100" fill="#9bc278" />
-          <rect x="3" width="3" height="100" fill="#82ad5f" />
+          <rect width="14" height="14" fill="#2f6b34" />
+          <rect x="0" y="0" width="7" height="7" fill="#3a7d3f" />
+          <rect x="7" y="7" width="7" height="7" fill="#3a7d3f" />
         </pattern>
         <clipPath id={clipId}>
           <path d={FIELD_OUTFIELD_PATH} />
         </clipPath>
       </defs>
 
-      {/* Cream background */}
-      <rect width="100" height="100" fill="#faf6ec" />
+      {/* Dark frame outside the foul lines — makes the field pop. */}
+      <rect width="100" height="100" fill="#0e1a14" />
 
-      {/* Outfield grass with subtle vertical mowing stripes */}
+      {/* Outfield grass with quilted diamond mowing pattern */}
       <g clipPath={`url(#${clipId})`}>
         <rect width="100" height="100" fill={`url(#${mowId})`} />
-        {/* Warning track: thick tan stroke along the arc only, clipped to
+        {/* Warning track: tan stroke along the arc only, clipped to
             the outfield so only the inner half of the stroke shows. */}
         <path
           d={FIELD_OUTFIELD_ARC}
           fill="none"
-          stroke="#c9a47a"
+          stroke="#a68056"
           strokeWidth="3.5"
         />
       </g>
 
-      {/* Outfield wall (drawn on top, no clip, sits along the arc edge) */}
+      {/* Outfield wall — thin, mostly transparent white. Just enough to
+          define the arc without competing with the grass texture. */}
       <path
         d={FIELD_OUTFIELD_ARC}
         fill="none"
-        stroke="#1f3252"
-        strokeWidth="0.6"
+        stroke="#ffffff"
+        strokeWidth="0.4"
+        opacity="0.55"
       />
 
-      {/* Infield dirt — skinned-infield curved arc */}
+      {/* Infield dirt — skinned-infield curved arc. Warm sandy tan
+          (matches what GameChanger's clay reads as on iPad). */}
       <path d={FIELD_INFIELD_DIRT_PATH} fill="#c9a47a" />
 
       {/* Home-plate dirt: flat top flush with home plate, rounded bottom
           for the catcher / umpire area. Covers the C chip at (50,96). */}
       <path d="M 41,91 L 59,91 L 59,96 A 9,4 0 0 1 41,96 Z" fill="#c9a47a" />
 
-      {/* Infield grass diamond — corners aligned with the bases */}
-      <polygon points="50,86 66,70 50,54 34,70" fill="#a8d18c" />
+      {/* Infield grass diamond — corners aligned with the bases. Mid green
+          so it sits between the outfield mow and the dirt without shouting. */}
+      <polygon points="50,86 66,70 50,54 34,70" fill="#3d8542" />
 
-      {/* Pitcher's path: dirt strip from mound to home through the grass
-          (old-school "keyhole"). Drawn over the grass; mound + home plate
-          dirt overlap its ends so the transitions are seamless. */}
-      <rect x="47" y="75" width="6" height="16" fill="#c9a47a" />
+      {/* Foul lines: home through 1B/3B all the way out to the canvas
+          corners (past the wall), like GameChanger. */}
+      <line x1="50" y1="92" x2="100" y2="23" stroke="#fff" strokeWidth="0.7" />
+      <line x1="50" y1="92" x2="0" y2="23" stroke="#fff" strokeWidth="0.7" />
 
-      {/* Foul lines: home through 1B/3B out to the wall corners */}
-      <line x1="50" y1="92" x2="95" y2="30" stroke="#fff" strokeWidth="0.6" />
-      <line x1="50" y1="92" x2="5" y2="30" stroke="#fff" strokeWidth="0.6" />
-
-      {/* Pitcher's mound */}
-      <circle cx="50" cy="73" r="5" fill="#c9a47a" />
-      <rect x="48.2" y="72.65" width="3.6" height="0.7" fill="#fff" opacity="0.95" />
+      {/* Pitcher's mound — small clay marker, not a giant circle. */}
+      <circle cx="50" cy="73" r="3" fill="#c9a47a" />
+      <rect x="48.8" y="72.75" width="2.4" height="0.5" fill="#fff" opacity="0.95" />
 
       {/* Batter's boxes flanking home plate, flush with the side corners */}
       <rect x="41.5" y="91" width="4" height="6" fill="#fff" stroke="#1f3252" strokeWidth="0.25" />
