@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Trash2, MapPin, Calendar, CheckCircle2, Globe, Pencil } from "lucide-react";
+import { Trash2, MapPin, Calendar, CheckCircle2, Globe, Pencil, Play, Users } from "lucide-react";
 import { useSchool } from "@/lib/contexts/school";
+import { useTeam } from "@/lib/contexts/team";
 import { formatDatePart, formatGameTime, localToday } from "@/lib/date-display";
 import type { Game } from "./types";
 
@@ -19,8 +21,14 @@ interface Props {
 
 export function GameRow({ game: g, closed, onEdit, onChange }: Props) {
   const { school } = useSchool();
+  const { team } = useTeam();
   const today = localToday(school.timezone);
   const isPast = g.game_date < today;
+  // Hide scoring entry on archived seasons; `disabled` won't propagate through
+  // Button asChild → Link, so we gate on render instead.
+  const canScore = g.status !== "final" && !closed;
+  const isLive = g.status === "in_progress";
+  const scoreHref = `/s/${school.slug}/${team.slug}/score/${g.id}`;
   const resultColor =
     g.result === "W" ? "bg-sa-blue text-white"
     : g.result === "L" ? "bg-sa-orange text-white"
@@ -83,6 +91,14 @@ export function GameRow({ game: g, closed, onEdit, onChange }: Props) {
         <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
           {g.game_time && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatGameTime(g.game_time)}</span>}
           <span className="flex items-center gap-1 capitalize"><MapPin className="w-3 h-3" />{g.location}</span>
+          {g.opponent_team_id && !g.is_final && (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-sa-blue"
+              title="Opposing team matched on Statly — their roster will load automatically when you start scoring."
+            >
+              <Users className="w-3 h-3" /> Roster ready
+            </span>
+          )}
           {g.is_final && (
             <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-sa-blue">
               <Globe className="w-3 h-3" /> On public Scores
@@ -91,7 +107,30 @@ export function GameRow({ game: g, closed, onEdit, onChange }: Props) {
         </div>
         {g.notes && <p className="text-xs text-muted-foreground mt-1 italic truncate">{g.notes}</p>}
       </div>
+      {canScore && isLive && (
+        <Button
+          asChild
+          size="sm"
+          className="bg-sa-orange hover:bg-sa-orange-glow text-white shadow-orange"
+        >
+          <Link href={scoreHref} title="Resume live scoring">
+            <Play className="w-4 h-4 mr-1" /> Continue
+          </Link>
+        </Button>
+      )}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {canScore && !isLive && (
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="text-sa-blue hover:text-sa-blue-deep"
+          >
+            <Link href={scoreHref} title="Score this game">
+              <Play className="w-4 h-4 mr-1" /> Score
+            </Link>
+          </Button>
+        )}
         {isPast && g.result && g.team_score !== null && g.opponent_score !== null && (
           g.is_final ? (
             <Button
