@@ -36,7 +36,18 @@ export function useLiveScoring({
   onFinalized,
 }: UseLiveScoringArgs) {
   const gameEvents = useGameEvents(gameId);
-  const { state, events, lastSeq, loading, submitting, setSubmitting, refresh, applyPostResult } = gameEvents;
+  const {
+    state,
+    events,
+    lastSeq,
+    loading,
+    submitting,
+    setSubmitting,
+    refresh,
+    applyPostResult,
+    applyOptimistic,
+    rollbackOptimistic,
+  } = gameEvents;
 
   const derived = useReplayState({ state, events, roster });
   const { names, weAreBatting, currentSlot, currentOppSlot, currentOpponentBatterId, lastUndoableEvent } = derived;
@@ -52,6 +63,8 @@ export function useLiveScoring({
     submitting,
     setSubmitting,
     applyPostResult,
+    applyOptimistic,
+    rollbackOptimistic,
     opposingProfileCache,
   });
 

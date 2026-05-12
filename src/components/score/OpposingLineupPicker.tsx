@@ -39,6 +39,11 @@ interface Props {
   setOpposingPitcherName: (v: string) => void;
   opposingPitcherJersey: string;
   setOpposingPitcherJersey: (v: string) => void;
+  /** Which defensive position the opposing DH bats for. Defaults to "P".
+   *  Optional so the mid-game edit dialog (which uses hidePitcher) doesn't
+   *  have to provide it — DH coverage is a pre-game concern. */
+  dhCoversPos?: string;
+  setDhCoversPos?: (v: string) => void;
   /** Hide the opposing starting pitcher fields. Used by the mid-game edit
    *  dialog, since the pitcher is changed via the Pitching change flow, not
    *  through opposing_lineup_edit. */
@@ -60,6 +65,8 @@ export function OpposingLineupPicker({
   setOpposingPitcherName,
   opposingPitcherJersey,
   setOpposingPitcherJersey,
+  dhCoversPos = "P",
+  setDhCoversPos,
   hidePitcher = false,
 }: Props) {
   const [loadingSource, setLoadingSource] = useState<"pull" | "prior" | null>(null);
@@ -114,10 +121,25 @@ export function OpposingLineupPicker({
         <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue">
           Opposing lineup ({opponentName})
         </h4>
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
-          Opponent uses DH
-        </label>
+        <div className="flex items-center gap-3 flex-wrap">
+          {useDh && !hidePitcher && setDhCoversPos && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              DH hits for
+              <Select value={dhCoversPos} onValueChange={(v) => setDhCoversPos(v)}>
+                <SelectTrigger className="h-8 w-20"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {POSITIONS.filter((p) => p !== "DH").map((p) => (
+                    <SelectItem key={p} value={p}>{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          )}
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
+            Opponent uses DH
+          </label>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -191,7 +213,14 @@ export function OpposingLineupPicker({
                   <SelectValue placeholder="position (optional)" />
                 </SelectTrigger>
                 <SelectContent>
-                  {POSITIONS.filter((p) => p !== "DH" || useDh).map((p) => (
+                  {POSITIONS.filter((p) => {
+                    if (p === slot.position) return true;
+                    if (p === "DH" && !useDh) return false;
+                    // Hide the DH-covered position from batting-order slots
+                    // — that position is filled by the standalone box.
+                    if (useDh && dhCoversPos !== "P" && p === dhCoversPos) return false;
+                    return true;
+                  }).map((p) => (
                     <SelectItem key={p} value={p}>{p}</SelectItem>
                   ))}
                 </SelectContent>
@@ -209,7 +238,9 @@ export function OpposingLineupPicker({
         <div className="grid grid-cols-12 gap-2 items-end max-w-2xl">
           <div className="col-span-12">
             <Label className="text-xs uppercase tracking-wider text-sa-blue">
-              Opposing starting pitcher
+              {dhCoversPos === "P"
+                ? "Opposing starting pitcher"
+                : `Opposing player at ${dhCoversPos} (their DH hits for them)`}
             </Label>
           </div>
           <div className="col-span-3">
@@ -226,6 +257,11 @@ export function OpposingLineupPicker({
               onChange={(e) => setOpposingPitcherName(e.target.value)}
             />
           </div>
+          {dhCoversPos !== "P" && (
+            <p className="col-span-12 text-xs text-muted-foreground">
+              The opposing pitcher must be tagged P in one of the batting slots above.
+            </p>
+          )}
         </div>
       )}
     </section>

@@ -235,8 +235,14 @@ function PreGameForm({
   const [useDh, setUseDh] = useState(true);
   const [lineup, setLineup] = useState<SlotState[]>(emptyLineup);
   const [pitcherId, setPitcherId] = useState<string | null>(null);
+  // Which defensive position our DH bats for. "P" reproduces the classic
+  // "DH hits for the pitcher" shape; any other value means the standalone
+  // box captures the fielder-not-batting and the pitcher must be in the
+  // batting order at position="P".
+  const [dhCoversPos, setDhCoversPos] = useState<Position>("P");
   const [opposingDraft, setOpposingDraft] = useState<OpposingSlotDraft[]>(() => buildEmpty());
   const [oppUseDh, setOppUseDh] = useState(true);
+  const [oppDhCoversPos, setOppDhCoversPos] = useState<Position>("P");
   const [opposingPitcher, setOpposingPitcher] = useState("");
   const [opposingPitcherJersey, setOpposingPitcherJersey] = useState("");
   const [opponentIsPublicRoster, setOpponentIsPublicRoster] = useState<boolean | null>(null);
@@ -293,6 +299,20 @@ function PreGameForm({
     });
   };
 
+  // Reset DH-cover state when DH is turned off so the standalone box and
+  // its position picker can't carry stale values into a non-DH submit.
+  useEffect(() => {
+    if (!useDh) {
+      setDhCoversPos("P");
+      setPitcherId(null);
+    }
+  }, [useDh]);
+  useEffect(() => {
+    if (!oppUseDh) {
+      setOppDhCoversPos("P");
+    }
+  }, [oppUseDh]);
+
   const validationError = useMemo<string | null>(() => {
     const filled = lineup.filter((s) => s.player_id);
     if (filled.length !== lineup.length) {
@@ -306,7 +326,17 @@ function PreGameForm({
       (s) => s.player_id && !s.position && s.batting_order <= 9,
     );
     if (missingPos) return `Slot ${missingPos.batting_order} needs a position.`;
-    if (useDh && !pitcherId) return "Pick a starting pitcher.";
+    if (useDh && !pitcherId) {
+      return dhCoversPos === "P"
+        ? "Pick a starting pitcher."
+        : `Pick the player at ${dhCoversPos}.`;
+    }
+    if (useDh && dhCoversPos !== "P" && !lineup.some((s) => s.position === "P")) {
+      return `When DH covers ${dhCoversPos}, one batting slot must be tagged P.`;
+    }
+    if (useDh && dhCoversPos !== "P" && lineup.some((s) => s.position === dhCoversPos)) {
+      return `When DH covers ${dhCoversPos}, no batting slot can also be tagged ${dhCoversPos}.`;
+    }
     if (!useDh && !lineup.some((s) => s.position === "P")) {
       return "Without DH, one of the batters must play P.";
     }
@@ -318,21 +348,42 @@ function PreGameForm({
       return `Opposing slot ${oppMissing + 1} needs a jersey number or last name.`;
     }
     if (oppUseDh && !opposingPitcher.trim() && !opposingPitcherJersey.trim()) {
-      return "Opposing starting pitcher: enter a jersey number or last name.";
+      return oppDhCoversPos === "P"
+        ? "Opposing starting pitcher: enter a jersey number or last name."
+        : `Opposing player at ${oppDhCoversPos}: enter a jersey number or last name.`;
+    }
+    if (oppUseDh && oppDhCoversPos !== "P" && !opposingDraft.some((s) => s.position === "P")) {
+      return `Opposing side: when DH covers ${oppDhCoversPos}, one batting slot must be tagged P.`;
+    }
+    if (oppUseDh && oppDhCoversPos !== "P" && opposingDraft.some((s) => s.position === oppDhCoversPos)) {
+      return `Opposing side: when DH covers ${oppDhCoversPos}, no batting slot can also be tagged ${oppDhCoversPos}.`;
     }
     if (!oppUseDh && !opposingDraft.some((s) => s.position === "P")) {
       return "Opposing side: without DH, one batting slot must be tagged P.";
     }
     return null;
-  }, [lineup, pitcherId, useDh, opposingDraft, oppUseDh, opposingPitcher, opposingPitcherJersey]);
+  }, [
+    lineup,
+    pitcherId,
+    useDh,
+    dhCoversPos,
+    opposingDraft,
+    oppUseDh,
+    oppDhCoversPos,
+    opposingPitcher,
+    opposingPitcherJersey,
+  ]);
 
   const submit = async () => {
     if (validationError) {
       toast.error(validationError);
       return;
     }
-    const startingPitcherId =
-      useDh ? pitcherId : (lineup.find((s) => s.position === "P")?.player_id ?? null);
+    const startingPitcherId = useDh
+      ? dhCoversPos === "P"
+        ? pitcherId
+        : (lineup.find((s) => s.position === "P")?.player_id ?? null)
+      : (lineup.find((s) => s.position === "P")?.player_id ?? null);
 
     const lineupPayload: LineupSlot[] = lineup.map((s) => ({
       batting_order: s.batting_order,
@@ -369,9 +420,14 @@ function PreGameForm({
       grad_year: null,
     }));
 
+    // The standalone opposing box holds the pitcher when DH covers P, and
+    // the fielder-only player otherwise. Key the upsert by role so the
+    // resolver below can grab the right row.
+    const standaloneOppKey: "pitcher" | "fielding-only" =
+      oppDhCoversPos === "P" ? "pitcher" : "fielding-only";
     if (oppUseDh && (opposingPitcher.trim() || opposingPitcherJersey.trim())) {
       upsertRows.push({
-        client_ref: "pitcher",
+        client_ref: standaloneOppKey,
         opponent_team_id: game.opponent_team_id,
         external_player_id: null,
         first_name: null,
@@ -406,11 +462,36 @@ function PreGameForm({
     // table still backs at_bats.opponent_pitcher_id, so we mirror the
     // pitcher row into it (linked to the new opponent_players record via
     // opponent_player_id). Phase 1.5 retires this once at_bats migrates.
+    //
+    // When opp DH covers P, the pitcher is the standalone box. Otherwise
+    // the pitcher is the P-tagged batting slot, and the standalone box
+    // holds the fielder-only player.
     let opponentPitcherId: string | null = null;
-    const pitcherOppPlayerId = oppUseDh ? idByRef.get("pitcher") ?? null : null;
-    const pitcherDisplayName = oppUseDh
-      ? (opposingPitcher.trim() || opposingPitcherJersey.trim())
-      : null;
+    let opponentFieldingOnlyId: string | null = null;
+    let pitcherOppPlayerId: string | null = null;
+    let pitcherDisplayName: string | null = null;
+    if (oppUseDh && oppDhCoversPos === "P") {
+      pitcherOppPlayerId = idByRef.get("pitcher") ?? null;
+      pitcherDisplayName =
+        opposingPitcher.trim() || opposingPitcherJersey.trim() || null;
+    } else if (oppUseDh && oppDhCoversPos !== "P") {
+      // DH covers a non-pitcher position. The standalone box holds that
+      // fielder-only player; the pitcher is whichever opposing batter is
+      // tagged P. Mirror that batter into game_opponent_pitchers so
+      // at_bats.opponent_pitcher_id has a row to reference (matches the
+      // legacy path for the common DH-for-P case).
+      opponentFieldingOnlyId = idByRef.get("fielding-only") ?? null;
+      const pIdx = opposingDraft.findIndex((s) => s.position === "P");
+      if (pIdx !== -1) {
+        const pSlot = opposingDraft[pIdx];
+        pitcherOppPlayerId = idByRef.get(`slot-${pIdx}`) ?? null;
+        pitcherDisplayName =
+          pSlot.last_name?.trim() || pSlot.jersey_number?.trim() || null;
+      }
+    }
+    // When !oppUseDh, today's flow inserts no game_opponent_pitchers row
+    // (opponent_starting_pitcher_id stays null). Preserving that for now —
+    // it's a separate pre-existing concern.
     if (pitcherDisplayName) {
       const { data, error } = await supabase
         .from("game_opponent_pitchers")
@@ -439,6 +520,12 @@ function PreGameForm({
       opponent_use_dh: oppUseDh,
       league_type: team.league_type,
       nfhs_state: team.nfhs_state,
+      dh_covers_position: useDh ? dhCoversPos : null,
+      fielding_only_player_id:
+        useDh && dhCoversPos !== "P" ? pitcherId : null,
+      opponent_dh_covers_position: oppUseDh ? oppDhCoversPos : null,
+      opponent_fielding_only_player_id:
+        oppUseDh && oppDhCoversPos !== "P" ? opponentFieldingOnlyId : null,
     };
 
     const res = await fetch(`/api/games/${game.id}/events`, {
@@ -512,7 +599,18 @@ function PreGameForm({
                     >
                       <SelectTrigger><SelectValue placeholder="position" /></SelectTrigger>
                       <SelectContent>
-                        {POSITIONS.filter((pos) => pos !== "DH" || useDh).map((pos) => (
+                        {POSITIONS.filter((pos) => {
+                          // Always keep the current selection in the list so
+                          // the trigger can render it after dhCoversPos
+                          // changes and would otherwise hide the value.
+                          if (pos === slot.position) return true;
+                          if (pos === "DH" && !useDh) return false;
+                          // The DH-covered position is filled by the
+                          // standalone fielder-only player; no batter holds
+                          // it.
+                          if (useDh && dhCoversPos !== "P" && pos === dhCoversPos) return false;
+                          return true;
+                        }).map((pos) => (
                           <SelectItem key={pos} value={pos}>{pos}</SelectItem>
                         ))}
                       </SelectContent>
@@ -551,18 +649,48 @@ function PreGameForm({
       </div>
 
       {useDh && (
-        <div className="max-w-md">
-          <Label>Starting pitcher (with DH, batting separately)</Label>
-          <Select value={pitcherId ?? ""} onValueChange={(v) => setPitcherId(v || null)}>
-            <SelectTrigger><SelectValue placeholder="— pick pitcher —" /></SelectTrigger>
-            <SelectContent>
-              {roster
-                .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
-                .map((p) => (
-                  <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
+        <div className="max-w-xl">
+          <Label>
+            {dhCoversPos === "P"
+              ? "Starting pitcher (with DH, batting separately)"
+              : `Player at ${dhCoversPos} (DH hits for them)`}
+          </Label>
+          <div className="grid grid-cols-12 gap-2">
+            <div className="col-span-3">
+              <Select
+                value={dhCoversPos}
+                onValueChange={(v) => setDhCoversPos(v as Position)}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {POSITIONS.filter((pos) => pos !== "DH").map((pos) => (
+                    <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="col-span-9">
+              <Select value={pitcherId ?? ""} onValueChange={(v) => setPitcherId(v || null)}>
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={dhCoversPos === "P" ? "— pick pitcher —" : "— pick fielder —"}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {roster
+                    .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
+                    .map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            {dhCoversPos === "P"
+              ? "DH bats; pitcher doesn't bat."
+              : `DH bats; the player at ${dhCoversPos} fields but doesn't bat. Pitcher must be in the batting order at P.`}
+          </p>
         </div>
       )}
 
@@ -582,6 +710,8 @@ function PreGameForm({
           setOpposingPitcherName={setOpposingPitcher}
           opposingPitcherJersey={opposingPitcherJersey}
           setOpposingPitcherJersey={setOpposingPitcherJersey}
+          dhCoversPos={oppDhCoversPos}
+          setDhCoversPos={(v) => setOppDhCoversPos(v as Position)}
         />
       </div>
 

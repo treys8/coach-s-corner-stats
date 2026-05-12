@@ -9,6 +9,7 @@ import {
 } from "@/lib/school-classifications";
 import { formatDatePart } from "@/lib/date-display";
 import { ScoresFilters } from "./ScoresFilters";
+import { ScoresAutoRefresh } from "./ScoresAutoRefresh";
 
 // Public scores groups tiles by raw game_date string, and a single group
 // header may span schools in different timezones. Default the header label
@@ -454,6 +455,7 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
       </header>
 
       <main className="container mx-auto px-6 py-10">
+        <ScoresAutoRefresh />
         <ScoresFilters />
         {error ? (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive">

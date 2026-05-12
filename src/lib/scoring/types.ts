@@ -99,6 +99,20 @@ export interface GameStartedPayload {
   /** Optional: state code (e.g., 'NY', 'CA') for state-specific pitch
    *  count rules when league_type === 'nfhs'. */
   nfhs_state?: string | null;
+  /** Which defensive position our DH bats for. Defaults to "P" (legacy
+   *  behavior) when omitted with use_dh=true. Null/absent when use_dh=false.
+   *  Any defensive position except "DH" is valid. */
+  dh_covers_position?: string | null;
+  /** When use_dh=true and dh_covers_position !== "P", the player who covers
+   *  that defensive position without batting (the player the DH hits for).
+   *  When dh_covers_position === "P", this is null and starting_pitcher_id
+   *  carries the same identity. */
+  fielding_only_player_id?: string | null;
+  /** Mirror of dh_covers_position for the opposing side. */
+  opponent_dh_covers_position?: string | null;
+  /** Mirror of fielding_only_player_id for the opposing side. References
+   *  public.opponent_players.id. */
+  opponent_fielding_only_player_id?: string | null;
 }
 
 /** Mid-game replacement of the opposing batting order. The replay engine
@@ -108,6 +122,10 @@ export interface GameStartedPayload {
 export interface OpposingLineupEditPayload {
   opposing_lineup: OpposingLineupSlot[];
   opponent_use_dh?: boolean;
+  /** Plumbed for symmetry with `GameStartedPayload`. No editor surfaces this
+   *  field today; the replay engine just mirrors it into ReplayState when
+   *  present. */
+  opponent_dh_covers_position?: string | null;
 }
 
 export interface AtBatPayload {
@@ -356,6 +374,20 @@ export interface ReplayState {
    *  Null before game_started or when opposing_lineup is empty. */
   current_opp_batter_slot: number | null;
 
+  /** Which defensive position our DH covers ("P" in the common case, any
+   *  other position when the DH bats for a non-pitcher). Null when
+   *  use_dh=false. */
+  dh_covers_position: string | null;
+  /** Our fielder who plays defense but doesn't bat (the player our DH hits
+   *  for). Null when use_dh=false OR dh_covers_position === "P" — in the
+   *  pitcher case current_pitcher_id already carries this player. */
+  fielding_only_player_id: string | null;
+  /** Mirror of dh_covers_position for the opposing side. */
+  opponent_dh_covers_position: string | null;
+  /** Opposing fielder-only player (opponent_players.id). Mirror of
+   *  fielding_only_player_id. */
+  opponent_fielding_only_player_id: string | null;
+
   last_play_text: string | null;
   last_event_at: string | null;
 
@@ -451,6 +483,10 @@ export const INITIAL_STATE: ReplayState = {
   opposing_lineup: [],
   opponent_use_dh: false,
   current_opp_batter_slot: null,
+  dh_covers_position: null,
+  fielding_only_player_id: null,
+  opponent_dh_covers_position: null,
+  opponent_fielding_only_player_id: null,
   last_play_text: null,
   last_event_at: null,
   at_bats: [],

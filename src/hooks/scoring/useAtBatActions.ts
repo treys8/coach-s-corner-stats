@@ -39,6 +39,8 @@ export interface UseAtBatActionsArgs {
   submitting: boolean;
   setSubmitting: UseGameEventsResult["setSubmitting"];
   applyPostResult: UseGameEventsResult["applyPostResult"];
+  applyOptimistic: UseGameEventsResult["applyOptimistic"];
+  rollbackOptimistic: UseGameEventsResult["rollbackOptimistic"];
   opposingProfileCache?: Map<string, OpposingBatterProfile>;
 }
 
@@ -60,6 +62,23 @@ export interface UseAtBatActionsResult {
  * a coach tap an in-play outcome, then drop the fielder on the diamond to
  * capture spray + position.
  */
+// Mirrors the server's `closingResultForPitch` predicate. Returns true when
+// a tap on `pitchType` against `state` will produce a visible client-side
+// change worth applying optimistically. False for closing pitches (would
+// briefly show 4-X / X-3 before the chain response replaces state) and for
+// hbp / in_play (no count change; the runner advance is in the chained AB,
+// not the pitch).
+function shouldOptimisticPitch(pitchType: PitchType, state: ReplayState): boolean {
+  if (pitchType === "hbp" || pitchType === "in_play") return false;
+  if (state.current_balls >= 3) {
+    if (pitchType === "ball" || pitchType === "pitchout" || pitchType === "intentional_ball") return false;
+  }
+  if (state.current_strikes >= 2) {
+    if (pitchType === "called_strike" || pitchType === "swinging_strike" || pitchType === "foul_tip_caught") return false;
+  }
+  return true;
+}
+
 export function useAtBatActions({
   gameId,
   state,
@@ -71,6 +90,8 @@ export function useAtBatActions({
   submitting,
   setSubmitting,
   applyPostResult,
+  applyOptimistic,
+  rollbackOptimistic,
   opposingProfileCache,
 }: UseAtBatActionsArgs): UseAtBatActionsResult {
   const [armedResult, setArmedResult] = useState<ArmedState | null>(null);
@@ -131,12 +152,26 @@ export function useAtBatActions({
     };
 
     const clientEventId = `ab-${state.inning}-${state.half}-${nextSeq}`;
+    // Optimistic apply: runner_advances + score + new-PA reset all land
+    // instantly. The server uses the same defaultAdvances logic so the
+    // commit is effectively a no-op visually.
+    applyOptimistic({
+      id: `pending-${clientEventId}`,
+      game_id: gameId,
+      client_event_id: clientEventId,
+      sequence_number: nextSeq,
+      event_type: "at_bat",
+      payload,
+      supersedes_event_id: null,
+      created_at: new Date().toISOString(),
+    });
     const postResult = await postEvent(gameId, {
       client_event_id: clientEventId,
       event_type: "at_bat",
       payload,
     });
     if (!postResult.ok) {
+      rollbackOptimistic();
       setSubmitting(false);
       return;
     }
@@ -169,16 +204,35 @@ export function useAtBatActions({
     if (submitting) return;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
+    const clientEventId = `pitch-${nextSeq}`;
+    // Optimistic apply for the common case (non-closing ball/strike/foul).
+    // Closing pitches and hbp/in_play skip optimistic because applyPitch
+    // would briefly produce a count like 4-X / X-3 before the server's
+    // chain response replaces state with the new-PA reset.
+    const optimistic = shouldOptimisticPitch(pitchType, state);
+    if (optimistic) {
+      applyOptimistic({
+        id: `pending-${clientEventId}`,
+        game_id: gameId,
+        client_event_id: clientEventId,
+        sequence_number: nextSeq,
+        event_type: "pitch",
+        payload: { pitch_type: pitchType },
+        supersedes_event_id: null,
+        created_at: new Date().toISOString(),
+      });
+    }
     // One POST. The server inspects the pre-pitch state and atomically
     // emits the closing at_bat (if the pitch closes the PA) and the
     // inning_end (if the closing PA brings outs to 3). All persisted
     // events come back in result.events for the local fold.
     const result = await postEvent(gameId, {
-      client_event_id: `pitch-${nextSeq}`,
+      client_event_id: clientEventId,
       event_type: "pitch",
       payload: { pitch_type: pitchType },
     });
     if (!result.ok) {
+      if (optimistic) rollbackOptimistic();
       setSubmitting(false);
       return;
     }
