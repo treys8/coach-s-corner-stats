@@ -26,6 +26,7 @@ import {
   OTHER_IN_PLAY,
   OUTS_IN_PLAY,
   PRODUCTIVE,
+  RARE_OUTCOMES,
   RESULT_DESC,
   RESULT_LABEL,
   autoRBI,
@@ -45,6 +46,7 @@ const supabase = createClient();
 
 const EDIT_RESULTS: AtBatResult[] = [
   ...NON_CONTACT,
+  ...RARE_OUTCOMES,
   ...HITS,
   ...OUTS_IN_PLAY,
   ...OTHER_IN_PLAY,

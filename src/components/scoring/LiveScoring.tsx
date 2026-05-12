@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLiveScoring, type RosterDisplay } from "@/hooks/use-live-scoring";
-import { RESULT_DESC, formatOpposingSlotLabel } from "@/lib/scoring/at-bat-helpers";
+import { RESULT_DESC, canRecord as canRecordResult, formatOpposingSlotLabel } from "@/lib/scoring/at-bat-helpers";
 import type { OpposingBatterProfile } from "@/lib/opponents/profile";
 import { DefensiveDiamond } from "@/components/scoring/DefensiveDiamond";
 import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
@@ -23,6 +23,7 @@ import { GameStatusBar } from "@/components/scoring/GameStatusBar";
 import { BoxScoreToggle, LineScore } from "@/components/scoring/LineScore";
 import { PitchPad } from "@/components/scoring/PitchPad";
 import { OutcomeGrid } from "@/components/scoring/OutcomeGrid";
+import { ARMED_IN_PLAY_PENDING } from "@/hooks/scoring/useAtBatActions";
 import { FlowControls } from "@/components/scoring/FlowControls";
 import { RunnersControls } from "@/components/scoring/RunnersControls";
 import { PitchingChangeDialog } from "@/components/scoring/dialogs/PitchingChangeDialog";
@@ -150,7 +151,18 @@ export function LiveScoring({
         }
       >
         <div className="space-y-3 relative">
-          {armedResult && (
+          {armedResult === ARMED_IN_PLAY_PENDING && (
+            <div className="flex items-center justify-between flex-wrap gap-2 text-sm rounded-md border bg-muted/40 px-3 py-2">
+              <span>
+                <span className="font-semibold text-sa-blue-deep">Pitch in play</span>
+                <span className="text-muted-foreground"> · pick the outcome below.</span>
+              </span>
+              <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
+                Cancel
+              </Button>
+            </div>
+          )}
+          {armedResult && armedResult !== ARMED_IN_PLAY_PENDING && (
             <div className="flex items-center justify-between flex-wrap gap-2 text-sm rounded-md border bg-muted/40 px-3 py-2">
               <span>
                 <span className="text-muted-foreground">Recording </span>
@@ -188,7 +200,7 @@ export function LiveScoring({
             names={names}
             weAreBatting={weAreBatting}
             currentBatterId={currentBatterIdForChip}
-            dragMode={!!armedResult && !submitting}
+            dragMode={!!armedResult && armedResult !== ARMED_IN_PLAY_PENDING && !submitting}
             onFielderDrop={onFielderDrop}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
           />
@@ -203,6 +215,8 @@ export function LiveScoring({
             onPick={onOutcomePicked}
             onK3Reach={(src) => void submitAtBat("K_swinging", null, src)}
             armedResult={armedResult}
+            currentStrikes={state.current_strikes}
+            canRecord={(r) => canRecordResult(r, state)}
           />
         </div>
         {sidebarOpen && (

@@ -969,6 +969,47 @@ describe("replay()", () => {
     expect(state.caught_stealing).toEqual([{ runner_id: "p2", event_id: "cs-1", catcher_id: null }]);
     expect(state.pickoffs).toEqual([{ runner_id: "p3", event_id: "pk-1", catcher_id: null }]);
   });
+
+  it("opp-pa-* synthetic player_ids are rewritten to null on derived advances", () => {
+    // Pre-Phase-4 legacy in-flight games could persist `opp-pa-*` placeholder
+    // ids on the AtBatPayload's runner_advances when the opposing lineup was
+    // empty. The derived view must hide the placeholder behind
+    // opponent_synthetic so downstream code doesn't treat the string as an FK.
+    const state = replay([
+      startGame({ we_are_home: true }), // opp bats first (top)
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: null,
+        runner_advances: [
+          { from: "batter", to: "first", player_id: "opp-pa-1-top-2" },
+        ],
+      })),
+    ]);
+    expect(state.at_bats).toHaveLength(1);
+    expect(state.at_bats[0].runner_advances).toEqual([
+      { from: "batter", to: "first", player_id: null, opponent_synthetic: true },
+    ]);
+    // Persisted payload still has the synthetic id — only the derived view
+    // is rewritten. Bases keep the synthetic id for runner tracking; chip
+    // labels fall back to R1/R2/R3 for unknown ids.
+    expect(state.bases.first?.player_id).toBe("opp-pa-1-top-2");
+  });
+
+  it("non-synthetic player_ids on runner_advances pass through untouched", () => {
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+    ]);
+    expect(state.at_bats[0].runner_advances).toEqual([
+      { from: "batter", to: "first", player_id: "p1" },
+    ]);
+  });
 });
 
 // Folding an authoritative event onto an existing state must match running
