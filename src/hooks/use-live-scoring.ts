@@ -340,11 +340,6 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
         setSubmitting(false);
         return;
       }
-      // Invalidate the cached opposing-batter profile so the next cycle
-      // through the lineup refetches with the just-recorded PA.
-      if (!weAreBatting && currentOpponentBatterId) {
-        opposingProfileCache?.delete(currentOpponentBatterId);
-      }
     }
 
     const snap = await refresh();
