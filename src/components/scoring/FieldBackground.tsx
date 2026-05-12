@@ -86,9 +86,10 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
           for the catcher / umpire area. Covers the C chip at (50,96). */}
       <path d="M 41,91 L 59,91 L 59,96 A 9,4 0 0 1 41,96 Z" fill="#c9a47a" />
 
-      {/* Infield grass diamond — corners aligned with the bases. Mid green
-          so it sits between the outfield mow and the dirt without shouting. */}
-      <polygon points="50,86 66,70 50,54 34,70" fill="#3d8542" />
+      {/* Infield grass diamond — corners aligned with the bases. Slightly
+          darker than the outfield mow's lighter shade so it reads as the
+          same green family, like a real ballpark's shorter infield cut. */}
+      <polygon points="50,86 66,70 50,54 34,70" fill="#33713a" />
 
       {/* Foul lines: home through 1B/3B all the way out to the canvas
           corners (past the wall), like GameChanger. */}

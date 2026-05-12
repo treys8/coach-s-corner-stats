@@ -156,29 +156,30 @@ export function DefensiveDiamond({
     >
       <FieldBackground idSuffix="defense" />
 
-      {/* Batter chip — sits just above home plate over the batter's box,
-          like a name tag for whoever is at the plate. Right side when we
-          are batting, left side when we are fielding, to mirror the way
-          the AB switches sides each half-inning. */}
+      {/* Batter chip — placed in the foul-territory pocket between 1B (or
+          3B) and home plate, mirroring GameChanger's "Boyd #2" badge that
+          floats prominently in the field rather than at the very bottom.
+          Right side when we are batting, left side when we are fielding,
+          so the AB visually swaps each half-inning. */}
       {currentBatterId && (() => {
         const label = batterChipLabel(currentBatterId, names, weAreBatting, state.opposing_lineup);
         // Width scales loosely with label length so longer names don't clip.
-        const w = Math.max(11, Math.min(20, label.length * 1.2 + 2));
-        const cx = weAreBatting ? 56.5 : 43.5;
-        // y=90 keeps the chip clear of home plate (y=91+) and the catcher
-        // marker (y=96), while still visually anchoring to the batter's box.
-        const cy = 89.5;
+        const w = Math.max(12, Math.min(20, label.length * 1.2 + 3));
+        // Push the chip well off-center, and up into the lower-infield
+        // area so it doesn't get lost near the catcher.
+        const cx = weAreBatting ? 67 : 33;
+        const cy = 78;
         return (
           <g pointerEvents="none">
             <rect
-              x={cx - w / 2} y={cy - 2.0}
-              width={w} height={4.0} rx={0.8}
-              fill="#1d6fb8" stroke="#fff" strokeWidth={0.3}
+              x={cx - w / 2} y={cy - 2.4}
+              width={w} height={4.8} rx={1.0}
+              fill="#1d6fb8" stroke="#fff" strokeWidth={0.35}
             />
             <text
-              x={cx} y={cy + 0.85}
+              x={cx} y={cy + 1.0}
               textAnchor="middle"
-              fontSize={2.2}
+              fontSize={2.5}
               fontWeight={700}
               fill="#fff"
             >
