@@ -38,19 +38,20 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
       <defs>
         {/* Diamond mow pattern: a 2x2 checker rotated 45° so the cells
             read as alternating light/dark diamond patches across the
-            grass. GameChanger's signature look. */}
+            grass. Tile size 10 → diamonds about 7 units across, giving
+            ~14 diamonds visible across the field width like GameChanger. */}
         <pattern
           id={mowId}
           x="0"
           y="0"
-          width="14"
-          height="14"
+          width="10"
+          height="10"
           patternUnits="userSpaceOnUse"
           patternTransform="rotate(45)"
         >
-          <rect width="14" height="14" fill="#2f6b34" />
-          <rect width="7" height="7" fill="#3a7d3f" />
-          <rect x="7" y="7" width="7" height="7" fill="#3a7d3f" />
+          <rect width="10" height="10" fill="#2f6b34" />
+          <rect width="5" height="5" fill="#3a7d3f" />
+          <rect x="5" y="5" width="5" height="5" fill="#3a7d3f" />
         </pattern>
         <clipPath id={grassClipId}>
           <path d={GRASS_PATH} />
@@ -85,14 +86,20 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
         opacity="0.5"
       />
 
-      {/* Infield skinned-dirt circle. Centered between the bases (above
-          the mound) and large enough to contain 1B/2B/3B with a margin. */}
-      <circle cx="50" cy="64" r="22" fill="#c9a47a" />
+      {/* Infield skinned dirt: a wedge with sides along the foul lines
+          (matching the foul-line slope from home plate through 1B/3B and
+          on toward the back) capped by a curved arc beyond 2B. This is
+          the shape real ballparks have and that GameChanger renders —
+          NOT a circle. Apex of the wedge sits at home plate (50,92). */}
+      <path
+        d="M 50,92 L 78.18,53.17 A 48,48 0 0 0 21.82,53.17 Z"
+        fill="#c9a47a"
+      />
 
-      {/* Home plate dirt circle — sized to contain home plate, the
-          batter's boxes, and the catcher position. Positioned so its top
-          slightly overlaps the infield dirt circle, so the two dirt areas
-          read as one continuous skinned area (no visible grass gap). */}
+      {/* Home plate "cutout" — a circular dirt patch widening the dirt
+          around the home plate area, so the wedge has a wider bulb at
+          its base (the catcher / batter's box area). Together with the
+          wedge above, the dirt reads as one continuous lollipop shape. */}
       <circle cx="50" cy="94" r="10" fill="#c9a47a" />
 
       {/* Infield grass diamond — corners at the bases, painted with the
