@@ -11,10 +11,11 @@ export interface PostBody {
 
 export interface PostResult {
   ok: boolean;
-  /** Canonical state after the event was applied (null on failure). */
+  /** Canonical state after all events in the chain were applied (null on failure). */
   state: ReplayState | null;
-  /** The persisted event(s). Phase 1 always returns one; Phase 2's
-   *  server-side chained derivation may return multiple in one POST. */
+  /** The persisted event(s). One tap may return 1–3: the primary event,
+   *  plus a server-derived closing at_bat (count-closing pitch), plus a
+   *  server-derived inning_end (outs hit 3 on the closing PA). */
   events: GameEventRecord[];
 }
 
@@ -30,12 +31,12 @@ export async function postEvent(gameId: string, body: PostBody): Promise<PostRes
     return { ok: false, state: null, events: [] };
   }
   const data = (await res.json().catch(() => ({}))) as {
-    event?: GameEventRecord;
-    live_state?: ReplayState;
+    events?: GameEventRecord[];
+    state?: ReplayState;
   };
   return {
     ok: true,
-    state: data.live_state ?? null,
-    events: data.event ? [data.event] : [],
+    state: data.state ?? null,
+    events: data.events ?? [],
   };
 }
