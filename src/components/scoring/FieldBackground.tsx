@@ -13,15 +13,16 @@
 // Returns SVG elements (not a wrapping <svg>); the parent owns the <svg>
 // with viewBox="0 0 100 100" so both views share one coordinate system.
 
-// Outfield wall: a gentle upward curve spanning the full canvas width,
-// peaking near the top-center. Sweep-flag 1 = curve upward when traveling
-// left-to-right.
-const WALL_ARC = "M 0,32 A 90,30 0 0 1 100,32";
+// Outfield wall: same physical curve as the legacy outfield arc
+// (rx=70, ry=40, sweep-flag 0, right-to-left so it bulges upward), but
+// stretched to the full canvas width. Peaks at y≈18, leaving CF
+// (canonical y=26) comfortably inside the field.
+const WALL_ARC = "M 100,30 A 70,40 0 0 0 0,30";
 
 // Grass shape: bounded above by the wall arc, fills down to the canvas
 // bottom and out to both side edges. Foul territory IS grass — only the
 // strip above the wall is dark.
-const GRASS_PATH = "M 0,32 A 90,30 0 0 1 100,32 L 100,100 L 0,100 Z";
+const GRASS_PATH = "M 100,30 A 70,40 0 0 0 0,30 L 0,100 L 100,100 Z";
 
 interface FieldBackgroundProps {
   /** Unique suffix appended to <defs> ids so multiple fields rendered on
@@ -88,9 +89,11 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
           the mound) and large enough to contain 1B/2B/3B with a margin. */}
       <circle cx="50" cy="64" r="22" fill="#c9a47a" />
 
-      {/* Home plate dirt circle — a separate round patch around home
-          plate, with a thin grass strip between it and the infield dirt. */}
-      <circle cx="50" cy="96" r="9" fill="#c9a47a" />
+      {/* Home plate dirt circle — sized to contain home plate, the
+          batter's boxes, and the catcher position. Positioned so its top
+          slightly overlaps the infield dirt circle, so the two dirt areas
+          read as one continuous skinned area (no visible grass gap). */}
+      <circle cx="50" cy="94" r="10" fill="#c9a47a" />
 
       {/* Infield grass diamond — corners at the bases, painted with the
           same mow pattern as the outfield so the grass reads as
