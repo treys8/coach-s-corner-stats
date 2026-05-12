@@ -43,6 +43,20 @@ function lastNameOf(full: string): string {
   return parts[parts.length - 1] ?? full;
 }
 
+// Fielder label = "F Last" (first initial + last name) when we have both,
+// matching GameChanger's on-field name style. Single-word names fall back
+// to the bare name.
+function fielderNameLabel(full: string): string {
+  const noJersey = full.replace(/^#\S+\s+/, "").trim();
+  const parts = noJersey.split(/\s+/);
+  if (parts.length >= 2) {
+    const firstInitial = parts[0][0]?.toUpperCase() ?? "";
+    const last = parts[parts.length - 1];
+    return firstInitial ? `${firstInitial} ${last}` : last;
+  }
+  return parts[0] ?? full;
+}
+
 // Prefer jersey for the chip label (compact, recognizable at a glance).
 // Falls back to last name when no jersey is known, and to the generic
 // R1/R2/R3 when the runner can't be resolved at all.
@@ -253,13 +267,28 @@ export function DefensiveDiamond({
         return null;
       })}
 
-      {/* Fielder markers (canonical position unless this fielder is being dragged) */}
+      {/* Fielder markers — small player-name text floating on the field
+          like GameChanger, no big circle background. When we're fielding,
+          we resolve names from `our_lineup` by position. When we're
+          batting (opposing fielders, no name data), fall back to the
+          position abbreviation. The hit target stays a transparent
+          circle so the drag-glove flow still works. */}
       {FIELDER_POSITIONS.map((pos) => {
         const [px, py] = POSITION_XY[pos];
         const isDragging = drag?.position === pos;
         const cx = isDragging ? drag!.x : px;
         const cy = isDragging ? drag!.y : py;
         const grabbable = dragMode;
+        // Resolve label: prefer player name when fielding, else the
+        // position abbreviation.
+        const slot = !weAreBatting
+          ? state.our_lineup.find((s) => s.position === pos)
+          : undefined;
+        const playerName = slot?.player_id ? names.get(slot.player_id) : null;
+        const label = playerName ? fielderNameLabel(playerName) : pos;
+        // Slightly smaller font for the longer name labels so they don't
+        // collide with neighboring fielders.
+        const fontSize = label === pos ? 3.0 : (label.length > 8 ? 2.4 : 2.7);
         return (
           <g
             key={pos}
@@ -269,20 +298,27 @@ export function DefensiveDiamond({
             onPointerCancel={isDragging ? endDrag : undefined}
             style={grabbable ? { cursor: isDragging ? "grabbing" : "grab" } : undefined}
           >
+            {/* Transparent hit target for drag-and-drop. */}
             <circle
-              cx={cx} cy={cy} r="3.4"
-              fill={isDragging ? "#ee8233" : "#fff"}
-              stroke="#1f3252" strokeWidth="0.5"
+              cx={cx} cy={cy} r="4"
+              fill={isDragging ? "#ee8233" : "transparent"}
+              stroke={isDragging ? "#fff" : "none"}
+              strokeWidth={isDragging ? 0.4 : 0}
             />
+            {/* Label — small dark text with a white halo for readability
+                on the diamond-checker grass. */}
             <text
-              x={cx} y={cy + 1}
+              x={cx} y={cy + fontSize / 3}
               textAnchor="middle"
-              fontSize="2.6"
+              fontSize={fontSize}
               fontWeight="700"
-              fill={isDragging ? "#fff" : "#1f3252"}
+              fill={isDragging ? "#fff" : "#0e1a14"}
+              stroke="#fff"
+              strokeWidth="0.55"
+              paintOrder="stroke fill"
               pointerEvents="none"
             >
-              {pos}
+              {label}
             </text>
           </g>
         );
