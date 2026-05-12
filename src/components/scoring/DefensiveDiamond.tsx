@@ -25,6 +25,10 @@ interface DefensiveDiamondProps {
     base: "first" | "second" | "third",
     runnerId: string | null,
   ) => void;
+  /** When true, the SVG fills the parent's height as well as width so it
+   *  fits inside a fixed-row grid cell. The viewBox + preserveAspectRatio
+   *  keep the diamond square (letterboxed by the parent). */
+  fillContainer?: boolean;
 }
 
 // When we're batting, runners are ours and we know names. When we're
@@ -115,6 +119,7 @@ export function DefensiveDiamond({
   dragMode = false,
   onFielderDrop,
   onRunnerAction,
+  fillContainer = false,
 }: DefensiveDiamondProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<{
@@ -164,7 +169,8 @@ export function DefensiveDiamond({
     <svg
       ref={svgRef}
       viewBox="0 0 100 100"
-      className={`w-full select-none touch-none ${dragMode ? "cursor-grab" : ""}`}
+      preserveAspectRatio="xMidYMid meet"
+      className={`${fillContainer ? "w-full h-full" : "w-full"} select-none touch-none ${dragMode ? "cursor-grab" : ""}`}
       role="img"
       aria-label={dragMode ? "Drag the fielder who made the play to the ball location" : "Defensive alignment"}
     >

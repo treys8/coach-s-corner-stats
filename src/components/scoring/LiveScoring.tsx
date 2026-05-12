@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -13,16 +14,16 @@ import {
 } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLiveScoring, type RosterDisplay } from "@/hooks/use-live-scoring";
-import { RESULT_DESC, canRecord as canRecordResult, formatOpposingSlotLabel } from "@/lib/scoring/at-bat-helpers";
+import { canRecord as canRecordResult, formatOpposingSlotLabel } from "@/lib/scoring/at-bat-helpers";
 import type { OpposingBatterProfile } from "@/lib/opponents/profile";
 import { DefensiveDiamond } from "@/components/scoring/DefensiveDiamond";
 import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
 import { OpposingBatterPanel } from "@/components/score/OpposingBatterPanel";
 import { EditOpposingLineupDialog } from "@/components/scoring/EditOpposingLineupDialog";
 import { GameStatusBar } from "@/components/scoring/GameStatusBar";
-import { BoxScoreToggle, LineScore } from "@/components/scoring/LineScore";
-import { PitchPad } from "@/components/scoring/PitchPad";
-import { OutcomeGrid } from "@/components/scoring/OutcomeGrid";
+import { PaActionFooter } from "@/components/scoring/PaActionFooter";
+import { LineScoreSheet } from "@/components/scoring/sheets/LineScoreSheet";
+import { SidebarSheet } from "@/components/scoring/sheets/SidebarSheet";
 import { ARMED_IN_PLAY_PENDING } from "@/hooks/scoring/useAtBatActions";
 import { FlowControls } from "@/components/scoring/FlowControls";
 import { RunnersControls } from "@/components/scoring/RunnersControls";
@@ -43,6 +44,9 @@ interface LiveScoringProps {
   myTeamId: string;
   gameDate: string;
   opponentTeamId: string | null;
+  /** Optional back-link wired into the GameStatusBar so the in-progress shell
+   *  can fully replace the page-level GameHeader chrome. */
+  backHref?: string;
   /** Fires after the game_finalized event lands so the parent page can
    *  swap to FinalStub from its own local state. */
   onFinalized?: () => void;
@@ -57,6 +61,7 @@ export function LiveScoring({
   myTeamId,
   gameDate,
   opponentTeamId,
+  backHref,
   onFinalized,
 }: LiveScoringProps) {
   const isMobile = useIsMobile();
@@ -72,7 +77,6 @@ export function LiveScoring({
     currentSlot,
     currentOppSlot,
     currentOpponentBatterId,
-    lastSeq,
     refresh,
     lastUndoableEvent,
     armedResult,
@@ -104,19 +108,30 @@ export function LiveScoring({
   const [editOpen, setEditOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const [opposingLineupEditOpen, setOpposingLineupEditOpen] = useState(false);
-  const [boxScoreOpen, setBoxScoreOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-
-  // Box score and side panel default open on desktop, collapsed on mobile.
-  // `useIsMobile` returns false on the SSR pass; sync once the breakpoint
-  // is known.
+  const [boxSheetOpen, setBoxSheetOpen] = useState(false);
+  const [sidebarSheetOpen, setSidebarSheetOpen] = useState(false);
+  // Inline sidebar visibility on `lg+`. Defaults to true on desktop, hidden
+  // on tablet (where the sidebar moves to a Sheet). `useIsMobile` returns
+  // false on the SSR pass; sync after the breakpoint resolves.
+  const [sidebarInlineOpen, setSidebarInlineOpen] = useState(true);
   useEffect(() => {
-    setBoxScoreOpen(!isMobile);
-    setSidebarOpen(!isMobile);
+    setSidebarInlineOpen(!isMobile);
   }, [isMobile]);
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading live state…</div>;
+    return (
+      <div className="h-[100dvh] p-6 flex flex-col gap-3">
+        {backHref && (
+          <Link
+            href={backHref}
+            className="text-xs text-muted-foreground hover:text-sa-orange uppercase tracking-wider"
+          >
+            ← Score picker
+          </Link>
+        )}
+        <div className="text-sm text-muted-foreground">Loading live state…</div>
+      </div>
+    );
   }
 
   const currentBatterName = currentSlot?.player_id ? names.get(currentSlot.player_id) ?? null : null;
@@ -124,9 +139,11 @@ export function LiveScoring({
   const currentBatterIdForChip = weAreBatting
     ? currentSlot?.player_id ?? null
     : currentOpponentBatterId;
+  const dragMode = !!armedResult && armedResult !== ARMED_IN_PLAY_PENDING && !submitting;
 
   return (
-    <div className="space-y-3">
+    <div className="grid grid-rows-[auto_minmax(0,1fr)_auto] h-[100dvh] bg-background">
+      {/* Row 1: status bar */}
       <GameStatusBar
         state={state}
         weAreBatting={weAreBatting}
@@ -137,59 +154,28 @@ export function LiveScoring({
         canUndo={lastUndoableEvent !== null && !submitting}
         onUndo={() => void submitUndo()}
         onOpenManage={() => setManageOpen(true)}
+        onOpenBox={() => setBoxSheetOpen(true)}
+        onOpenBatter={() => setSidebarSheetOpen(true)}
         lastPlayText={state.last_play_text}
+        backHref={backHref}
+        bleed={false}
       />
 
-      <BoxScoreToggle open={boxScoreOpen} onToggle={() => setBoxScoreOpen((v) => !v)} />
-      {boxScoreOpen && <LineScore state={state} />}
-
+      {/* Row 2: diamond + (lg+ inline sidebar) */}
       <div
         className={
-          sidebarOpen
-            ? "grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)] gap-4"
-            : "grid grid-cols-1 gap-4"
+          sidebarInlineOpen
+            ? "min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]"
+            : "min-h-0 grid grid-cols-1"
         }
       >
-        <div className="space-y-3 relative">
-          {armedResult === ARMED_IN_PLAY_PENDING && (
-            <div className="flex items-center justify-between flex-wrap gap-2 text-sm rounded-md border bg-muted/40 px-3 py-2">
-              <span>
-                <span className="font-semibold text-sa-blue-deep">Pitch in play</span>
-                <span className="text-muted-foreground"> · pick the outcome below.</span>
-              </span>
-              <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
-                Cancel
-              </Button>
-            </div>
-          )}
-          {armedResult && armedResult !== ARMED_IN_PLAY_PENDING && (
-            <div className="flex items-center justify-between flex-wrap gap-2 text-sm rounded-md border bg-muted/40 px-3 py-2">
-              <span>
-                <span className="text-muted-foreground">Recording </span>
-                <span className="font-semibold text-sa-blue-deep">{RESULT_DESC[armedResult] ?? armedResult}</span>
-                <span className="text-muted-foreground"> · drag the fielder who made the play to where the ball was.</span>
-              </span>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void submitAtBat(armedResult, null)}
-                  disabled={submitting}
-                >
-                  Skip location
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => setArmedResult(null)} disabled={submitting}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
-          {!sidebarOpen && (
+        <div className="relative min-h-0 flex items-center justify-center overflow-hidden p-2">
+          {!sidebarInlineOpen && (
             <Button
               size="sm"
               variant="outline"
-              className="hidden lg:inline-flex absolute right-0 top-0 z-10 h-8 px-2"
-              onClick={() => setSidebarOpen(true)}
+              className="hidden lg:inline-flex absolute right-2 top-2 z-10 h-8 px-2"
+              onClick={() => setSidebarInlineOpen(true)}
               aria-label="Show side panel"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -200,33 +186,20 @@ export function LiveScoring({
             names={names}
             weAreBatting={weAreBatting}
             currentBatterId={currentBatterIdForChip}
-            dragMode={!!armedResult && armedResult !== ARMED_IN_PLAY_PENDING && !submitting}
+            dragMode={dragMode}
             onFielderDrop={onFielderDrop}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
-          />
-          <PitchPad
-            balls={state.current_balls}
-            strikes={state.current_strikes}
-            disabled={submitting || state.outs >= 3}
-            onPitch={submitPitch}
-          />
-          <OutcomeGrid
-            disabled={submitting || state.outs >= 3}
-            onPick={onOutcomePicked}
-            onK3Reach={(src) => void submitAtBat("K_swinging", null, src)}
-            armedResult={armedResult}
-            currentStrikes={state.current_strikes}
-            canRecord={(r) => canRecordResult(r, state)}
+            fillContainer
           />
         </div>
-        {sidebarOpen && (
-          <aside className="lg:sticky lg:top-[6rem] lg:self-start space-y-4">
-            <div className="hidden lg:flex justify-end">
+        {sidebarInlineOpen && (
+          <aside className="hidden lg:flex lg:flex-col lg:overflow-y-auto lg:border-l p-3 space-y-3">
+            <div className="flex justify-end">
               <Button
                 size="sm"
                 variant="ghost"
                 className="h-7 px-2 text-xs text-muted-foreground"
-                onClick={() => setSidebarOpen(false)}
+                onClick={() => setSidebarInlineOpen(false)}
                 aria-label="Hide side panel"
               >
                 Hide
@@ -255,6 +228,34 @@ export function LiveScoring({
           </aside>
         )}
       </div>
+
+      {/* Row 3: pitch / outcome / drag-prompt action footer */}
+      <PaActionFooter
+        balls={state.current_balls}
+        strikes={state.current_strikes}
+        outs={state.outs}
+        submitting={submitting}
+        onPitch={submitPitch}
+        onOutcomePicked={onOutcomePicked}
+        onK3Reach={(src) => void submitAtBat("K_swinging", null, src)}
+        canRecord={(r) => canRecordResult(r, state)}
+        armedResult={armedResult}
+        setArmedResult={setArmedResult}
+        onSkipLocation={(result) => void submitAtBat(result, null)}
+      />
+
+      {/* Sheets — line score + sidebar (tablet only) */}
+      <LineScoreSheet open={boxSheetOpen} onOpenChange={setBoxSheetOpen} state={state} />
+      <SidebarSheet
+        open={sidebarSheetOpen}
+        onOpenChange={setSidebarSheetOpen}
+        state={state}
+        weAreBatting={weAreBatting}
+        currentOppSlot={currentOppSlot}
+        currentOpponentBatterId={currentOpponentBatterId}
+        currentBatterIdForChip={currentBatterIdForChip}
+        opposingProfileCache={opposingProfileCache.current}
+      />
 
       <Sheet open={manageOpen} onOpenChange={setManageOpen}>
         <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto">
