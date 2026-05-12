@@ -42,6 +42,9 @@ interface LiveScoringProps {
   myTeamId: string;
   gameDate: string;
   opponentTeamId: string | null;
+  /** Fires after the game_finalized event lands so the parent page can
+   *  swap to FinalStub from its own local state. */
+  onFinalized?: () => void;
 }
 
 export function LiveScoring({
@@ -53,6 +56,7 @@ export function LiveScoring({
   myTeamId,
   gameDate,
   opponentTeamId,
+  onFinalized,
 }: LiveScoringProps) {
   const isMobile = useIsMobile();
   // Cache opposing-batter profiles across batter changes so cycling through
@@ -86,7 +90,12 @@ export function LiveScoring({
     editLastPlay,
     finalize,
     submitUndo,
-  } = useLiveScoring({ gameId, roster, opposingProfileCache: opposingProfileCache.current });
+  } = useLiveScoring({
+    gameId,
+    roster,
+    opposingProfileCache: opposingProfileCache.current,
+    onFinalized,
+  });
 
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
