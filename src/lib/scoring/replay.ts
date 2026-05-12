@@ -84,7 +84,12 @@ export function replay(events: GameEventRecord[]): ReplayState {
 
 // ---- Reducer ---------------------------------------------------------------
 
-function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
+// Exported so callers can fold an authoritative event onto an existing state
+// (e.g. consuming the live_state + new event returned from the events API)
+// without rebuilding from the full log. `replay()` is `events.reduce(applyEvent,
+// INITIAL_STATE)` modulo the supersession filter — see fold-equivalence test
+// in replay.test.ts.
+export function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
   const next: ReplayState = {
     ...state,
     bases: { ...state.bases },

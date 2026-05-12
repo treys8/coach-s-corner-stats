@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { replay } from "./replay";
+import { applyEvent, replay } from "./replay";
+import { INITIAL_STATE } from "./types";
 import type {
+  CorrectionPayload,
   GameEventRecord,
   GameStartedPayload,
   AtBatPayload,
@@ -966,5 +968,80 @@ describe("replay()", () => {
     expect(state.stolen_bases).toEqual([{ runner_id: "p1", event_id: "sb-1", catcher_id: null }]);
     expect(state.caught_stealing).toEqual([{ runner_id: "p2", event_id: "cs-1", catcher_id: null }]);
     expect(state.pickoffs).toEqual([{ runner_id: "p3", event_id: "pk-1", catcher_id: null }]);
+  });
+});
+
+// Folding an authoritative event onto an existing state must match running
+// `replay()` from scratch. Callers that consume the server's returned
+// live_state + new event rely on this — if it ever drifts, optimistic UI and
+// the Phase 1 round-trip elimination silently diverge from the server.
+describe("applyEvent fold-equivalence with replay()", () => {
+  beforeEach(() => { seq = 0; });
+
+  it("reduce(applyEvent, INITIAL_STATE) === replay(events) for a representative game", () => {
+    const events: GameEventRecord[] = [
+      startGame({ we_are_home: false }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("pitch", { pitch_type: "called_strike" }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+      evt("stolen_base", { runner_id: "p1", from: "first", to: "second" }, "sb-fold"),
+      evt("at_bat", atBat({
+        half: "top", result: "K_swinging", batter_id: "p2",
+      })),
+      evt("at_bat", atBat({
+        half: "top", result: "GO", batter_id: "p3",
+      })),
+      evt("at_bat", atBat({
+        half: "top", result: "FO", batter_id: "p4",
+      })),
+      evt<InningEndPayload>("inning_end", { inning: 1, half: "top" }),
+    ];
+    const fromReplay = replay(events);
+    const fromFold = events.reduce(applyEvent, INITIAL_STATE);
+    expect(fromFold).toEqual(fromReplay);
+  });
+
+  it("supersession filter is replay()'s responsibility, not applyEvent's", () => {
+    // With corrections, replay() filters superseded events before folding.
+    // applyEvent itself doesn't know about supersession — so a raw fold over
+    // the unfiltered list will diverge. This test pins that contract so
+    // callers that fold incrementally know they must apply only the
+    // non-superseded tail (the server-returned events list already is).
+    const startEvent = startGame({ we_are_home: false });
+    const targetAB = evt("at_bat", atBat({
+      half: "top", result: "1B", batter_id: "p1",
+      runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+    }));
+    const voidCorrection = evt<CorrectionPayload>("correction", {
+      superseded_event_id: targetAB.id,
+      corrected_event_type: null,
+      corrected_payload: null,
+    });
+    const events: GameEventRecord[] = [startEvent, targetAB, voidCorrection];
+
+    const fromReplay = replay(events);
+    // replay() should have skipped the superseded at_bat — slot stays at 1.
+    expect(fromReplay.current_batter_slot).toBe(1);
+    expect(fromReplay.bases.first).toBeNull();
+
+    // Raw unfiltered fold sees the at_bat AND the void correction; the
+    // void correction is a no-op handler, so the at_bat's effect lingers.
+    const naiveFold = events.reduce(applyEvent, INITIAL_STATE);
+    expect(naiveFold.current_batter_slot).toBe(2);
+
+    // The correct incremental pattern: drop the superseded events first.
+    const supersededIds = new Set<string>();
+    for (const e of events) {
+      if (e.event_type === "correction") {
+        supersededIds.add((e.payload as CorrectionPayload).superseded_event_id);
+      }
+    }
+    const filteredFold = events
+      .filter((e) => !supersededIds.has(e.id))
+      .reduce(applyEvent, INITIAL_STATE);
+    expect(filteredFold).toEqual(fromReplay);
   });
 });
