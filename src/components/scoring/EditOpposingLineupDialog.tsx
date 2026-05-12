@@ -44,8 +44,6 @@ interface Props {
   /** Current opposing lineup from replay state (seeds the picker). */
   currentLineup: OpposingLineupSlot[];
   currentOpponentUseDh: boolean;
-  /** Sequence number to assign the new event. */
-  nextSeq: number;
   /** Called after a successful save so the parent can refresh replay state. */
   onSaved: () => Promise<void> | void;
 }
@@ -61,7 +59,6 @@ export function EditOpposingLineupDialog({
   opponentTeamId,
   currentLineup,
   currentOpponentUseDh,
-  nextSeq,
   onSaved,
 }: Props) {
   const [draft, setDraft] = useState<OpposingSlotDraft[]>(() => seedDraft(currentLineup, opponentTeamId));
@@ -171,7 +168,6 @@ export function EditOpposingLineupDialog({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         client_event_id: `opplineup-${Date.now()}`,
-        sequence_number: nextSeq,
         event_type: "opposing_lineup_edit",
         payload,
       }),

@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { replay } from "@/lib/scoring/replay";
 import { defaultAdvances } from "@/lib/scoring/advances";
 import { INITIAL_STATE } from "@/lib/scoring/types";
-import { postEvent } from "@/lib/scoring/events-client";
+import { postEvent, type PostResult } from "@/lib/scoring/events-client";
 import {
   autoRBI,
   describeEvent,
@@ -54,6 +54,16 @@ export interface UseLiveScoringArgs {
 export interface RunnerActionTarget {
   base: "first" | "second" | "third";
   runnerId: string | null;
+}
+
+// Running snapshot threaded between chained applyPostResult calls in the
+// same handler. React doesn't update closure-captured state across awaits,
+// so without this each subsequent apply would clobber the previous one's
+// effect on `events` / `lastSeq`.
+interface Snapshot {
+  state: ReplayState;
+  events: GameEventRecord[];
+  lastSeq: number;
 }
 
 const supabase = createClient();
@@ -137,9 +147,10 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     return null;
   }, [events]);
 
-  // Returns the new snapshot so callers can act on the post-refresh state
-  // synchronously without waiting for React to flush the next render
-  // (auto-end-half needs to compare prev vs new outs in the same tick).
+  // Cold-start / fallback path: full DB refetch + replay. Used by the
+  // initial-load useEffect and rare callers that mutate via their own fetch
+  // (e.g. EditOpposingLineupDialog). The hot path (PA-level submits) skips
+  // this — the API already returns the canonical state in `live_state`.
   const refresh = async (): Promise<{ state: ReplayState; events: GameEventRecord[] } | null> => {
     const { data, error } = await supabase
       .from("game_events")
@@ -155,27 +166,56 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     return { state: newState, events: refreshed };
   };
 
+  // Fold the server-returned PostResult into local state synchronously.
+  // Returns the new snapshot so callers can branch on it in the same tick
+  // (auto-end-half needs to compare prev vs new outs without waiting for
+  // React to flush). Returns null when the response was missing state —
+  // caller is expected to fall back to refresh().
+  //
+  // `from` overrides the closure-captured events/lastSeq. Required when this
+  // is called more than once in a single handler (e.g. submitPitch's
+  // closing-pitch chain, or any handler whose `maybeAutoEndHalf` fires after
+  // an apply): without it, the second call reads stale closure state and
+  // would overwrite the first apply's effect on `events`/`lastSeq`.
+  const applyPostResult = (
+    result: PostResult,
+    from?: { events: GameEventRecord[]; lastSeq: number },
+  ): Snapshot | null => {
+    if (!result.state) return null;
+    const baseEvents = from?.events ?? events;
+    const baseLastSeq = from?.lastSeq ?? lastSeq;
+    const newEvents = result.events.length > 0
+      ? [...baseEvents, ...result.events]
+      : baseEvents;
+    const newLastSeq = result.events.reduce(
+      (m, e) => Math.max(m, e.sequence_number),
+      baseLastSeq,
+    );
+    setState(result.state);
+    setEvents(newEvents);
+    setLastSeq(newLastSeq);
+    return { state: result.state, events: newEvents, lastSeq: newLastSeq };
+  };
+
   // If a posted event caused outs to cross 3, auto-emit `inning_end` so the
-  // coach doesn't have to tap End ½ inning every half.
-  const maybeAutoEndHalf = async (
-    prevOuts: number,
-    snap: { state: ReplayState; events: GameEventRecord[] },
-  ) => {
+  // coach doesn't have to tap End ½ inning every half. `snap` carries the
+  // parent handler's just-applied state so our own applyPostResult folds
+  // onto it, not the stale render-time closure.
+  const maybeAutoEndHalf = async (prevOuts: number, snap: Snapshot) => {
     if (prevOuts >= 3) return;
     if (snap.state.outs < 3) return;
     if (snap.state.status !== "in_progress") return;
-    const nextSeq = snap.events.reduce((m, e) => Math.max(m, e.sequence_number), 0) + 1;
+    const nextSeq = snap.lastSeq + 1;
     const halfLabel = snap.state.half === "top" ? "Top" : "Bot";
     const inning = snap.state.inning;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `ie-auto-${inning}-${snap.state.half}-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: "inning_end",
       payload: { inning, half: snap.state.half },
     });
-    if (!ok) return;
+    if (!result.ok) return;
     toast.success(`End ${halfLabel} ${inning}. Tap Undo to revert.`);
-    await refresh();
+    applyPostResult(result, snap);
   };
 
   const submitAtBat = async (
@@ -235,13 +275,12 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     };
 
     const clientEventId = `ab-${state.inning}-${state.half}-${nextSeq}`;
-    const ok = await postEvent(gameId, {
+    const postResult = await postEvent(gameId, {
       client_event_id: clientEventId,
-      sequence_number: nextSeq,
       event_type: "at_bat",
       payload,
     });
-    if (!ok) {
+    if (!postResult.ok) {
       setSubmitting(false);
       return;
     }
@@ -251,7 +290,7 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
       opposingProfileCache?.delete(currentOpponentBatterId);
     }
     setArmedResult(null);
-    const snap = await refresh();
+    const snap = applyPostResult(postResult);
     if (snap) await maybeAutoEndHalf(prevOuts, snap);
     setSubmitting(false);
   };
@@ -284,19 +323,20 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     if (submitting) return;
     setSubmitting(true);
     const prevOuts = state.outs;
+    // Decide whether this pitch closes the PA from the pre-pitch state, so
+    // the AB payload below uses the correct pre-pitch counts.
+    const closing = closingResultForPitch(pitchType);
     const baseSeq = lastSeq + 1;
-    const okPitch = await postEvent(gameId, {
+    const pitchResult = await postEvent(gameId, {
       client_event_id: `pitch-${baseSeq}`,
-      sequence_number: baseSeq,
       event_type: "pitch",
       payload: { pitch_type: pitchType },
     });
-    if (!okPitch) {
+    if (!pitchResult.ok) {
       setSubmitting(false);
       return;
     }
 
-    const closing = closingResultForPitch(pitchType);
     if (closing) {
       const ourBatterId = weAreBatting ? currentSlot?.player_id ?? null : null;
       // See submitAtBat: synthesize a non-null reachId when the opposing
@@ -327,22 +367,28 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
         runner_advances: advances,
         description: describePlay(closing, runs, ourBatterId, names),
       };
-      const okAB = await postEvent(gameId, {
+      const abResult = await postEvent(gameId, {
         client_event_id: `ab-auto-${state.inning}-${state.half}-${baseSeq + 1}`,
-        sequence_number: baseSeq + 1,
         event_type: "at_bat",
         payload: abPayload,
       });
-      if (!okAB) {
-        // Pitch persisted but the auto-AB didn't. Refresh so the count
-        // updates; coach can tap the outcome manually to finish the PA.
-        await refresh();
+      if (!abResult.ok) {
+        // Pitch persisted but the auto-AB didn't. Fold the pitch so the
+        // count updates; coach can tap the outcome manually to finish the PA.
+        applyPostResult(pitchResult);
         setSubmitting(false);
         return;
       }
+      // Thread the post-pitch snapshot into the AB apply so we don't lose
+      // the pitch event from the local events array.
+      const snap1 = applyPostResult(pitchResult);
+      const snap2 = snap1 ? applyPostResult(abResult, snap1) : applyPostResult(abResult);
+      if (snap2) await maybeAutoEndHalf(prevOuts, snap2);
+      setSubmitting(false);
+      return;
     }
 
-    const snap = await refresh();
+    const snap = applyPostResult(pitchResult);
     if (snap) await maybeAutoEndHalf(prevOuts, snap);
     setSubmitting(false);
   };
@@ -361,18 +407,17 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     setSubmitting(true);
     const prevOuts = state.outs;
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `${clientPrefix}-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: eventType,
       payload,
     });
     setRunnerAction(null);
-    if (!ok) {
+    if (!result.ok) {
       setSubmitting(false);
       return;
     }
-    const snap = await refresh();
+    const snap = applyPostResult(result);
     if (snap) await maybeAutoEndHalf(prevOuts, snap);
     setSubmitting(false);
   };
@@ -381,15 +426,14 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     if (submitting) return;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `ie-${state.inning}-${state.half}-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: "inning_end",
       payload: { inning: state.inning, half: state.half },
     });
     setSubmitting(false);
-    if (!ok) return;
-    await refresh();
+    if (!result.ok) return;
+    applyPostResult(result);
   };
 
   // In a non-DH game, the new pitcher must occupy a slot in the batting
@@ -429,14 +473,14 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     }
 
     let nextSeq = lastSeq + 1;
+    let subResult: PostResult | null = null;
     if (leadingSub) {
-      const okSub = await postEvent(gameId, {
+      subResult = await postEvent(gameId, {
         client_event_id: `sub-pc-${nextSeq}`,
-        sequence_number: nextSeq,
         event_type: "substitution",
         payload: leadingSub,
       });
-      if (!okSub) {
+      if (!subResult.ok) {
         setSubmitting(false);
         return false;
       }
@@ -447,16 +491,24 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
       out_pitcher_id: state.current_pitcher_id,
       in_pitcher_id: newPitcherId,
     };
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `pc-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: "pitching_change",
       payload,
     });
     setSubmitting(false);
-    if (!ok) return false;
+    if (!result.ok) {
+      // The leading sub already persisted server-side. Reflect it locally so
+      // the lineup view stays consistent.
+      if (subResult) applyPostResult(subResult);
+      return false;
+    }
     toast.success(`Pitcher: ${names.get(newPitcherId) ?? "updated"}`);
-    await refresh();
+    // Thread the leading-sub snapshot into the pitching-change apply so the
+    // sub event isn't dropped from the local events array.
+    const subSnap = subResult ? applyPostResult(subResult) : null;
+    if (subSnap) applyPostResult(result, subSnap);
+    else applyPostResult(result);
     return true;
   };
 
@@ -464,9 +516,8 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     if (submitting || !state.current_pitcher_id) return { forcedRemoval: false };
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `dc-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: "defensive_conference",
       payload: {
         pitcher_id: state.current_pitcher_id,
@@ -474,12 +525,16 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
       },
     });
     setSubmitting(false);
-    if (!ok) return { forcedRemoval: false };
-    // After the conference is recorded, alert at the warning thresholds.
-    // Count is post-event since refresh() will re-fold from the server.
-    const newCount = state.defensive_conferences.filter(
-      (c) => c.pitcher_id === state.current_pitcher_id,
-    ).length + 1;
+    if (!result.ok) return { forcedRemoval: false };
+    // Alert at the warning thresholds. The post-fold count comes from the
+    // returned state; fall back to the +1 estimate if state is missing.
+    const newCount = result.state
+      ? result.state.defensive_conferences.filter(
+          (c) => c.pitcher_id === state.current_pitcher_id,
+        ).length
+      : state.defensive_conferences.filter(
+          (c) => c.pitcher_id === state.current_pitcher_id,
+        ).length + 1;
     let forcedRemoval = false;
     if (newCount >= 4) {
       toast.warning("4th conference — pitcher must be removed (NFHS 3-4-1)");
@@ -487,7 +542,7 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     } else if (newCount === 3) {
       toast.warning("3rd conference — next visit forces a pitching change");
     }
-    await refresh();
+    applyPostResult(result);
     return { forcedRemoval };
   };
 
@@ -495,16 +550,15 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     if (submitting) return false;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `sub-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: "substitution",
       payload,
     });
     setSubmitting(false);
-    if (!ok) return false;
+    if (!result.ok) return false;
     toast.success(`Sub: ${names.get(payload.in_player_id) ?? "updated"} → slot ${payload.batting_order}`);
-    await refresh();
+    applyPostResult(result);
     return true;
   };
 
@@ -523,32 +577,33 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
       corrected_payload: correctedAtBat,
     };
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `corr-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: "correction",
       payload: correction,
     });
     setSubmitting(false);
-    if (!ok) return false;
+    if (!result.ok) return false;
     toast.success("Last play updated");
-    await refresh();
+    applyPostResult(result);
     return true;
   };
 
   const finalize = async (): Promise<boolean> => {
     if (submitting) return false;
     setSubmitting(true);
-    const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `gf-${gameId}`,
-      sequence_number: nextSeq,
       event_type: "game_finalized",
       payload: {},
     });
     setSubmitting(false);
-    if (!ok) return false;
+    if (!result.ok) return false;
     toast.success("Game finalized");
+    applyPostResult(result);
+    // The page re-renders FinalStub off `state.status === "final"`, but the
+    // server-side `games.status` update needs to land in the SSR snapshot
+    // before any subsequent page load. Phase 3 removes this — see plan.
     router.refresh();
     return true;
   };
@@ -562,9 +617,8 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     const target = lastUndoableEvent;
     const label = describeEvent(target, names);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const result = await postEvent(gameId, {
       client_event_id: `undo-${nextSeq}`,
-      sequence_number: nextSeq,
       event_type: "correction",
       payload: {
         superseded_event_id: target.id,
@@ -572,14 +626,14 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
         corrected_payload: null,
       } as CorrectionPayload,
     });
-    if (!ok) {
+    if (!result.ok) {
       setSubmitting(false);
       return;
     }
     toast.success(`Undid: ${label}`);
-    // Hold the submitting flag through refresh so `events` updates before
-    // a fast double-tap can re-target the same event.
-    await refresh();
+    // Hold the submitting flag through the local fold so `events` updates
+    // before a fast double-tap can re-target the same event.
+    applyPostResult(result);
     setSubmitting(false);
   };
 

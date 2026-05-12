@@ -432,7 +432,6 @@ function PreGameForm({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         client_event_id: `gs-${game.id}`,
-        sequence_number: 1,
         event_type: "game_started",
         payload: eventPayload,
       }),
@@ -647,7 +646,6 @@ function FinalStub({ game, onUnfinalized }: { game: GameRow; onUnfinalized: () =
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         client_event_id: `unfinal-${nextSeq}`,
-        sequence_number: nextSeq,
         event_type: "correction",
         payload: {
           superseded_event_id: finalizeEvent.id,
