@@ -207,6 +207,23 @@ function applyGameStarted(state: ReplayState, p: GameStartedPayload): ReplayStat
     opposing_lineup: p.opposing_lineup ?? [],
     opponent_use_dh: p.opponent_use_dh ?? false,
     current_opp_batter_slot: (p.opposing_lineup?.length ?? 0) > 0 ? 1 : null,
+    // DH coverage. Default "P" for use_dh=true preserves pre-change replay
+    // behavior — legacy game_started events get the implicit "DH bats for
+    // pitcher" mapping. fielding_only_player_id stays null in that case;
+    // current_pitcher_id already carries the player.
+    dh_covers_position: p.use_dh ? (p.dh_covers_position ?? "P") : null,
+    fielding_only_player_id:
+      p.use_dh && (p.dh_covers_position ?? "P") !== "P"
+        ? p.fielding_only_player_id ?? null
+        : null,
+    opponent_dh_covers_position: (p.opponent_use_dh ?? false)
+      ? (p.opponent_dh_covers_position ?? "P")
+      : null,
+    opponent_fielding_only_player_id:
+      (p.opponent_use_dh ?? false) &&
+      (p.opponent_dh_covers_position ?? "P") !== "P"
+        ? p.opponent_fielding_only_player_id ?? null
+        : null,
     inning: 1,
     half: "top",
     outs: 0,
@@ -226,14 +243,23 @@ function applyOpposingLineupEdit(
   p: OpposingLineupEditPayload,
 ): ReplayState {
   const wasEmpty = state.opposing_lineup.length === 0;
+  const nextOpponentUseDh = p.opponent_use_dh ?? state.opponent_use_dh;
   return {
     ...state,
     opposing_lineup: p.opposing_lineup,
-    opponent_use_dh: p.opponent_use_dh ?? state.opponent_use_dh,
+    opponent_use_dh: nextOpponentUseDh,
     current_opp_batter_slot:
       wasEmpty && p.opposing_lineup.length > 0
         ? 1
         : state.current_opp_batter_slot,
+    opponent_dh_covers_position: nextOpponentUseDh
+      ? p.opponent_dh_covers_position ?? state.opponent_dh_covers_position ?? "P"
+      : null,
+    // The opposing fielding-only player isn't editable via this payload yet;
+    // when the toggle turns off, clear it for invariant safety.
+    opponent_fielding_only_player_id: nextOpponentUseDh
+      ? state.opponent_fielding_only_player_id
+      : null,
   };
 }
 
@@ -797,6 +823,16 @@ function ourCatcherIfFielding(state: ReplayState): string | null {
 // outgoing pitcher.
 function resolveFielderPlayerId(state: ReplayState, fielderPosition: string): string | null {
   if (fielderPosition === "P") return state.current_pitcher_id;
+  // DH-for-non-pitcher: the covered position is filled by the fielding-only
+  // player (not in the batting order), so the lineup scan would miss them.
+  if (
+    state.fielding_only_player_id &&
+    state.dh_covers_position &&
+    state.dh_covers_position !== "P" &&
+    fielderPosition === state.dh_covers_position
+  ) {
+    return state.fielding_only_player_id;
+  }
   for (const slot of state.our_lineup) {
     if (slot.position === fielderPosition && slot.player_id) return slot.player_id;
   }
@@ -812,9 +848,27 @@ function defensivePositionsAtMoment(
 ): Array<{ player_id: string; position: string }> {
   const out: Array<{ player_id: string; position: string }> = [];
   for (const slot of state.our_lineup) {
-    if (slot.position && slot.player_id && slot.position !== "P") {
+    if (
+      slot.position &&
+      slot.player_id &&
+      slot.position !== "P" &&
+      slot.position !== "DH"
+    ) {
       out.push({ player_id: slot.player_id, position: slot.position });
     }
+  }
+  // DH-for-non-pitcher: the covered position's player isn't in the batting
+  // order — surface them here so defensive innings / fielder attribution
+  // credit the right player.
+  if (
+    state.fielding_only_player_id &&
+    state.dh_covers_position &&
+    state.dh_covers_position !== "P"
+  ) {
+    out.push({
+      player_id: state.fielding_only_player_id,
+      position: state.dh_covers_position,
+    });
   }
   if (state.current_pitcher_id) {
     out.push({ player_id: state.current_pitcher_id, position: "P" });
