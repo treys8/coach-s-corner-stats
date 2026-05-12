@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
-import { replay } from "@/lib/scoring/replay";
+import { applyEvent, replay } from "@/lib/scoring/replay";
 import { INITIAL_STATE } from "@/lib/scoring/types";
 import type { PostResult } from "@/lib/scoring/events-client";
 import type { GameEventRecord, ReplayState } from "@/lib/scoring/types";
@@ -32,6 +32,12 @@ export interface UseGameEventsResult {
     result: PostResult,
     from?: { events: GameEventRecord[]; lastSeq: number },
   ) => ApplyPostSnapshot | null;
+  /** Fold a synthetic event into local state before the POST returns, so
+   *  the count / runners / score tick instantly on tap. The pre-apply state
+   *  is stashed so `rollbackOptimistic` can revert on POST failure. */
+  applyOptimistic: (synth: GameEventRecord) => void;
+  /** Restore the snapshot captured by the most recent `applyOptimistic`. */
+  rollbackOptimistic: () => void;
 }
 
 /**
@@ -46,6 +52,10 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Pre-optimistic snapshot kept in a ref so the rollback path doesn't race
+  // with React render scheduling. Cleared on commit (applyPostResult) or
+  // rollback. `submitting` blocks concurrent taps so depth is always 0 or 1.
+  const preOptimisticRef = useRef<ReplayState | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -104,7 +114,24 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     setState(result.state);
     setEvents(newEvents);
     setLastSeq(newLastSeq);
+    // Commit: server state is authoritative, optimistic snapshot is no
+    // longer needed.
+    preOptimisticRef.current = null;
     return { state: result.state, events: newEvents, lastSeq: newLastSeq };
+  };
+
+  const applyOptimistic = (synth: GameEventRecord) => {
+    setState((prev) => {
+      preOptimisticRef.current = prev;
+      return applyEvent(prev, synth);
+    });
+  };
+
+  const rollbackOptimistic = () => {
+    const snap = preOptimisticRef.current;
+    if (!snap) return;
+    preOptimisticRef.current = null;
+    setState(snap);
   };
 
   return {
@@ -116,6 +143,8 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     setSubmitting,
     refresh,
     applyPostResult,
+    applyOptimistic,
+    rollbackOptimistic,
   };
 }
 
