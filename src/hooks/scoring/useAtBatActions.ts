@@ -21,6 +21,13 @@ import type { FielderPosition } from "@/components/scoring/DefensiveDiamond";
 import type { UseGameEventsResult } from "./useGameEvents";
 import { announceAutoEndHalf } from "./useGameEvents";
 
+// Sentinel marking the gap between "In play" tap on PitchPad and the user
+// picking the actual outcome. Banner + OutcomeGrid both light up to direct
+// the next tap at an in-play option, but no drag/fielder UI engages until
+// the outcome is chosen (which transitions armedResult to a real AtBatResult).
+export const ARMED_IN_PLAY_PENDING = "IN_PLAY_PENDING" as const;
+export type ArmedState = AtBatResult | typeof ARMED_IN_PLAY_PENDING;
+
 export interface UseAtBatActionsArgs {
   gameId: string;
   state: ReplayState;
@@ -36,8 +43,8 @@ export interface UseAtBatActionsArgs {
 }
 
 export interface UseAtBatActionsResult {
-  armedResult: AtBatResult | null;
-  setArmedResult: (v: AtBatResult | null) => void;
+  armedResult: ArmedState | null;
+  setArmedResult: (v: ArmedState | null) => void;
   onOutcomePicked: (result: AtBatResult) => void;
   submitAtBat: (
     result: AtBatResult,
@@ -66,7 +73,7 @@ export function useAtBatActions({
   applyPostResult,
   opposingProfileCache,
 }: UseAtBatActionsArgs): UseAtBatActionsResult {
-  const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
+  const [armedResult, setArmedResult] = useState<ArmedState | null>(null);
 
   const submitAtBat = async (
     result: AtBatResult,
@@ -148,9 +155,13 @@ export function useAtBatActions({
     if (submitting) return;
     if (isInPlay(result)) {
       // Arm drag mode on the diamond; drop will capture spray + fielder.
+      // Transitions out of IN_PLAY_PENDING too — the user picked the
+      // specific result, so the banner / grid now reflects it.
       setArmedResult(result);
       return;
     }
+    // Non-in-play outcome (K, BB, HBP, etc.) clears any IN_PLAY_PENDING
+    // arm and fires directly. Treats a stray pending arm as user-corrected.
     void submitAtBat(result, null);
   };
 
@@ -183,11 +194,22 @@ export function useAtBatActions({
     }
     applyPostResult(result);
     announceAutoEndHalf(result);
+    // Tapping "In play" rolls straight into outcome selection. Setting
+    // IN_PLAY_PENDING flags the OutcomeGrid (in-play row prominent, rest
+    // dimmed) and the status banner so the coach doesn't have to hunt
+    // for the right row on the next tap. Skipped if the server chain
+    // already produced an at_bat (HBP closing pitch path, etc).
+    if (
+      pitchType === "in_play" &&
+      !result.events.some((e) => e.event_type === "at_bat")
+    ) {
+      setArmedResult(ARMED_IN_PLAY_PENDING);
+    }
     setSubmitting(false);
   };
 
   const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
-    if (!armedResult) return;
+    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
     void submitAtBat(armedResult, { x, y, fielder });
   };
 

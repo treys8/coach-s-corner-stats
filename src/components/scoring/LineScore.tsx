@@ -1,23 +1,9 @@
 "use client";
 
 import { Card } from "@/components/ui/card";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import type { AtBatResult, ReplayState } from "@/lib/scoring/types";
 
 const HIT_RESULT_SET: ReadonlySet<AtBatResult> = new Set(["1B", "2B", "3B", "HR"]);
-
-export function BoxScoreToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className="text-xs uppercase tracking-wider text-muted-foreground hover:text-sa-orange inline-flex items-center gap-1"
-    >
-      {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-      Box score
-    </button>
-  );
-}
 
 export function LineScore({ state }: { state: ReplayState }) {
   const innings = Math.max(7, state.inning);

@@ -134,6 +134,32 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
     );
   }
 
+  // In-progress games take over the viewport — no constrained `<main>`
+  // container or page-level GameHeader chrome competing for vertical space.
+  // LiveScoring sets up its own 100dvh 3-row grid.
+  if (game.status === "in_progress") {
+    return (
+      <LiveScoring
+        gameId={game.id}
+        roster={roster}
+        teamShortLabel={school.short_name ?? school.name}
+        opponentName={game.opponent}
+        schoolId={school.id}
+        myTeamId={team.id}
+        gameDate={game.game_date}
+        opponentTeamId={game.opponent_team_id}
+        backHref={base}
+        onFinalized={() =>
+          setGame({
+            ...game,
+            status: "final",
+            finalized_at: game.finalized_at ?? new Date().toISOString(),
+          })
+        }
+      />
+    );
+  }
+
   return (
     <main className="container mx-auto px-6 py-8 space-y-6">
       <GameHeader game={game} backHref={base} />
@@ -142,25 +168,6 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
           game={game}
           roster={roster}
           onStarted={() => setGame({ ...game, status: "in_progress" })}
-        />
-      )}
-      {game.status === "in_progress" && (
-        <LiveScoring
-          gameId={game.id}
-          roster={roster}
-          teamShortLabel={school.short_name ?? school.name}
-          opponentName={game.opponent}
-          schoolId={school.id}
-          myTeamId={team.id}
-          gameDate={game.game_date}
-          opponentTeamId={game.opponent_team_id}
-          onFinalized={() =>
-            setGame({
-              ...game,
-              status: "final",
-              finalized_at: game.finalized_at ?? new Date().toISOString(),
-            })
-          }
         />
       )}
       {game.status === "final" && (
@@ -550,7 +557,7 @@ function PreGameForm({
             <SelectTrigger><SelectValue placeholder="— pick pitcher —" /></SelectTrigger>
             <SelectContent>
               {roster
-                .filter((p) => !usedIds.has(p.id))
+                .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
                 .map((p) => (
                   <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
                 ))}

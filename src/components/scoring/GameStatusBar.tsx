@@ -1,6 +1,7 @@
 "use client";
 
-import { MoreVertical, Undo2 } from "lucide-react";
+import Link from "next/link";
+import { ChevronLeft, ClipboardList, MoreVertical, Undo2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ReplayState } from "@/lib/scoring/types";
 import { MiniBases } from "./MiniBases";
@@ -16,6 +17,17 @@ interface GameStatusBarProps {
   onUndo: () => void;
   onOpenManage: () => void;
   lastPlayText: string | null;
+  /** Optional back-link rendered as a chevron at the far left. Used by the
+   *  full-viewport in-progress shell that hides the page-level GameHeader. */
+  backHref?: string;
+  /** Opens the line-score sheet. When omitted, the trigger is hidden. */
+  onOpenBox?: () => void;
+  /** Opens the side panel (opposing batter + spray) on `<lg` widths. When
+   *  omitted, the trigger is hidden (e.g. on `lg+` where the panel is inline). */
+  onOpenBatter?: () => void;
+  /** When false, the bar renders without the `-mx-6 px-6` overhang used by
+   *  the legacy container-shell layout. Defaults to true for back-compat. */
+  bleed?: boolean;
 }
 
 export function GameStatusBar({
@@ -29,6 +41,10 @@ export function GameStatusBar({
   onUndo,
   onOpenManage,
   lastPlayText,
+  backHref,
+  onOpenBox,
+  onOpenBatter,
+  bleed = true,
 }: GameStatusBarProps) {
   const halfLabel = state.half === "top" ? "Top" : "Bot";
   const batterLine = weAreBatting
@@ -39,9 +55,26 @@ export function GameStatusBar({
       ? `Pitching: ${pitcherName}`
       : "(no pitcher)";
 
+  const containerCls = bleed
+    ? "sticky top-0 z-20 -mx-6 px-6 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b"
+    : "px-3 sm:px-4 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b";
+
   return (
-    <div className="sticky top-0 z-20 -mx-6 px-6 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
-      <div className="flex items-center gap-3 flex-wrap md:flex-nowrap">
+    <div className={containerCls}>
+      <div className="flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap">
+        {backHref && (
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            aria-label="Back to score picker"
+            className="shrink-0"
+          >
+            <Link href={backHref}>
+              <ChevronLeft className="h-5 w-5" />
+            </Link>
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -71,6 +104,29 @@ export function GameStatusBar({
         />
 
         <MiniBases bases={state.bases} className="shrink-0" />
+
+        {onOpenBox && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Box score"
+            onClick={onOpenBox}
+            className="shrink-0"
+          >
+            <ClipboardList className="h-5 w-5" />
+          </Button>
+        )}
+        {onOpenBatter && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Batter detail"
+            onClick={onOpenBatter}
+            className="shrink-0 lg:hidden"
+          >
+            <User className="h-5 w-5" />
+          </Button>
+        )}
 
         <Button
           variant="ghost"

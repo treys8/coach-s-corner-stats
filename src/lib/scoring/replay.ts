@@ -38,6 +38,25 @@ import type {
 } from "./types";
 import { EMPTY_BASES, INITIAL_STATE } from "./types";
 
+// Pre-Phase-4 placeholder prefix for opposing-batter ids when the opposing
+// lineup was empty. New games can't emit these (the pre-game gate requires
+// an opposing lineup), but in-flight legacy games may still surface them
+// in persisted runner_advances. Detected at read time and rewritten on the
+// derived view; the persisted payload is left untouched.
+const OPP_SYNTHETIC_PREFIX = "opp-pa-";
+
+function translateSyntheticAdvances(advances: RunnerAdvance[]): RunnerAdvance[] {
+  let mutated = false;
+  const out = advances.map((a) => {
+    if (a.player_id && a.player_id.startsWith(OPP_SYNTHETIC_PREFIX)) {
+      mutated = true;
+      return { from: a.from, to: a.to, player_id: null, opponent_synthetic: true };
+    }
+    return a;
+  });
+  return mutated ? out : advances;
+}
+
 // Default outs charged to the at-bat when the payload doesn't enumerate
 // runner_advances. DP/TP land here too — UIs may opt to enumerate explicitly.
 const DEFAULT_OUTS_FOR: Partial<Record<AtBatResult, number>> = {
@@ -290,7 +309,7 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     fielder_position: p.fielder_position,
     runs_scored_on_play: runsScored,
     outs_recorded: outsAdded,
-    runner_advances: p.runner_advances,
+    runner_advances: translateSyntheticAdvances(p.runner_advances),
     pitcher_of_record_id: pitcherOfRecord,
     bases_before: basesBefore,
     description: p.description,

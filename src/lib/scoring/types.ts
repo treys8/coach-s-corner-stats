@@ -33,6 +33,14 @@ export interface RunnerAdvance {
   from: RunnerSource;
   to: RunnerDest;
   player_id: string | null;
+  /** Set true on derived advances whose persisted `player_id` was a
+   *  pre-Phase-4 `opp-pa-*` placeholder (synthesized when the opposing
+   *  lineup was empty). The derived view rewrites those to `player_id:
+   *  null` so consumers don't accidentally treat the synthetic string as
+   *  an FK; persisted payloads still carry the original string. Only
+   *  present on `DerivedAtBat.runner_advances`, never on the persisted
+   *  AtBatPayload. */
+  opponent_synthetic?: boolean;
 }
 
 // ---- Event payloads --------------------------------------------------------

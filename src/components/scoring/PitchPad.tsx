@@ -40,7 +40,7 @@ export function PitchPad({ balls, strikes, disabled, onPitch }: Props) {
             key={p.type}
             disabled={disabled}
             onClick={() => onPitch(p.type)}
-            className={`h-10 text-sm font-bold ${p.cls}`}
+            className={`h-12 text-sm font-bold ${p.cls}`}
           >
             {p.label}
           </Button>
