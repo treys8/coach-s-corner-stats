@@ -261,7 +261,14 @@ export async function applyEvent(
   }
 
   const lastInChain = chain[chain.length - 1];
+  // Skip auto-end-half for corrections: the reducer re-applies a non-void
+  // correction's payload on top of state that already includes the
+  // original event (replay()'s supersession filter doesn't run in the
+  // single-event fold), so projected.outs can be wrong. Matches the
+  // pre-Phase-2 client behavior — editLastPlay/submitUndo never triggered
+  // maybeAutoEndHalf. Coach can tap End ½ manually after an edit if needed.
   if (
+    incoming.event_type !== "correction" &&
     stateBefore.outs < 3 &&
     projected.outs >= 3 &&
     projected.status === "in_progress" &&
