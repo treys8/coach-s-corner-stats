@@ -167,8 +167,8 @@ export function DefensiveDiamond({
         const w = Math.max(12, Math.min(20, label.length * 1.2 + 3));
         // Push the chip well off-center, and up into the lower-infield
         // area so it doesn't get lost near the catcher.
-        const cx = weAreBatting ? 67 : 33;
-        const cy = 78;
+        const cx = weAreBatting ? 72 : 28;
+        const cy = 80;
         return (
           <g pointerEvents="none">
             <rect
