@@ -1,12 +1,16 @@
 // POST /api/games/[gameId]/events
 //
-// Tablet endpoint: persists one game event, runs the server-side replay,
-// and writes derived at_bats + game_live_state. Returns the resulting
-// live state so the tablet (and any client) can reconcile its view.
+// Tablet endpoint: persists one tablet-emitted game event plus any
+// server-derived chained events (closing at_bat after a count-closing
+// pitch; auto inning_end when outs hit 3) atomically, runs the
+// server-side replay, and writes derived at_bats + game_live_state.
+// Returns the canonical state + the list of events actually persisted so
+// the tablet can fold them into local state without a refetch.
 //
-// Auth: the user-scoped supabase client gates the event insert through
-// RLS. Anonymous or non-team-member callers get 403. Service role is only
-// used for derived-table writes inside the replay helper.
+// Auth: the apply_game_events SECURITY DEFINER RPC re-enforces team
+// membership via auth.uid(). Anonymous or non-team-member callers surface
+// here as 403. Service role is only used for derived-table writes inside
+// the replay helper.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -88,7 +92,7 @@ export async function POST(
     // RLS denials surface as a missing row + a generic insert error from
     // PostgREST; treat the obvious permission shapes as 403, everything
     // else as 500 with the message for debuggability.
-    if (/permission denied|row-level security|42501/i.test(message)) {
+    if (/^forbidden|permission denied|row-level security|42501/i.test(message)) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     return NextResponse.json({ error: "internal", detail: message }, { status: 500 });

@@ -167,16 +167,16 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
   };
 
   // Fold the server-returned PostResult into local state synchronously.
-  // Returns the new snapshot so callers can branch on it in the same tick
-  // (auto-end-half needs to compare prev vs new outs without waiting for
-  // React to flush). Returns null when the response was missing state —
-  // caller is expected to fall back to refresh().
+  // result.events may contain 1–3 events when the server emitted a chain
+  // (closing at_bat after a count-closing pitch; auto inning_end on the
+  // third out); they're appended in order to the local events array and
+  // result.state is the post-chain canonical state.
   //
-  // `from` overrides the closure-captured events/lastSeq. Required when this
-  // is called more than once in a single handler (e.g. submitPitch's
-  // closing-pitch chain, or any handler whose `maybeAutoEndHalf` fires after
-  // an apply): without it, the second call reads stale closure state and
-  // would overwrite the first apply's effect on `events`/`lastSeq`.
+  // `from` overrides the closure-captured events/lastSeq. Required by the
+  // few handlers that still chain locally (submitPitchingChange threads a
+  // leading substitution into the pitching_change apply): without it, the
+  // second call reads stale closure state and would overwrite the first
+  // apply's effect on `events`/`lastSeq`.
   const applyPostResult = (
     result: PostResult,
     from?: { events: GameEventRecord[]; lastSeq: number },
@@ -197,25 +197,20 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     return { state: result.state, events: newEvents, lastSeq: newLastSeq };
   };
 
-  // If a posted event caused outs to cross 3, auto-emit `inning_end` so the
-  // coach doesn't have to tap End ½ inning every half. `snap` carries the
-  // parent handler's just-applied state so our own applyPostResult folds
-  // onto it, not the stale render-time closure.
-  const maybeAutoEndHalf = async (prevOuts: number, snap: Snapshot) => {
-    if (prevOuts >= 3) return;
-    if (snap.state.outs < 3) return;
-    if (snap.state.status !== "in_progress") return;
-    const nextSeq = snap.lastSeq + 1;
-    const halfLabel = snap.state.half === "top" ? "Top" : "Bot";
-    const inning = snap.state.inning;
-    const result = await postEvent(gameId, {
-      client_event_id: `ie-auto-${inning}-${snap.state.half}-${nextSeq}`,
-      event_type: "inning_end",
-      payload: { inning, half: snap.state.half },
-    });
-    if (!result.ok) return;
+  // Server-derived auto-end-half: a request that brings outs to 3 returns an
+  // inning_end event in the same POST chain (see server.ts applyEvent).
+  // The local fold below folds them in order; we surface a toast iff the
+  // server actually emitted one.
+  const announceAutoEndHalf = (result: PostResult) => {
+    const ie = result.events.find((e) => e.event_type === "inning_end");
+    if (!ie || !result.state) return;
+    // Toast uses the half/inning that JUST ended — read off the inning_end
+    // payload, not the post-fold state (state has already advanced).
+    const payload = ie.payload as { inning?: number; half?: "top" | "bottom" };
+    const inning = payload.inning ?? result.state.inning;
+    const half = payload.half ?? result.state.half;
+    const halfLabel = half === "top" ? "Top" : "Bot";
     toast.success(`End ${halfLabel} ${inning}. Tap Undo to revert.`);
-    applyPostResult(result, snap);
   };
 
   const submitAtBat = async (
@@ -225,7 +220,6 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
   ) => {
     if (submitting) return;
     setSubmitting(true);
-    const prevOuts = state.outs;
     const nextSeq = lastSeq + 1;
     const ourBatterId = weAreBatting ? currentSlot?.player_id ?? null : null;
     // ID used for the runner_advance that puts the BATTER on a base.
@@ -290,8 +284,8 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
       opposingProfileCache?.delete(currentOpponentBatterId);
     }
     setArmedResult(null);
-    const snap = applyPostResult(postResult);
-    if (snap) await maybeAutoEndHalf(prevOuts, snap);
+    applyPostResult(postResult);
+    announceAutoEndHalf(postResult);
     setSubmitting(false);
   };
 
@@ -305,91 +299,31 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
     void submitAtBat(result, null);
   };
 
-  // If this pitch closes the at-bat, auto-emit the corresponding outcome
-  // with the next sequence number so the coach doesn't have to tap BB/K/HBP
-  // after filling the count.
-  const closingResultForPitch = (pitchType: PitchType): AtBatResult | null => {
-    if (pitchType === "ball" && state.current_balls === 3) return "BB";
-    if (pitchType === "pitchout" && state.current_balls === 3) return "BB";
-    if (pitchType === "intentional_ball" && state.current_balls === 3) return "IBB";
-    if (pitchType === "called_strike" && state.current_strikes === 2) return "K_looking";
-    if (pitchType === "swinging_strike" && state.current_strikes === 2) return "K_swinging";
-    if (pitchType === "foul_tip_caught" && state.current_strikes === 2) return "K_swinging";
-    if (pitchType === "hbp") return "HBP";
-    return null;
-  };
-
   const submitPitch = async (pitchType: PitchType) => {
     if (submitting) return;
     setSubmitting(true);
-    const prevOuts = state.outs;
-    // Decide whether this pitch closes the PA from the pre-pitch state, so
-    // the AB payload below uses the correct pre-pitch counts.
-    const closing = closingResultForPitch(pitchType);
-    const baseSeq = lastSeq + 1;
-    const pitchResult = await postEvent(gameId, {
-      client_event_id: `pitch-${baseSeq}`,
+    const nextSeq = lastSeq + 1;
+    // One POST. The server inspects the pre-pitch state and atomically
+    // emits the closing at_bat (if the pitch closes the PA) and the
+    // inning_end (if the closing PA brings outs to 3). All persisted
+    // events come back in result.events for the local fold.
+    const result = await postEvent(gameId, {
+      client_event_id: `pitch-${nextSeq}`,
       event_type: "pitch",
       payload: { pitch_type: pitchType },
     });
-    if (!pitchResult.ok) {
+    if (!result.ok) {
       setSubmitting(false);
       return;
     }
-
-    if (closing) {
-      const ourBatterId = weAreBatting ? currentSlot?.player_id ?? null : null;
-      // See submitAtBat: synthesize a non-null reachId when the opposing
-      // team bats so a closing BB / HBP actually puts a runner on the base.
-      const reachId = weAreBatting
-        ? ourBatterId
-        : currentOpponentBatterId ?? `opp-pa-${state.inning}-${state.half}-${baseSeq + 1}`;
-      const advances = defaultAdvances(state.bases, reachId, closing);
-      const runs = advances.filter((a) => a.to === "home").length;
-      const rbi = autoRBI(advances, closing, state.bases);
-      const fallback = finalCount(closing, state.current_balls, state.current_strikes);
-      const abPayload: AtBatPayload = {
-        inning: state.inning,
-        half: state.half,
-        batter_id: ourBatterId,
-        opponent_batter_id: currentOpponentBatterId,
-        pitcher_id: weAreBatting ? null : state.current_pitcher_id,
-        opponent_pitcher_id: weAreBatting ? state.current_opponent_pitcher_id : null,
-        batting_order: weAreBatting ? state.current_batter_slot : state.current_opp_batter_slot,
-        result: closing,
-        rbi,
-        pitch_count: fallback.balls + fallback.strikes,
-        balls: fallback.balls,
-        strikes: fallback.strikes,
-        spray_x: null,
-        spray_y: null,
-        fielder_position: null,
-        runner_advances: advances,
-        description: describePlay(closing, runs, ourBatterId, names),
-      };
-      const abResult = await postEvent(gameId, {
-        client_event_id: `ab-auto-${state.inning}-${state.half}-${baseSeq + 1}`,
-        event_type: "at_bat",
-        payload: abPayload,
-      });
-      if (!abResult.ok) {
-        // Pitch persisted but the auto-AB didn't. Fold the pitch so the
-        // count updates; coach can tap the outcome manually to finish the PA.
-        applyPostResult(pitchResult);
-        setSubmitting(false);
-        return;
-      }
-      // Thread the post-pitch snapshot into the AB apply so we don't lose
-      // the pitch event from the local events array.
-      const snap1 = applyPostResult(pitchResult);
-      const snap2 = snap1 ? applyPostResult(abResult, snap1) : applyPostResult(abResult);
-      if (snap2) await maybeAutoEndHalf(prevOuts, snap2);
-      setSubmitting(false);
-      return;
+    // Invalidate cached opposing profile when the chain produced an at_bat
+    // — same trigger as submitAtBat, so a 9-deep lineup cycle doesn't
+    // surface stale career lines.
+    if (!weAreBatting && currentOpponentBatterId && result.events.some((e) => e.event_type === "at_bat")) {
+      opposingProfileCache?.delete(currentOpponentBatterId);
     }
-
-    const snap = applyPostResult(pitchResult);
-    if (snap) await maybeAutoEndHalf(prevOuts, snap);
+    applyPostResult(result);
+    announceAutoEndHalf(result);
     setSubmitting(false);
   };
 
@@ -405,7 +339,6 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
   ) => {
     if (submitting) return;
     setSubmitting(true);
-    const prevOuts = state.outs;
     const nextSeq = lastSeq + 1;
     const result = await postEvent(gameId, {
       client_event_id: `${clientPrefix}-${nextSeq}`,
@@ -417,8 +350,8 @@ export function useLiveScoring({ gameId, roster, opposingProfileCache }: UseLive
       setSubmitting(false);
       return;
     }
-    const snap = applyPostResult(result);
-    if (snap) await maybeAutoEndHalf(prevOuts, snap);
+    applyPostResult(result);
+    announceAutoEndHalf(result);
     setSubmitting(false);
   };
 
