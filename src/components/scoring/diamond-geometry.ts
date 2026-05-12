@@ -18,9 +18,9 @@ export const POSITION_XY: Record<FielderPosition, [number, number]> = {
   "2B": [60, 46],
   SS: [40, 46],
   "3B": [30, 60],
-  LF: [24, 40],
-  CF: [50, 34],
-  RF: [76, 40],
+  LF: [22, 34],
+  CF: [50, 26],
+  RF: [78, 34],
 };
 
 export const BASE_XY = {

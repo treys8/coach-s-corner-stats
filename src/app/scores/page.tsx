@@ -355,7 +355,10 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
   let query = supabase
     .from("games")
     .select(
-      "id, team_id, opponent_team_id, opponent, is_home, game_date, game_time, team_score, opponent_score, status, finalized_at, updated_at, game_live_state(inning, half, team_score, opponent_score, last_event_at, updated_at), teams!inner(id, slug, name, sport, schools!inner(slug, name, short_name))",
+      // `teams!team_id!inner` disambiguates the embed — both team_id and
+      // opponent_team_id reference teams(id), so PostgREST needs the column
+      // hint to know we mean the owning team, not the opponent.
+      "id, team_id, opponent_team_id, opponent, is_home, game_date, game_time, team_score, opponent_score, status, finalized_at, updated_at, game_live_state(inning, half, team_score, opponent_score, last_event_at, updated_at), teams!team_id!inner(id, slug, name, sport, schools!inner(slug, name, short_name))",
     )
     .in("status", ["in_progress", "final"])
     .order("status", { ascending: true })

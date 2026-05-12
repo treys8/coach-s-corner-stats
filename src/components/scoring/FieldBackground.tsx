@@ -85,23 +85,23 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
       <rect x="47" y="75" width="6" height="16" fill="#c9a47a" />
 
       {/* Foul lines: home through 1B/3B out to the wall corners */}
-      <line x1="50" y1="92" x2="95" y2="30" stroke="#fff" strokeWidth="0.4" opacity="0.85" />
-      <line x1="50" y1="92" x2="5" y2="30" stroke="#fff" strokeWidth="0.4" opacity="0.85" />
+      <line x1="50" y1="92" x2="95" y2="30" stroke="#fff" strokeWidth="0.6" />
+      <line x1="50" y1="92" x2="5" y2="30" stroke="#fff" strokeWidth="0.6" />
 
       {/* Pitcher's mound */}
       <circle cx="50" cy="73" r="5" fill="#c9a47a" />
       <rect x="48.2" y="72.65" width="3.6" height="0.7" fill="#fff" opacity="0.95" />
 
-      {/* Batter's boxes flanking home plate (centered on plate vertically) */}
-      <rect x="43.5" y="91" width="3" height="5" fill="#fff" opacity="0.9" stroke="#1f3252" strokeWidth="0.18" />
-      <rect x="53.5" y="91" width="3" height="5" fill="#fff" opacity="0.9" stroke="#1f3252" strokeWidth="0.18" />
+      {/* Batter's boxes flanking home plate, flush with the side corners */}
+      <rect x="41.5" y="91" width="4" height="6" fill="#fff" stroke="#1f3252" strokeWidth="0.25" />
+      <rect x="54.5" y="91" width="4" height="6" fill="#fff" stroke="#1f3252" strokeWidth="0.25" />
 
       {/* Home plate */}
       <polygon
-        points="47.5,91 52.5,91 53.5,94 50,96 46.5,94"
+        points="46.5,91 53.5,91 54.5,94 50,96.5 45.5,94"
         fill="#fff"
         stroke="#1f3252"
-        strokeWidth="0.35"
+        strokeWidth="0.45"
       />
     </>
   );
