@@ -154,6 +154,13 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
           myTeamId={team.id}
           gameDate={game.game_date}
           opponentTeamId={game.opponent_team_id}
+          onFinalized={() =>
+            setGame({
+              ...game,
+              status: "final",
+              finalized_at: game.finalized_at ?? new Date().toISOString(),
+            })
+          }
         />
       )}
       {game.status === "final" && (
