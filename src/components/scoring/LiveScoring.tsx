@@ -358,7 +358,6 @@ export function LiveScoring({
         opponentName={opponentName}
         opponentTeamId={opponentTeamId}
         currentLineup={state.opposing_lineup}
-        currentOpponentUseDh={state.opponent_use_dh}
         onSaved={async () => { await refresh(); }}
       />
     </div>

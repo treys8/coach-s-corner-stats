@@ -10,7 +10,6 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
@@ -23,6 +22,7 @@ import {
 import { seasonYearFor } from "@/lib/season";
 
 const POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"] as const;
+const FIELDING_POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"] as const;
 
 interface Props {
   myTeamId: string;
@@ -33,8 +33,6 @@ interface Props {
   opponentIsPublicRoster: boolean | null;
   draft: OpposingSlotDraft[];
   setDraft: (d: OpposingSlotDraft[]) => void;
-  useDh: boolean;
-  setUseDh: (v: boolean) => void;
   opposingPitcherName: string;
   setOpposingPitcherName: (v: string) => void;
   opposingPitcherJersey: string;
@@ -59,8 +57,6 @@ export function OpposingLineupPicker({
   opponentIsPublicRoster,
   draft,
   setDraft,
-  useDh,
-  setUseDh,
   opposingPitcherName,
   setOpposingPitcherName,
   opposingPitcherJersey,
@@ -69,6 +65,11 @@ export function OpposingLineupPicker({
   setDhCoversPos,
   hidePitcher = false,
 }: Props) {
+  // DH usage is inferred from the draft: a slot tagged "DH" means we're
+  // using a DH. A slot tagged "P" means the pitcher bats; otherwise the
+  // standalone box below holds the pitcher.
+  const hasP = draft.some((s) => s.position === "P");
+  const hasDH = draft.some((s) => s.position === "DH");
   const [loadingSource, setLoadingSource] = useState<"pull" | "prior" | null>(null);
 
   const updateSlot = (idx: number, patch: Partial<OpposingSlotDraft>) => {
@@ -117,15 +118,9 @@ export function OpposingLineupPicker({
 
   return (
     <section className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue">
-          Opposing lineup ({opponentName})
-        </h4>
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
-          Opponent uses DH
-        </label>
-      </div>
+      <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue">
+        Opposing lineup ({opponentName})
+      </h4>
 
       <div className="flex items-center gap-2 flex-wrap">
         <Button
@@ -200,10 +195,10 @@ export function OpposingLineupPicker({
                 <SelectContent>
                   {POSITIONS.filter((p) => {
                     if (p === slot.position) return true;
-                    if (p === "DH" && !useDh) return false;
-                    // Hide the DH-covered position from batting-order slots
-                    // — that position is filled by the standalone box.
-                    if (useDh && dhCoversPos !== "P" && p === dhCoversPos) return false;
+                    // When DH and P are both tagged, the dhCoversPos is
+                    // filled by the standalone fielder-only player; no
+                    // batter holds it.
+                    if (hasDH && hasP && p === dhCoversPos) return false;
                     return true;
                   }).map((p) => (
                     <SelectItem key={p} value={p}>{p}</SelectItem>
@@ -219,26 +214,28 @@ export function OpposingLineupPicker({
         </p>
       </div>
 
-      {useDh && !hidePitcher && (
+      {!hidePitcher && hasP && !hasDH && (() => {
+        const pSlot = draft.find((s) => s.position === "P");
+        const display = pSlot
+          ? [
+              pSlot.jersey_number ? `#${pSlot.jersey_number}` : null,
+              pSlot.last_name?.trim() || null,
+            ].filter(Boolean).join(" ")
+          : "";
+        return (
+          <div className="opacity-60">
+            <Label className="text-muted-foreground">Opposing starting pitcher</Label>
+            <div className="text-sm mt-1">
+              {display || "In batting order"} — slot {pSlot?.batting_order ?? "?"}, in lineup.
+            </div>
+          </div>
+        );
+      })()}
+
+      {!hidePitcher && !hasP && hasDH && (
         <div>
-          <Label>
-            {dhCoversPos === "P"
-              ? "Opposing starting pitcher"
-              : `Opposing player at ${dhCoversPos} (their DH hits for them)`}
-          </Label>
+          <Label>Opposing starting pitcher (DH hits for them)</Label>
           <div className="grid grid-cols-12 gap-2">
-            {setDhCoversPos && (
-              <div className="col-span-3">
-                <Select value={dhCoversPos} onValueChange={(v) => setDhCoversPos(v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {POSITIONS.filter((p) => p !== "DH").map((p) => (
-                      <SelectItem key={p} value={p}>{p}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             <div className="col-span-3">
               <Input
                 placeholder="#"
@@ -246,7 +243,7 @@ export function OpposingLineupPicker({
                 onChange={(e) => setOpposingPitcherJersey(e.target.value)}
               />
             </div>
-            <div className={setDhCoversPos ? "col-span-6" : "col-span-9"}>
+            <div className="col-span-9">
               <Input
                 placeholder="Last name (e.g., Smith)"
                 value={opposingPitcherName}
@@ -255,9 +252,56 @@ export function OpposingLineupPicker({
             </div>
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            {dhCoversPos === "P"
-              ? "DH bats; opposing pitcher doesn't bat."
-              : `DH bats; the player at ${dhCoversPos} fields but doesn't bat. The opposing pitcher must be tagged P in one of the batting slots above.`}
+            DH bats; opposing pitcher doesn't bat.
+          </p>
+        </div>
+      )}
+
+      {!hidePitcher && hasP && hasDH && setDhCoversPos && (() => {
+        const lineupPositions = new Set(
+          draft.map((s) => s.position).filter(Boolean) as string[],
+        );
+        return (
+          <div>
+            <Label>DH hits for</Label>
+            <div className="grid grid-cols-12 gap-2">
+              <div className="col-span-3">
+                <Select value={dhCoversPos} onValueChange={(v) => setDhCoversPos(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {FIELDING_POSITIONS.filter((p) => p !== "P" && (p === dhCoversPos || !lineupPositions.has(p))).map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-3">
+                <Input
+                  placeholder="#"
+                  value={opposingPitcherJersey}
+                  onChange={(e) => setOpposingPitcherJersey(e.target.value)}
+                />
+              </div>
+              <div className="col-span-6">
+                <Input
+                  placeholder="Last name (e.g., Smith)"
+                  value={opposingPitcherName}
+                  onChange={(e) => setOpposingPitcherName(e.target.value)}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              DH bats; the player at {dhCoversPos} fields but doesn't bat.
+            </p>
+          </div>
+        );
+      })()}
+
+      {!hidePitcher && !hasP && !hasDH && (
+        <div className="opacity-60">
+          <Label className="text-muted-foreground">Opposing starting pitcher</Label>
+          <p className="text-sm mt-1 text-amber-600">
+            Tag a batting slot as P or DH to continue.
           </p>
         </div>
       )}

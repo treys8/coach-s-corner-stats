@@ -7,7 +7,6 @@ import { useTeam } from "@/lib/contexts/team";
 import { useSchool } from "@/lib/contexts/school";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -256,19 +255,33 @@ function PreGameForm({
 }) {
   const { team } = useTeam();
   const { school } = useSchool();
-  const [useDh, setUseDh] = useState(true);
   const [lineup, setLineup] = useState<SlotState[]>(emptyLineup);
+  // The 10th non-batting player when a DH is in the lineup. Role flips
+  // by scenario: pitcher when DH covers P; fielder-only when DH covers
+  // another position.
   const [pitcherId, setPitcherId] = useState<string | null>(null);
-  // Which defensive position our DH bats for. "P" reproduces the classic
-  // "DH hits for the pitcher" shape; any other value means the standalone
-  // box captures the fielder-not-batting and the pitcher must be in the
-  // batting order at position="P".
+  // Which defensive position the DH covers. "P" when the DH hits for
+  // the pitcher (pitcher sits in the standalone box). Non-P when the
+  // pitcher bats in the lineup and the DH hits for some other fielder
+  // (that fielder sits in the standalone box).
   const [dhCoversPos, setDhCoversPos] = useState<Position>("P");
+
+  // DH usage is inferred from the lineup: tag a slot "DH" → using a DH.
+  // Tag a slot "P" → that pitcher bats; otherwise the standalone box
+  // holds the pitcher (whom the DH hits for).
+  const hasP = useMemo(() => lineup.some((s) => s.position === "P"), [lineup]);
+  const hasDH = useMemo(() => lineup.some((s) => s.position === "DH"), [lineup]);
+  const useDh = hasDH;
   const [opposingDraft, setOpposingDraft] = useState<OpposingSlotDraft[]>(() => buildEmpty());
-  const [oppUseDh, setOppUseDh] = useState(true);
   const [oppDhCoversPos, setOppDhCoversPos] = useState<Position>("P");
   const [opposingPitcher, setOpposingPitcher] = useState("");
   const [opposingPitcherJersey, setOpposingPitcherJersey] = useState("");
+
+  // Opposing DH usage is inferred from opposingDraft, mirroring the home
+  // side: a slot tagged "DH" means they're using a DH.
+  const oppHasP = useMemo(() => opposingDraft.some((s) => s.position === "P"), [opposingDraft]);
+  const oppHasDH = useMemo(() => opposingDraft.some((s) => s.position === "DH"), [opposingDraft]);
+  const oppUseDh = oppHasDH;
   const [opponentIsPublicRoster, setOpponentIsPublicRoster] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -299,19 +312,55 @@ function PreGameForm({
     setLineup((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
   };
 
-  // Reset DH-cover state when DH is turned off so the standalone box and
-  // its position picker can't carry stale values into a non-DH submit.
+  // Clear the 10th-player pick whenever the scenario flips — the role
+  // (pitcher vs. fielder-only) changes, so the prior choice rarely fits.
   useEffect(() => {
-    if (!useDh) {
-      setDhCoversPos("P");
-      setPitcherId(null);
-    }
-  }, [useDh]);
+    setPitcherId(null);
+  }, [hasP, hasDH]);
+
+  // Keep dhCoversPos consistent with the lineup state:
+  // - No DH, or DH without a P in the order → forced to "P"
+  // - DH + P → must be a non-P fielding position not already in the
+  //   lineup; auto-pick the first available when the current value
+  //   isn't valid (e.g., user just tagged that position in a slot).
   useEffect(() => {
-    if (!oppUseDh) {
-      setOppDhCoversPos("P");
+    if (!hasDH || !hasP) {
+      if (dhCoversPos !== "P") setDhCoversPos("P");
+      return;
     }
-  }, [oppUseDh]);
+    const lineupPositions = new Set(
+      lineup.map((s) => s.position).filter(Boolean) as string[],
+    );
+    if (dhCoversPos === "P" || dhCoversPos === "DH" || lineupPositions.has(dhCoversPos)) {
+      const available = FIELDING_POSITIONS.find(
+        (p) => p !== "P" && !lineupPositions.has(p),
+      );
+      if (available) setDhCoversPos(available as Position);
+    }
+  }, [hasDH, hasP, lineup, dhCoversPos]);
+
+  // Mirror the home-side scenario effects for the opposing side: clear
+  // the standalone box on scenario flip, and keep oppDhCoversPos valid.
+  useEffect(() => {
+    setOpposingPitcher("");
+    setOpposingPitcherJersey("");
+  }, [oppHasP, oppHasDH]);
+
+  useEffect(() => {
+    if (!oppHasDH || !oppHasP) {
+      if (oppDhCoversPos !== "P") setOppDhCoversPos("P");
+      return;
+    }
+    const lineupPositions = new Set(
+      opposingDraft.map((s) => s.position).filter(Boolean) as string[],
+    );
+    if (oppDhCoversPos === "P" || oppDhCoversPos === "DH" || lineupPositions.has(oppDhCoversPos)) {
+      const available = FIELDING_POSITIONS.find(
+        (p) => p !== "P" && !lineupPositions.has(p),
+      );
+      if (available) setOppDhCoversPos(available as Position);
+    }
+  }, [oppHasDH, oppHasP, opposingDraft, oppDhCoversPos]);
 
   const validationError = useMemo<string | null>(() => {
     const filled = lineup.filter((s) => s.player_id);
@@ -458,24 +507,20 @@ function PreGameForm({
     // pitcher row into it (linked to the new opponent_players record via
     // opponent_player_id). Phase 1.5 retires this once at_bats migrates.
     //
-    // When opp DH covers P, the pitcher is the standalone box. Otherwise
-    // the pitcher is the P-tagged batting slot, and the standalone box
-    // holds the fielder-only player.
+    // When opp DH covers P (no P in lineup), the pitcher is the
+    // standalone box. Otherwise (P is in the lineup) the pitcher is the
+    // P-tagged batting slot; the standalone box, when present, holds
+    // the fielder-only player at the dh-covered non-P position.
     let opponentPitcherId: string | null = null;
     let opponentFieldingOnlyId: string | null = null;
     let pitcherOppPlayerId: string | null = null;
     let pitcherDisplayName: string | null = null;
-    if (oppUseDh && oppDhCoversPos === "P") {
+    if (oppHasDH && oppDhCoversPos === "P") {
       pitcherOppPlayerId = idByRef.get("pitcher") ?? null;
       pitcherDisplayName =
         opposingPitcher.trim() || opposingPitcherJersey.trim() || null;
-    } else if (oppUseDh && oppDhCoversPos !== "P") {
-      // DH covers a non-pitcher position. The standalone box holds that
-      // fielder-only player; the pitcher is whichever opposing batter is
-      // tagged P. Mirror that batter into game_opponent_pitchers so
-      // at_bats.opponent_pitcher_id has a row to reference (matches the
-      // legacy path for the common DH-for-P case).
-      opponentFieldingOnlyId = idByRef.get("fielding-only") ?? null;
+    } else {
+      // P is in the lineup (Mode A or Mode C).
       const pIdx = opposingDraft.findIndex((s) => s.position === "P");
       if (pIdx !== -1) {
         const pSlot = opposingDraft[pIdx];
@@ -483,10 +528,10 @@ function PreGameForm({
         pitcherDisplayName =
           pSlot.last_name?.trim() || pSlot.jersey_number?.trim() || null;
       }
+      if (oppHasDH && oppDhCoversPos !== "P") {
+        opponentFieldingOnlyId = idByRef.get("fielding-only") ?? null;
+      }
     }
-    // When !oppUseDh, today's flow inserts no game_opponent_pitchers row
-    // (opponent_starting_pitcher_id stays null). Preserving that for now —
-    // it's a separate pre-existing concern.
     if (pitcherDisplayName) {
       // Upsert on (game_id, name) so retrying Start Game (network hiccup,
       // partial save, returning to pre-game) reuses the existing row instead
@@ -541,7 +586,8 @@ function PreGameForm({
     setSubmitting(false);
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
-      toast.error(`Couldn't start game: ${detail.error ?? res.statusText}`);
+      const reason = detail.detail ?? detail.error ?? res.statusText;
+      toast.error(`Couldn't start game: ${reason}`);
       return;
     }
     toast.success("Game started");
@@ -557,15 +603,9 @@ function PreGameForm({
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="space-y-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue">
-              Our lineup ({school.short_name ?? school.name})
-            </h4>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
-              Use DH
-            </label>
-          </div>
+          <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue">
+            Our lineup ({school.short_name ?? school.name})
+          </h4>
 
           <div className="space-y-2">
             {lineup.map((slot, i) => (
@@ -601,11 +641,10 @@ function PreGameForm({
                         // the trigger can render it after dhCoversPos
                         // changes and would otherwise hide the value.
                         if (pos === slot.position) return true;
-                        if (pos === "DH" && !useDh) return false;
-                        // The DH-covered position is filled by the
-                        // standalone fielder-only player; no batter holds
-                        // it.
-                        if (useDh && dhCoversPos !== "P" && pos === dhCoversPos) return false;
+                        // When DH and P are both in the lineup, the
+                        // dhCoversPos is filled by the standalone
+                        // fielder-only player; no batter holds it.
+                        if (hasDH && hasP && pos === dhCoversPos) return false;
                         return true;
                       }).map((pos) => (
                         <SelectItem key={pos} value={pos}>{pos}</SelectItem>
@@ -617,48 +656,79 @@ function PreGameForm({
             ))}
           </div>
 
-          {useDh && (
-            <div>
-              <Label>
-                {dhCoversPos === "P"
-                  ? "Starting pitcher (with DH, batting separately)"
-                  : `Player at ${dhCoversPos} (DH hits for them)`}
-              </Label>
-              <div className="grid grid-cols-12 gap-2">
-                <div className="col-span-3">
-                  <Select
-                    value={dhCoversPos}
-                    onValueChange={(v) => setDhCoversPos(v as Position)}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {POSITIONS.filter((pos) => pos !== "DH").map((pos) => (
-                        <SelectItem key={pos} value={pos}>{pos}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="col-span-9">
-                  <Select value={pitcherId ?? ""} onValueChange={(v) => setPitcherId(v || null)}>
-                    <SelectTrigger>
-                      <SelectValue
-                        placeholder={dhCoversPos === "P" ? "— pick pitcher —" : "— pick fielder —"}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {roster
-                        .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
-                        .map((p) => (
-                          <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
+          {hasP && !hasDH && (() => {
+            const pSlot = lineup.find((s) => s.position === "P");
+            const p = pSlot?.player_id ? roster.find((r) => r.id === pSlot.player_id) : null;
+            return (
+              <div className="opacity-60">
+                <Label className="text-muted-foreground">Starting pitcher</Label>
+                <div className="text-sm mt-1">
+                  {p ? `${playerLabel(p)} — in batting order at slot ${pSlot!.batting_order}.` : "In batting order."}
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {dhCoversPos === "P"
-                  ? "DH bats; pitcher doesn't bat."
-                  : `DH bats; the player at ${dhCoversPos} fields but doesn't bat. Pitcher must be in the batting order at P.`}
+            );
+          })()}
+
+          {!hasP && hasDH && (
+            <div>
+              <Label>Starting pitcher (DH hits for them)</Label>
+              <Select value={pitcherId ?? ""} onValueChange={(v) => setPitcherId(v || null)}>
+                <SelectTrigger><SelectValue placeholder="— pick pitcher —" /></SelectTrigger>
+                <SelectContent>
+                  {roster
+                    .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
+                    .map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">DH bats; pitcher doesn't bat.</p>
+            </div>
+          )}
+
+          {hasP && hasDH && (() => {
+            const lineupPositions = new Set(
+              lineup.map((s) => s.position).filter(Boolean) as string[],
+            );
+            return (
+              <div>
+                <Label>DH hits for</Label>
+                <div className="grid grid-cols-12 gap-2">
+                  <div className="col-span-3">
+                    <Select value={dhCoversPos} onValueChange={(v) => setDhCoversPos(v as Position)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {FIELDING_POSITIONS.filter((p) => p !== "P" && (p === dhCoversPos || !lineupPositions.has(p))).map((p) => (
+                          <SelectItem key={p} value={p}>{p}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="col-span-9">
+                    <Select value={pitcherId ?? ""} onValueChange={(v) => setPitcherId(v || null)}>
+                      <SelectTrigger><SelectValue placeholder="— pick fielder —" /></SelectTrigger>
+                      <SelectContent>
+                        {roster
+                          .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
+                          .map((p) => (
+                            <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  DH bats; the player at {dhCoversPos} fields but doesn't bat.
+                </p>
+              </div>
+            );
+          })()}
+
+          {!hasP && !hasDH && (
+            <div className="opacity-60">
+              <Label className="text-muted-foreground">Starting pitcher</Label>
+              <p className="text-sm mt-1 text-amber-600">
+                Tag a batting slot as P or DH to continue.
               </p>
             </div>
           )}
@@ -674,8 +744,6 @@ function PreGameForm({
             opponentIsPublicRoster={opponentIsPublicRoster}
             draft={opposingDraft}
             setDraft={setOpposingDraft}
-            useDh={oppUseDh}
-            setUseDh={setOppUseDh}
             opposingPitcherName={opposingPitcher}
             setOpposingPitcherName={setOpposingPitcher}
             opposingPitcherJersey={opposingPitcherJersey}
@@ -755,7 +823,8 @@ function FinalStub({ game, onUnfinalized }: { game: GameRow; onUnfinalized: () =
     setSubmitting(false);
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
-      toast.error(`Couldn't un-finalize: ${detail.error ?? res.statusText}`);
+      const reason = detail.detail ?? detail.error ?? res.statusText;
+      toast.error(`Couldn't un-finalize: ${reason}`);
       return;
     }
     toast.success("Game un-finalized");
