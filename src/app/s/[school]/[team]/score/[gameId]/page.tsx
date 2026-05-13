@@ -11,16 +11,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { currentSeasonYear } from "@/lib/season";
 import { formatGameTime } from "@/lib/date-display";
@@ -211,11 +201,10 @@ interface SlotState {
   position: Position | null;
 }
 
-const MIN_LINEUP_SIZE = 9;
-const MAX_LINEUP_SIZE = 12;
+const LINEUP_SIZE = 9;
 
 const emptyLineup = (): SlotState[] =>
-  Array.from({ length: MIN_LINEUP_SIZE }, (_, i) => ({
+  Array.from({ length: LINEUP_SIZE }, (_, i) => ({
     batting_order: i + 1,
     player_id: null,
     position: null,
@@ -275,30 +264,6 @@ function PreGameForm({
     setLineup((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
   };
 
-  const [confirmEhOpen, setConfirmEhOpen] = useState(false);
-
-  const appendSlot = () => {
-    setLineup((prev) => {
-      if (prev.length >= MAX_LINEUP_SIZE) return prev;
-      return [...prev, { batting_order: prev.length + 1, player_id: null, position: null }];
-    });
-  };
-
-  const addSlot = () => {
-    if (lineup.length === MIN_LINEUP_SIZE) {
-      setConfirmEhOpen(true);
-      return;
-    }
-    appendSlot();
-  };
-
-  const removeLastSlot = () => {
-    setLineup((prev) => {
-      if (prev.length <= MIN_LINEUP_SIZE) return prev;
-      return prev.slice(0, -1);
-    });
-  };
-
   // Reset DH-cover state when DH is turned off so the standalone box and
   // its position picker can't carry stale values into a non-DH submit.
   useEffect(() => {
@@ -316,15 +281,11 @@ function PreGameForm({
   const validationError = useMemo<string | null>(() => {
     const filled = lineup.filter((s) => s.player_id);
     if (filled.length !== lineup.length) {
-      return `All ${lineup.length} lineup slots need a player.`;
+      return `All ${LINEUP_SIZE} lineup slots need a player.`;
     }
     const ids = filled.map((s) => s.player_id);
     if (new Set(ids).size !== ids.length) return "A player can only appear once in the lineup.";
-    // Slots 1..9 must have a defensive position. Slots 10..12 are extra
-    // hitters and may have no position. Pitcher slot rules below.
-    const missingPos = lineup.find(
-      (s) => s.player_id && !s.position && s.batting_order <= 9,
-    );
+    const missingPos = lineup.find((s) => s.player_id && !s.position);
     if (missingPos) return `Slot ${missingPos.batting_order} needs a position.`;
     if (useDh && !pitcherId) {
       return dhCoversPos === "P"
@@ -493,13 +454,19 @@ function PreGameForm({
     // (opponent_starting_pitcher_id stays null). Preserving that for now —
     // it's a separate pre-existing concern.
     if (pitcherDisplayName) {
+      // Upsert on (game_id, name) so retrying Start Game (network hiccup,
+      // partial save, returning to pre-game) reuses the existing row instead
+      // of colliding with the unique constraint.
       const { data, error } = await supabase
         .from("game_opponent_pitchers")
-        .insert({
-          game_id: game.id,
-          name: pitcherDisplayName,
-          opponent_player_id: pitcherOppPlayerId,
-        })
+        .upsert(
+          {
+            game_id: game.id,
+            name: pitcherDisplayName,
+            opponent_player_id: pitcherOppPlayerId,
+          },
+          { onConflict: "game_id,name" },
+        )
         .select("id")
         .single();
       if (error || !data) {
@@ -551,22 +518,23 @@ function PreGameForm({
   if (pitcherId) usedIds.add(pitcherId);
 
   return (
-    <>
     <Card className="p-6 space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h3 className="font-display text-2xl text-sa-blue-deep">Pre-game setup</h3>
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
-          Use DH
-        </label>
-      </div>
+      <h3 className="font-display text-2xl text-sa-blue-deep">Pre-game setup</h3>
 
-      <div>
-        <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-3">Batting order</h4>
-        <div className="space-y-2">
-          {lineup.map((slot, i) => {
-            const isExtra = slot.batting_order > 9;
-            return (
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section className="space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue">
+              Our lineup ({school.short_name ?? school.name})
+            </h4>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
+              Use DH
+            </label>
+          </div>
+
+          <div className="space-y-2">
+            {lineup.map((slot, i) => (
               <div key={slot.batting_order} className="grid grid-cols-12 items-center gap-2">
                 <div className="col-span-1 text-right font-mono-stat font-bold text-sa-blue-deep">
                   {slot.batting_order}
@@ -587,135 +555,104 @@ function PreGameForm({
                   </Select>
                 </div>
                 <div className="col-span-4">
-                  {isExtra ? (
-                    <div className="flex items-center justify-center h-9 px-3 rounded-md border border-dashed text-xs uppercase tracking-wider text-muted-foreground">
-                      EH (extra hitter)
-                    </div>
-                  ) : (
-                    <Select
-                      value={slot.position ?? ""}
-                      onValueChange={(v) => updateSlot(i, { position: (v || null) as Position | null })}
-                      disabled={!slot.player_id}
-                    >
-                      <SelectTrigger><SelectValue placeholder="position" /></SelectTrigger>
-                      <SelectContent>
-                        {POSITIONS.filter((pos) => {
-                          // Always keep the current selection in the list so
-                          // the trigger can render it after dhCoversPos
-                          // changes and would otherwise hide the value.
-                          if (pos === slot.position) return true;
-                          if (pos === "DH" && !useDh) return false;
-                          // The DH-covered position is filled by the
-                          // standalone fielder-only player; no batter holds
-                          // it.
-                          if (useDh && dhCoversPos !== "P" && pos === dhCoversPos) return false;
-                          return true;
-                        }).map((pos) => (
-                          <SelectItem key={pos} value={pos}>{pos}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+                  <Select
+                    value={slot.position ?? ""}
+                    onValueChange={(v) => updateSlot(i, { position: (v || null) as Position | null })}
+                    disabled={!slot.player_id}
+                  >
+                    <SelectTrigger><SelectValue placeholder="position" /></SelectTrigger>
+                    <SelectContent>
+                      {POSITIONS.filter((pos) => {
+                        // Always keep the current selection in the list so
+                        // the trigger can render it after dhCoversPos
+                        // changes and would otherwise hide the value.
+                        if (pos === slot.position) return true;
+                        if (pos === "DH" && !useDh) return false;
+                        // The DH-covered position is filled by the
+                        // standalone fielder-only player; no batter holds
+                        // it.
+                        if (useDh && dhCoversPos !== "P" && pos === dhCoversPos) return false;
+                        return true;
+                      }).map((pos) => (
+                        <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
-            );
-          })}
-        </div>
-        <div className="flex items-center gap-2 mt-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={addSlot}
-            disabled={lineup.length >= MAX_LINEUP_SIZE}
-          >
-            + Add batting slot
-          </Button>
-          {lineup.length > MIN_LINEUP_SIZE && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={removeLastSlot}
-              disabled={!!lineup[lineup.length - 1]?.player_id}
-            >
-              − Remove slot {lineup.length}
-            </Button>
-          )}
-          <p className="text-xs text-muted-foreground">
-            Slots 10–12 are extra hitters — no defensive position needed.
-          </p>
-        </div>
-      </div>
-
-      {useDh && (
-        <div className="max-w-xl">
-          <Label>
-            {dhCoversPos === "P"
-              ? "Starting pitcher (with DH, batting separately)"
-              : `Player at ${dhCoversPos} (DH hits for them)`}
-          </Label>
-          <div className="grid grid-cols-12 gap-2">
-            <div className="col-span-3">
-              <Select
-                value={dhCoversPos}
-                onValueChange={(v) => setDhCoversPos(v as Position)}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {POSITIONS.filter((pos) => pos !== "DH").map((pos) => (
-                    <SelectItem key={pos} value={pos}>{pos}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="col-span-9">
-              <Select value={pitcherId ?? ""} onValueChange={(v) => setPitcherId(v || null)}>
-                <SelectTrigger>
-                  <SelectValue
-                    placeholder={dhCoversPos === "P" ? "— pick pitcher —" : "— pick fielder —"}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {roster
-                    .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
-                    .map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
+            ))}
           </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            {dhCoversPos === "P"
-              ? "DH bats; pitcher doesn't bat."
-              : `DH bats; the player at ${dhCoversPos} fields but doesn't bat. Pitcher must be in the batting order at P.`}
-          </p>
-        </div>
-      )}
 
-      <div className="border-t pt-6">
-        <OpposingLineupPicker
-          myTeamId={team.id}
-          gameId={game.id}
-          gameDate={game.game_date}
-          opponentName={game.opponent}
-          opponentTeamId={game.opponent_team_id}
-          opponentIsPublicRoster={opponentIsPublicRoster}
-          draft={opposingDraft}
-          setDraft={setOpposingDraft}
-          useDh={oppUseDh}
-          setUseDh={setOppUseDh}
-          opposingPitcherName={opposingPitcher}
-          setOpposingPitcherName={setOpposingPitcher}
-          opposingPitcherJersey={opposingPitcherJersey}
-          setOpposingPitcherJersey={setOpposingPitcherJersey}
-          dhCoversPos={oppDhCoversPos}
-          setDhCoversPos={(v) => setOppDhCoversPos(v as Position)}
-        />
+          {useDh && (
+            <div>
+              <Label>
+                {dhCoversPos === "P"
+                  ? "Starting pitcher (with DH, batting separately)"
+                  : `Player at ${dhCoversPos} (DH hits for them)`}
+              </Label>
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-3">
+                  <Select
+                    value={dhCoversPos}
+                    onValueChange={(v) => setDhCoversPos(v as Position)}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {POSITIONS.filter((pos) => pos !== "DH").map((pos) => (
+                        <SelectItem key={pos} value={pos}>{pos}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-9">
+                  <Select value={pitcherId ?? ""} onValueChange={(v) => setPitcherId(v || null)}>
+                    <SelectTrigger>
+                      <SelectValue
+                        placeholder={dhCoversPos === "P" ? "— pick pitcher —" : "— pick fielder —"}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roster
+                        .filter((p) => !usedIds.has(p.id) || p.id === pitcherId)
+                        .map((p) => (
+                          <SelectItem key={p.id} value={p.id}>{playerLabel(p)}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {dhCoversPos === "P"
+                  ? "DH bats; pitcher doesn't bat."
+                  : `DH bats; the player at ${dhCoversPos} fields but doesn't bat. Pitcher must be in the batting order at P.`}
+              </p>
+            </div>
+          )}
+        </section>
+
+        <div className="lg:border-l lg:pl-6 border-t lg:border-t-0 pt-6 lg:pt-0">
+          <OpposingLineupPicker
+            myTeamId={team.id}
+            gameId={game.id}
+            gameDate={game.game_date}
+            opponentName={game.opponent}
+            opponentTeamId={game.opponent_team_id}
+            opponentIsPublicRoster={opponentIsPublicRoster}
+            draft={opposingDraft}
+            setDraft={setOpposingDraft}
+            useDh={oppUseDh}
+            setUseDh={setOppUseDh}
+            opposingPitcherName={opposingPitcher}
+            setOpposingPitcherName={setOpposingPitcher}
+            opposingPitcherJersey={opposingPitcherJersey}
+            setOpposingPitcherJersey={setOpposingPitcherJersey}
+            dhCoversPos={oppDhCoversPos}
+            setDhCoversPos={(v) => setOppDhCoversPos(v as Position)}
+          />
+        </div>
       </div>
 
-      <div className="pt-2 border-t space-y-2">
+      <div className="pt-4 border-t space-y-2">
         <div className="flex items-center gap-3 flex-wrap">
           <Button
             onClick={submit}
@@ -733,23 +670,6 @@ function PreGameForm({
         )}
       </div>
     </Card>
-    <AlertDialog open={confirmEhOpen} onOpenChange={setConfirmEhOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Add a 10th batter?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Standard lineups are 9. Slot 10 will be an extra hitter (EH) — they bat
-            but don&apos;t take a defensive position. Add it only if your team is
-            using an EH.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={appendSlot}>Add EH</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-    </>
   );
 }
 

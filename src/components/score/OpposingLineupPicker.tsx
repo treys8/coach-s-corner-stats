@@ -121,25 +121,10 @@ export function OpposingLineupPicker({
         <h4 className="font-display text-sm uppercase tracking-wider text-sa-blue">
           Opposing lineup ({opponentName})
         </h4>
-        <div className="flex items-center gap-3 flex-wrap">
-          {useDh && !hidePitcher && setDhCoversPos && (
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              DH hits for
-              <Select value={dhCoversPos} onValueChange={(v) => setDhCoversPos(v)}>
-                <SelectTrigger className="h-8 w-20"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {POSITIONS.filter((p) => p !== "DH").map((p) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-          )}
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
-            Opponent uses DH
-          </label>
-        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <Checkbox checked={useDh} onCheckedChange={(v) => setUseDh(!!v)} />
+          Opponent uses DH
+        </label>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -235,33 +220,45 @@ export function OpposingLineupPicker({
       </div>
 
       {useDh && !hidePitcher && (
-        <div className="grid grid-cols-12 gap-2 items-end max-w-2xl">
-          <div className="col-span-12">
-            <Label className="text-xs uppercase tracking-wider text-sa-blue">
-              {dhCoversPos === "P"
-                ? "Opposing starting pitcher"
-                : `Opposing player at ${dhCoversPos} (their DH hits for them)`}
-            </Label>
+        <div>
+          <Label>
+            {dhCoversPos === "P"
+              ? "Opposing starting pitcher"
+              : `Opposing player at ${dhCoversPos} (their DH hits for them)`}
+          </Label>
+          <div className="grid grid-cols-12 gap-2">
+            {setDhCoversPos && (
+              <div className="col-span-3">
+                <Select value={dhCoversPos} onValueChange={(v) => setDhCoversPos(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {POSITIONS.filter((p) => p !== "DH").map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="col-span-3">
+              <Input
+                placeholder="#"
+                value={opposingPitcherJersey}
+                onChange={(e) => setOpposingPitcherJersey(e.target.value)}
+              />
+            </div>
+            <div className={setDhCoversPos ? "col-span-6" : "col-span-9"}>
+              <Input
+                placeholder="Last name (e.g., Smith)"
+                value={opposingPitcherName}
+                onChange={(e) => setOpposingPitcherName(e.target.value)}
+              />
+            </div>
           </div>
-          <div className="col-span-3">
-            <Input
-              placeholder="#"
-              value={opposingPitcherJersey}
-              onChange={(e) => setOpposingPitcherJersey(e.target.value)}
-            />
-          </div>
-          <div className="col-span-9">
-            <Input
-              placeholder="Last name (e.g., Smith)"
-              value={opposingPitcherName}
-              onChange={(e) => setOpposingPitcherName(e.target.value)}
-            />
-          </div>
-          {dhCoversPos !== "P" && (
-            <p className="col-span-12 text-xs text-muted-foreground">
-              The opposing pitcher must be tagged P in one of the batting slots above.
-            </p>
-          )}
+          <p className="text-xs text-muted-foreground mt-1">
+            {dhCoversPos === "P"
+              ? "DH bats; opposing pitcher doesn't bat."
+              : `DH bats; the player at ${dhCoversPos} fields but doesn't bat. The opposing pitcher must be tagged P in one of the batting slots above.`}
+          </p>
         </div>
       )}
     </section>
