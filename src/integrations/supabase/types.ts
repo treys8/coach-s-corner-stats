@@ -693,6 +693,7 @@ export type Database = {
           name: string
           primary_color: string | null
           public_scores_enabled: boolean
+          region: string | null
           secondary_color: string | null
           short_name: string | null
           slug: string
@@ -711,6 +712,7 @@ export type Database = {
           name: string
           primary_color?: string | null
           public_scores_enabled?: boolean
+          region?: string | null
           secondary_color?: string | null
           short_name?: string | null
           slug: string
@@ -729,6 +731,7 @@ export type Database = {
           name?: string
           primary_color?: string | null
           public_scores_enabled?: boolean
+          region?: string | null
           secondary_color?: string | null
           short_name?: string | null
           slug?: string
@@ -963,6 +966,7 @@ export type Database = {
           name: string
           primary_color: string | null
           public_scores_enabled: boolean
+          region: string | null
           secondary_color: string | null
           short_name: string | null
           slug: string

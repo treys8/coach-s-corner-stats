@@ -16,6 +16,7 @@ export interface School {
   association: string | null;
   classification: string | null;
   division: string | null;
+  region: string | null;
   timezone: string;
 }
 

@@ -23,6 +23,7 @@ import {
   ASSOCIATIONS,
   CLASSIFICATIONS,
   DIVISIONS,
+  REGIONS,
 } from "@/lib/school-classifications";
 
 const supabase = createClient();
@@ -56,6 +57,7 @@ export default function SchoolSettingsPage() {
     association: school.association ?? "",
     classification: school.classification ?? "",
     division: school.division ?? "",
+    region: school.region ?? "",
     timezone: school.timezone,
   });
   const [busy, setBusy] = useState(false);
@@ -159,6 +161,7 @@ export default function SchoolSettingsPage() {
       association: school.association ?? "",
       classification: school.classification ?? "",
       division: school.division ?? "",
+      region: school.region ?? "",
       timezone: school.timezone,
     });
   }, [school]);
@@ -338,9 +341,9 @@ export default function SchoolSettingsPage() {
     }
     if (
       form.public_scores_enabled &&
-      (!form.association || !form.classification || !form.division)
+      (!form.association || !form.classification)
     ) {
-      toast.error("Set association, classification, and division before publishing scores");
+      toast.error("Set association and classification before publishing scores");
       return;
     }
     setBusy(true);
@@ -358,6 +361,7 @@ export default function SchoolSettingsPage() {
         association: form.association || null,
         classification: form.classification || null,
         division: form.division || null,
+        region: form.region || null,
         timezone: form.timezone,
       })
       .eq("id", school.id);
@@ -582,11 +586,13 @@ export default function SchoolSettingsPage() {
           <div className="pt-2">
             <p className="text-sm font-semibold">Classification</p>
             <p className="text-xs text-muted-foreground mt-1 mb-3">
-              Required when publishing scores. Lets visitors filter the public Scores page to find games in your association, class, and division.
+              Association and classification are required when publishing scores. Division and region are optional and help visitors filter the public Scores page more narrowly.
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <Label htmlFor="association" className="mb-1.5 block text-xs">Association</Label>
+                <Label htmlFor="association" className="mb-1.5 block text-xs">
+                  Association <span className="text-destructive">*</span>
+                </Label>
                 <Select
                   value={form.association}
                   onValueChange={(v) => setForm({ ...form, association: v })}
@@ -602,7 +608,9 @@ export default function SchoolSettingsPage() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="classification" className="mb-1.5 block text-xs">Classification</Label>
+                <Label htmlFor="classification" className="mb-1.5 block text-xs">
+                  Classification <span className="text-destructive">*</span>
+                </Label>
                 <Select
                   value={form.classification}
                   onValueChange={(v) => setForm({ ...form, classification: v })}
@@ -618,26 +626,49 @@ export default function SchoolSettingsPage() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="division" className="mb-1.5 block text-xs">Division</Label>
+                <Label htmlFor="division" className="mb-1.5 block text-xs">Division (optional)</Label>
                 <Select
-                  value={form.division}
-                  onValueChange={(v) => setForm({ ...form, division: v })}
+                  value={form.division || "__none__"}
+                  onValueChange={(v) =>
+                    setForm({ ...form, division: v === "__none__" ? "" : v })
+                  }
                 >
                   <SelectTrigger id="division">
                     <SelectValue placeholder="Select…" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
                     {DIVISIONS.map((d) => (
                       <SelectItem key={d} value={d}>{d}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+              <div>
+                <Label htmlFor="region" className="mb-1.5 block text-xs">Region (optional)</Label>
+                <Select
+                  value={form.region || "__none__"}
+                  onValueChange={(v) =>
+                    setForm({ ...form, region: v === "__none__" ? "" : v })
+                  }
+                  disabled={REGIONS.length === 0}
+                >
+                  <SelectTrigger id="region">
+                    <SelectValue placeholder={REGIONS.length === 0 ? "No regions configured yet" : "Select…"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {REGIONS.map((r) => (
+                      <SelectItem key={r} value={r}>{r}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             {form.public_scores_enabled &&
-              (!form.association || !form.classification || !form.division) && (
+              (!form.association || !form.classification) && (
                 <p className="text-xs text-destructive mt-2">
-                  All three are required while public scores are turned on.
+                  Association and classification are required while public scores are turned on.
                 </p>
               )}
           </div>
