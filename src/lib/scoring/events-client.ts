@@ -27,7 +27,8 @@ export async function postEvent(gameId: string, body: PostBody): Promise<PostRes
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
-    toast.error(`Couldn't save event: ${detail.error ?? res.statusText}`);
+    const reason = detail.detail ?? detail.error ?? res.statusText;
+    toast.error(`Couldn't save event: ${reason}`);
     return { ok: false, state: null, events: [] };
   }
   const data = (await res.json().catch(() => ({}))) as {

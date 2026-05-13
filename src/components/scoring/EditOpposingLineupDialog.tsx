@@ -43,7 +43,6 @@ interface Props {
   opponentTeamId: string | null;
   /** Current opposing lineup from replay state (seeds the picker). */
   currentLineup: OpposingLineupSlot[];
-  currentOpponentUseDh: boolean;
   /** Called after a successful save so the parent can refresh replay state. */
   onSaved: () => Promise<void> | void;
 }
@@ -58,21 +57,23 @@ export function EditOpposingLineupDialog({
   opponentName,
   opponentTeamId,
   currentLineup,
-  currentOpponentUseDh,
   onSaved,
 }: Props) {
   const [draft, setDraft] = useState<OpposingSlotDraft[]>(() => seedDraft(currentLineup, opponentTeamId));
-  const [useDh, setUseDh] = useState(currentOpponentUseDh);
   const [opponentIsPublicRoster, setOpponentIsPublicRoster] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // DH usage is derived from the draft: a slot tagged "DH" means DH is
+  // in play. The seeded draft already encodes the prior opponent_use_dh
+  // via its slot positions.
+  const useDh = draft.some((s) => s.position === "DH");
 
   // Reseed every time the dialog opens so the picker starts from the live
   // replay state, not a stale local draft from the previous open.
   useEffect(() => {
     if (!open) return;
     setDraft(seedDraft(currentLineup, opponentTeamId));
-    setUseDh(currentOpponentUseDh);
-  }, [open, currentLineup, currentOpponentUseDh, opponentTeamId]);
+  }, [open, currentLineup, opponentTeamId]);
 
   // Detect whether the opposing school has a public roster so Pull-from-Statly
   // can advertise (or hide) the affordance accurately. Mirrors PreGameForm.
@@ -175,7 +176,8 @@ export function EditOpposingLineupDialog({
     if (!res.ok) {
       setSubmitting(false);
       const detail = await res.json().catch(() => ({}));
-      toast.error(`Couldn't save opposing lineup: ${detail.error ?? res.statusText}`);
+      const reason = detail.detail ?? detail.error ?? res.statusText;
+      toast.error(`Couldn't save opposing lineup: ${reason}`);
       return;
     }
 
@@ -205,8 +207,6 @@ export function EditOpposingLineupDialog({
             opponentIsPublicRoster={opponentIsPublicRoster}
             draft={draft}
             setDraft={setDraft}
-            useDh={useDh}
-            setUseDh={setUseDh}
             opposingPitcherName=""
             setOpposingPitcherName={() => {}}
             opposingPitcherJersey=""
