@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useTeam } from "@/lib/contexts/team";
@@ -284,6 +284,16 @@ function PreGameForm({
   const oppUseDh = oppHasDH;
   const [opponentIsPublicRoster, setOpponentIsPublicRoster] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Draft persistence. `hasHydrated` flips true once we've checked
+  // game_lineup_drafts. The `skipClear*Once` refs absorb the first
+  // post-hydration run of the scenario-flip clear effects below —
+  // hydration changes hasP/hasDH from their defaults, which would
+  // otherwise trip the clear and wipe the just-hydrated pitcher pick.
+  const [hasHydrated, setHasHydrated] = useState(false);
+  const skipClearOursOnce = useRef(true);
+  const skipClearOppOnce = useRef(true);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
 
   // Detect whether the opposing school has a public roster so the Pull
   // button can advertise (or hide) the affordance accurately.
@@ -314,9 +324,17 @@ function PreGameForm({
 
   // Clear the 10th-player pick whenever the scenario flips — the role
   // (pitcher vs. fielder-only) changes, so the prior choice rarely fits.
+  // skipClearOursOnce absorbs the first post-hydration run so loading a
+  // saved draft doesn't wipe the pitcher pick right after hydration sets
+  // the lineup positions.
   useEffect(() => {
+    if (!hasHydrated) return;
+    if (skipClearOursOnce.current) {
+      skipClearOursOnce.current = false;
+      return;
+    }
     setPitcherId(null);
-  }, [hasP, hasDH]);
+  }, [hasP, hasDH, hasHydrated]);
 
   // Keep dhCoversPos consistent with the lineup state:
   // - No DH, or DH without a P in the order → forced to "P"
@@ -341,10 +359,17 @@ function PreGameForm({
 
   // Mirror the home-side scenario effects for the opposing side: clear
   // the standalone box on scenario flip, and keep oppDhCoversPos valid.
+  // skipClearOppOnce absorbs the first post-hydration run for the same
+  // reason as the home-side effect.
   useEffect(() => {
+    if (!hasHydrated) return;
+    if (skipClearOppOnce.current) {
+      skipClearOppOnce.current = false;
+      return;
+    }
     setOpposingPitcher("");
     setOpposingPitcherJersey("");
-  }, [oppHasP, oppHasDH]);
+  }, [oppHasP, oppHasDH, hasHydrated]);
 
   useEffect(() => {
     if (!oppHasDH || !oppHasP) {
@@ -417,6 +442,87 @@ function PreGameForm({
     opposingPitcher,
     opposingPitcherJersey,
   ]);
+
+  // Persisted draft shape. Versioned so older drafts can be safely
+  // ignored (or migrated) if the schema evolves. useDh / oppUseDh are
+  // intentionally absent — they're inferred from the lineup positions.
+  type DraftPayload = {
+    version: 1;
+    our: {
+      lineup: SlotState[];
+      pitcher_id: string | null;
+      dh_covers_position: Position;
+    };
+    opposing: {
+      draft: OpposingSlotDraft[];
+      pitcher_name: string;
+      pitcher_jersey: string;
+      dh_covers_position: Position;
+    };
+  };
+
+  // Hydrate the form from a saved draft, if one exists. Runs once after
+  // mount. Sets hasHydrated even when no draft is found so the
+  // scenario-flip clear effects start firing normally for fresh forms.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const draftRes = await supabase
+        .from("game_lineup_drafts" as never)
+        .select("payload")
+        .eq("game_id", game.id)
+        .maybeSingle();
+      if (cancelled) return;
+      const row = (draftRes as { data: { payload: DraftPayload } | null }).data;
+      if (row?.payload?.version === 1) {
+        const p = row.payload;
+        setLineup(p.our.lineup);
+        setPitcherId(p.our.pitcher_id);
+        setDhCoversPos(p.our.dh_covers_position);
+        setOpposingDraft(p.opposing.draft);
+        setOpposingPitcher(p.opposing.pitcher_name);
+        setOpposingPitcherJersey(p.opposing.pitcher_jersey);
+        setOppDhCoversPos(p.opposing.dh_covers_position);
+      }
+      setHasHydrated(true);
+    })();
+    return () => { cancelled = true; };
+  }, [game.id]);
+
+  // Persist current form state to game_lineup_drafts. Allowed even when
+  // validationError is non-null so partial drafts survive a navigate-away.
+  const saveDraft = async () => {
+    if (draftSaving) return;
+    setDraftSaving(true);
+    const payload: DraftPayload = {
+      version: 1,
+      our: {
+        lineup,
+        pitcher_id: pitcherId,
+        dh_covers_position: dhCoversPos,
+      },
+      opposing: {
+        draft: opposingDraft,
+        pitcher_name: opposingPitcher,
+        pitcher_jersey: opposingPitcherJersey,
+        dh_covers_position: oppDhCoversPos,
+      },
+    };
+    const res = await supabase
+      .from("game_lineup_drafts" as never)
+      .upsert(
+        { game_id: game.id, payload } as never,
+        { onConflict: "game_id" },
+      );
+    setDraftSaving(false);
+    const error = (res as { error: { message: string } | null }).error;
+    if (error) {
+      toast.error(`Couldn't save lineup: ${error.message}`);
+      return;
+    }
+    setLastSavedAt(new Date());
+    toast.success("Lineup saved");
+  };
 
   const submit = async () => {
     if (validationError) {
@@ -590,6 +696,13 @@ function PreGameForm({
       toast.error(`Couldn't start game: ${reason}`);
       return;
     }
+    // Best-effort cleanup of the persisted draft now that the game has
+    // started. A failure here is silent — the row is harmless once
+    // game.status flips to in_progress (PreGameForm no longer renders).
+    await supabase
+      .from("game_lineup_drafts" as never)
+      .delete()
+      .eq("game_id", game.id);
     toast.success("Game started");
     onStarted();
   };
@@ -763,6 +876,18 @@ function PreGameForm({
           >
             {submitting ? "Starting…" : "Start game"}
           </Button>
+          <Button
+            variant="outline"
+            onClick={saveDraft}
+            disabled={draftSaving || submitting}
+          >
+            {draftSaving ? "Saving…" : "Save lineup"}
+          </Button>
+          {lastSavedAt && (
+            <span className="text-xs text-muted-foreground">
+              Saved {lastSavedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            </span>
+          )}
           <p className="text-xs text-muted-foreground">
             {weAreHome ? "We bat in the bottom of each inning." : "We bat in the top of each inning."}
           </p>
