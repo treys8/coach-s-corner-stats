@@ -194,8 +194,8 @@ export function OpposingLineupPicker({
                 value={slot.position ?? ""}
                 onValueChange={(v) => updateSlot(i, { position: v || null })}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="position (optional)" />
+                <SelectTrigger className={!slot.position ? "border-amber-300" : ""}>
+                  <SelectValue placeholder="position" />
                 </SelectTrigger>
                 <SelectContent>
                   {POSITIONS.filter((p) => {
@@ -214,8 +214,8 @@ export function OpposingLineupPicker({
           </div>
         ))}
         <p className="text-xs text-muted-foreground">
-          Each slot needs a jersey number or last name. Defensive position is optional pre-game
-          (you can tag it at the moment of play).
+          Each slot needs a jersey number or last name and a defensive position.
+          All 9 fielding positions (P, C, 1B, 2B, 3B, SS, LF, CF, RF) must be assigned.
         </p>
       </div>
 

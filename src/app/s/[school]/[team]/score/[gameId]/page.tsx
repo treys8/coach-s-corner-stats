@@ -203,12 +203,47 @@ interface SlotState {
 
 const LINEUP_SIZE = 9;
 
+const FIELDING_POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"] as const;
+
 const emptyLineup = (): SlotState[] =>
   Array.from({ length: LINEUP_SIZE }, (_, i) => ({
     batting_order: i + 1,
     player_id: null,
     position: null,
   }));
+
+// Returns an error message if the lineup has duplicate positions, conflicts
+// with the standalone DH-covered fielder, or doesn't cover all 9 fielding
+// positions. Pass slot positions in batting order. With DH, exactly one slot
+// is "DH" and the standalone box covers dhCoversPos.
+function checkLineupPositions(
+  slotPositions: Array<string | null>,
+  useDh: boolean,
+  dhCoversPos: string,
+  prefix = "",
+): string | null {
+  const seen = new Set<string>();
+  for (const p of slotPositions) {
+    if (!p) continue;
+    if (seen.has(p)) {
+      return `${prefix}${p} is assigned to more than one batting slot.`;
+    }
+    seen.add(p);
+  }
+  if (useDh && seen.has(dhCoversPos)) {
+    return `${prefix}${dhCoversPos} is on both a batting slot and the standalone fielder box.`;
+  }
+  const covered = new Set<string>();
+  for (const p of slotPositions) {
+    if (p && p !== "DH") covered.add(p);
+  }
+  if (useDh) covered.add(dhCoversPos);
+  const missing = FIELDING_POSITIONS.filter((p) => !covered.has(p));
+  if (missing.length > 0) {
+    return `${prefix}missing fielding position${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}.`;
+  }
+  return null;
+}
 
 function PreGameForm({
   game,
@@ -292,36 +327,35 @@ function PreGameForm({
         ? "Pick a starting pitcher."
         : `Pick the player at ${dhCoversPos}.`;
     }
-    if (useDh && dhCoversPos !== "P" && !lineup.some((s) => s.position === "P")) {
-      return `When DH covers ${dhCoversPos}, one batting slot must be tagged P.`;
-    }
-    if (useDh && dhCoversPos !== "P" && lineup.some((s) => s.position === dhCoversPos)) {
-      return `When DH covers ${dhCoversPos}, no batting slot can also be tagged ${dhCoversPos}.`;
-    }
-    if (!useDh && !lineup.some((s) => s.position === "P")) {
-      return "Without DH, one of the batters must play P.";
-    }
+    const ourPositionError = checkLineupPositions(
+      lineup.map((s) => s.position),
+      useDh,
+      dhCoversPos,
+    );
+    if (ourPositionError) return ourPositionError;
 
     // Opposing-side hard gate: every slot needs jersey OR last name (the
-    // identity minimum). Defensive position is optional pre-game.
-    const oppMissing = opposingDraft.findIndex((s) => !slotHasIdentity(s));
-    if (oppMissing !== -1) {
-      return `Opposing slot ${oppMissing + 1} needs a jersey number or last name.`;
+    // identity minimum) AND a defensive position.
+    const oppMissingIdentity = opposingDraft.findIndex((s) => !slotHasIdentity(s));
+    if (oppMissingIdentity !== -1) {
+      return `Opposing slot ${oppMissingIdentity + 1} needs a jersey number or last name.`;
+    }
+    const oppMissingPos = opposingDraft.findIndex((s) => !s.position);
+    if (oppMissingPos !== -1) {
+      return `Opposing slot ${oppMissingPos + 1} needs a defensive position.`;
     }
     if (oppUseDh && !opposingPitcher.trim() && !opposingPitcherJersey.trim()) {
       return oppDhCoversPos === "P"
         ? "Opposing starting pitcher: enter a jersey number or last name."
         : `Opposing player at ${oppDhCoversPos}: enter a jersey number or last name.`;
     }
-    if (oppUseDh && oppDhCoversPos !== "P" && !opposingDraft.some((s) => s.position === "P")) {
-      return `Opposing side: when DH covers ${oppDhCoversPos}, one batting slot must be tagged P.`;
-    }
-    if (oppUseDh && oppDhCoversPos !== "P" && opposingDraft.some((s) => s.position === oppDhCoversPos)) {
-      return `Opposing side: when DH covers ${oppDhCoversPos}, no batting slot can also be tagged ${oppDhCoversPos}.`;
-    }
-    if (!oppUseDh && !opposingDraft.some((s) => s.position === "P")) {
-      return "Opposing side: without DH, one batting slot must be tagged P.";
-    }
+    const oppPositionError = checkLineupPositions(
+      opposingDraft.map((s) => s.position),
+      oppUseDh,
+      oppDhCoversPos,
+      "Opposing side: ",
+    );
+    if (oppPositionError) return oppPositionError;
     return null;
   }, [
     lineup,
