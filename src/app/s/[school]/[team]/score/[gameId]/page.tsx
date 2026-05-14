@@ -133,7 +133,10 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
   // shell during the rollout. While the viewport hook is resolving (SSR
   // + first client render), render a neutral 100dvh placeholder so we
   // don't flash v1 before flipping to v2.
-  if (game.status === "in_progress") {
+  // 'suspended' renders the scoring screen the same way as 'in_progress' —
+  // any new event auto-resumes the game (replay-engine spec). The tablet shows
+  // a banner so the coach knows.
+  if (game.status === "in_progress" || game.status === "suspended") {
     if (isV2Viewport === undefined) {
       return <div className="h-[100dvh] bg-background" />;
     }
@@ -198,7 +201,13 @@ function GameHeader({ game, backHref }: { game: GameRow; backHref: string }) {
         </h2>
       </div>
       <Badge variant={game.status === "in_progress" ? "default" : game.status === "final" ? "outline" : "secondary"} className="uppercase">
-        {game.status === "in_progress" ? "Live" : game.status === "final" ? "Final" : "Draft"}
+        {game.status === "in_progress"
+          ? "Live"
+          : game.status === "suspended"
+            ? "Suspended"
+            : game.status === "final"
+              ? "Final"
+              : "Draft"}
       </Badge>
     </header>
   );

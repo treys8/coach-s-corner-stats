@@ -1283,4 +1283,42 @@ describe("applyEvent fold-equivalence with replay()", () => {
       .reduce(applyEvent, INITIAL_STATE);
     expect(filteredFold).toEqual(fromReplay);
   });
+
+  // ---- Stage 6a: game_suspended + resume-on-any-event ---------------------
+
+  it("game_suspended flips status from in_progress to suspended", () => {
+    const state = replay([
+      startGame(),
+      evt("at_bat", atBat({ result: "K_swinging" })),
+      evt("game_suspended", { reason: "weather" }),
+    ]);
+    expect(state.status).toBe("suspended");
+  });
+
+  it("any play-resolving event after suspend flips status back to in_progress", () => {
+    const state = replay([
+      startGame(),
+      evt("game_suspended", { reason: "darkness" }),
+      evt("at_bat", atBat({ result: "K_swinging" })),
+    ]);
+    expect(state.status).toBe("in_progress");
+  });
+
+  it("repeated game_suspended events leave status suspended (no auto-resume by suspend itself)", () => {
+    const state = replay([
+      startGame(),
+      evt("game_suspended", { reason: "weather" }),
+      evt("game_suspended", { reason: "weather" }),
+    ]);
+    expect(state.status).toBe("suspended");
+  });
+
+  it("game_finalized on a suspended game finalizes (not resumes to in_progress)", () => {
+    const state = replay([
+      startGame(),
+      evt("game_suspended", { reason: "curfew" }),
+      evt("game_finalized", {}),
+    ]);
+    expect(state.status).toBe("final");
+  });
 });

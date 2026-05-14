@@ -10,12 +10,18 @@ interface Props {
   onEditOpposingLineup: () => void;
   onFinalize: () => void;
   onMoundVisit: () => void;
+  onSuspendGame: () => void;
   /** Conferences charged to the CURRENT pitcher this game. Drives the
    *  3-warning / 4-forced-removal copy (NFHS 3-4-1; PDF §28.9). */
   conferencesThisGame: number;
   disabled: boolean;
   outs: number;
   canEdit: boolean;
+  /** When true, suspend is unavailable (already paused, finalized, or
+   *  pre-game). Resume is implicit — any subsequent play-resolving event
+   *  flips status back to in_progress, so we don't need a separate Resume
+   *  button. */
+  canSuspend: boolean;
 }
 
 export function FlowControls({
@@ -26,10 +32,12 @@ export function FlowControls({
   onEditOpposingLineup,
   onFinalize,
   onMoundVisit,
+  onSuspendGame,
   conferencesThisGame,
   disabled,
   outs,
   canEdit,
+  canSuspend,
 }: Props) {
   const moundVisitTitle =
     conferencesThisGame >= 4
@@ -80,6 +88,15 @@ export function FlowControls({
         className="justify-start"
       >
         Edit opposing lineup
+      </Button>
+      <Button
+        variant="outline"
+        disabled={disabled || !canSuspend}
+        onClick={onSuspendGame}
+        title="Pause this game (weather/curfew). Any new play resumes it."
+        className="justify-start"
+      >
+        Suspend game
       </Button>
       <Button
         variant="outline"

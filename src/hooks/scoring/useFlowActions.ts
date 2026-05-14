@@ -7,6 +7,7 @@ import type {
   AtBatPayload,
   CorrectionPayload,
   GameEventRecord,
+  GameSuspendedPayload,
   PitchingChangePayload,
   ReplayState,
   SubstitutionPayload,
@@ -36,6 +37,7 @@ export interface UseFlowActionsResult {
   submitUmpireCall: (payload: UmpireCallPayload) => Promise<boolean>;
   editLastPlay: (supersededEventId: string, correctedAtBat: AtBatPayload) => Promise<boolean>;
   finalize: () => Promise<boolean>;
+  submitSuspendGame: (payload?: GameSuspendedPayload) => Promise<boolean>;
   submitUndo: () => Promise<void>;
 }
 
@@ -274,6 +276,28 @@ export function useFlowActions({
     return true;
   };
 
+  // Stage 6a: pause the game. Resume is implicit — any subsequent play-
+  // resolving event flips status from 'suspended' back to 'in_progress'
+  // (see replay.ts NON_RESUMING_EVENT_TYPES).
+  const submitSuspendGame = async (
+    payload: GameSuspendedPayload = {},
+  ): Promise<boolean> => {
+    if (submitting) return false;
+    if (state.status === "suspended" || state.status === "final") return false;
+    setSubmitting(true);
+    const nextSeq = lastSeq + 1;
+    const result = await postEvent(gameId, {
+      client_event_id: `gs-${nextSeq}`,
+      event_type: "game_suspended",
+      payload,
+    });
+    setSubmitting(false);
+    if (!result.ok) return false;
+    toast.success("Game suspended");
+    applyPostResult(result);
+    return true;
+  };
+
   // One-tap undo. Posts a void correction superseding the most recent live
   // event. Undoing a corrected at_bat removes BOTH the original and the
   // correction from replay.
@@ -311,6 +335,7 @@ export function useFlowActions({
     submitUmpireCall,
     editLastPlay,
     finalize,
+    submitSuspendGame,
     submitUndo,
   };
 }
