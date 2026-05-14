@@ -151,6 +151,10 @@ export interface AtBatPayload {
    *  is on first; the source determines whether downstream runs are
    *  earned (WP=earned, PB/E=unearned). */
   batter_reached_on_k3?: K3ReachSource;
+  /** Set on a Pop/Fly out caught in foul territory (play-catalog §2.11,
+   *  §2.17, §3.6). Pure notation hint — doesn't change base/out state.
+   *  Stage 3 will surface it as the F2(f) / F7(f) scorebook suffix. */
+  foul_out?: boolean;
 }
 
 export interface SubstitutionPayload {
