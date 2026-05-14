@@ -38,6 +38,7 @@ import type {
   SubstitutionPayload,
   UmpireCallPayload,
 } from "./types";
+import type { GameEventType } from "@/integrations/supabase/types";
 import { EMPTY_BASES, INITIAL_STATE } from "./types";
 import { applyErReconstructionToHalf } from "./er-reconstruction";
 
@@ -107,14 +108,33 @@ export function replay(events: GameEventRecord[]): ReplayState {
 
 // ---- Reducer ---------------------------------------------------------------
 
+// Events that DON'T auto-resume a suspended game. Everything else flips
+// status from 'suspended' back to 'in_progress' before dispatch (per the
+// resume-on-any-event spec at /docs/live-scoring/schema-deltas-v2.md §4).
+// game_suspended is excluded (suspending again would be redundant);
+// game_finalized is excluded because it sets status='final' itself; and
+// correction re-enters applyEvent with the corrected payload, so the
+// recursive call handles resume.
+const NON_RESUMING_EVENT_TYPES: ReadonlySet<GameEventType> = new Set([
+  "game_suspended",
+  "game_finalized",
+  "correction",
+]);
+
 // Exported so callers can fold an authoritative event onto an existing state
 // (e.g. consuming the live_state + new event returned from the events API)
 // without rebuilding from the full log. `replay()` is `events.reduce(applyEvent,
 // INITIAL_STATE)` modulo the supersession filter — see fold-equivalence test
 // in replay.test.ts.
 export function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
+  const resumedStatus =
+    state.status === "suspended" && !NON_RESUMING_EVENT_TYPES.has(event.event_type)
+      ? "in_progress"
+      : state.status;
+
   const next: ReplayState = {
     ...state,
+    status: resumedStatus,
     bases: { ...state.bases },
     our_lineup: state.our_lineup.map((s) => ({ ...s })),
     at_bats: state.at_bats,
@@ -154,6 +174,8 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
         non_pa_runs: finalNonPaRuns,
       };
     }
+    case "game_suspended":
+      return { ...next, status: "suspended" };
     case "stolen_base":
       return applyStolenBase(next, event.id, event.sequence_number, event.payload as StolenBasePayload);
     case "caught_stealing":

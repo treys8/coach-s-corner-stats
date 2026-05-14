@@ -27,7 +27,11 @@ import { GameStatusBar } from "@/components/scoring/GameStatusBar";
 import { PitchRail } from "@/components/scoring/PitchRail";
 import { MoundVisitCounter } from "@/components/scoring/MoundVisitCounter";
 import { IFRBanner } from "@/components/scoring/IFRBanner";
+import { MercyBanner } from "@/components/scoring/MercyBanner";
+import { SuspendedBanner } from "@/components/scoring/SuspendedBanner";
 import { TagUpChip } from "@/components/scoring/TagUpChip";
+import { useLeagueRules } from "@/hooks/use-league-rules";
+import { seasonYearFor } from "@/lib/season";
 import { LineScoreSheet } from "@/components/scoring/sheets/LineScoreSheet";
 import { ARMED_IN_PLAY_PENDING } from "@/hooks/scoring/useAtBatActions";
 import { FlowControls } from "@/components/scoring/FlowControls";
@@ -121,6 +125,7 @@ export function LiveScoringV2({
     submitUmpireCall,
     editLastPlay,
     finalize,
+    submitSuspendGame,
     submitUndo,
   } = useLiveScoring({
     gameId,
@@ -128,6 +133,8 @@ export function LiveScoringV2({
     opposingProfileCache: opposingProfileCache.current,
     onFinalized,
   });
+
+  const leagueRules = useLeagueRules(schoolId, seasonYearFor(gameDate));
 
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pitchChangeOpen, setPitchChangeOpen] = useState(false);
@@ -264,6 +271,8 @@ export function LiveScoringV2({
                 <ChevronRight className="ml-1 h-3.5 w-3.5" />
               </Button>
             </div>
+            <SuspendedBanner state={state} />
+            <MercyBanner state={state} rules={leagueRules} />
             {!weAreBatting && (
               <>
                 <IFRBanner
@@ -330,6 +339,7 @@ export function LiveScoringV2({
                 });
                 setManageOpen(false);
               }}
+              onSuspendGame={() => { void submitSuspendGame(); setManageOpen(false); }}
               conferencesThisGame={
                 state.defensive_conferences.filter(
                   (c) => c.pitcher_id === state.current_pitcher_id,
@@ -338,6 +348,7 @@ export function LiveScoringV2({
               disabled={submitting}
               outs={state.outs}
               canEdit={state.at_bats.length > 0}
+              canSuspend={state.status === "in_progress"}
             />
           </div>
         </SheetContent>

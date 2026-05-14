@@ -361,7 +361,10 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
       // hint to know we mean the owning team, not the opponent.
       "id, team_id, opponent_team_id, opponent, is_home, game_date, game_time, team_score, opponent_score, status, finalized_at, updated_at, game_live_state(inning, half, team_score, opponent_score, last_event_at, updated_at), teams!team_id!inner(id, slug, name, sport, schools!inner(slug, name, short_name))",
     )
-    .in("status", ["in_progress", "final"])
+    // 'suspended' is fetched and then normalized to 'in_progress' below — the
+    // public scores surface treats a paused game like a live one (per the
+    // live_scoring_v2 spec). The suspend banner is tablet-only.
+    .in("status", ["in_progress", "final", "suspended"])
     .order("status", { ascending: true })
     .order("game_date", { ascending: false })
     .limit(200);
@@ -383,7 +386,14 @@ export default async function ScoresPage({ searchParams }: ScoresPageProps) {
   }
 
   const { data: gamesData, error } = await query;
-  const games = (gamesData ?? []) as unknown as GameRow[];
+  const rawGames = (gamesData ?? []) as unknown as (Omit<GameRow, "status"> & { status: string })[];
+  // Normalize 'suspended' → 'in_progress' so the downstream tile/link logic
+  // (typed against GameStatus = "in_progress" | "final") doesn't have to
+  // branch. Suspended games show as LIVE here; the tablet shows the banner.
+  const games: GameRow[] = rawGames.map((g) => ({
+    ...g,
+    status: (g.status === "suspended" ? "in_progress" : g.status) as GameStatus,
+  }));
 
   const gameIds = games.map((g) => g.id);
   // Two parallel .in() queries instead of one .or().in() — keeps each URL well

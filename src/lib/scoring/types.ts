@@ -299,6 +299,16 @@ export interface InningEndPayload {
 
 export type GameFinalizedPayload = Record<string, never>;
 
+/** Stage 6a: pauses the game. Status flips to 'suspended'; any subsequent
+ *  play-resolving event (at_bat, pitch, runner movement, substitution, etc.)
+ *  flips it back to 'in_progress' — no explicit "unsuspend" event. /scores
+ *  and game_live_state consumers render suspended as in_progress with a
+ *  banner; stat_snapshots writes stay gated to status==='final'. */
+export interface GameSuspendedPayload {
+  reason?: "weather" | "darkness" | "curfew" | "other";
+  notes?: string | null;
+}
+
 // Corrections carry the same shape as one of the other payloads, tagged with
 // the event_id they're replacing. The replay engine skips the superseded
 // event and applies this corrected payload in its place.
@@ -328,7 +338,8 @@ export type GameEventPayload =
   | PitchPayload
   | DefensiveConferencePayload
   | OpposingLineupEditPayload
-  | UmpireCallPayload;
+  | UmpireCallPayload
+  | GameSuspendedPayload;
 
 // ---- Persisted shape used by the engine ------------------------------------
 

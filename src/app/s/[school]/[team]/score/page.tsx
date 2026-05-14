@@ -45,7 +45,7 @@ export default function ScoreIndexPage() {
       .from("games")
       .select("id, game_date, game_time, opponent, location, status")
       .eq("team_id", team.id)
-      .in("status", ["draft", "in_progress"])
+      .in("status", ["draft", "in_progress", "suspended"])
       .gte("game_date", todayIso())
       .order("game_date", { ascending: true })
       .order("game_time", { ascending: true, nullsFirst: false });
@@ -125,8 +125,12 @@ export default function ScoreIndexPage() {
                         <span className="font-bold">{g.opponent}</span>
                       </p>
                     </div>
-                    <Badge variant={g.status === "in_progress" ? "default" : "secondary"} className="uppercase">
-                      {g.status === "in_progress" ? "Live" : "Draft"}
+                    <Badge variant={g.status === "draft" ? "secondary" : "default"} className="uppercase">
+                      {g.status === "draft"
+                        ? "Draft"
+                        : g.status === "suspended"
+                          ? "Suspended"
+                          : "Live"}
                     </Badge>
                   </Card>
                 </Link>
