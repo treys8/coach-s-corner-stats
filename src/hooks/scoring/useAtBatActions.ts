@@ -44,17 +44,30 @@ export interface UseAtBatActionsArgs {
   opposingProfileCache?: Map<string, OpposingBatterProfile>;
 }
 
+/** Additive fields the In Play sheet can attach to an armed result. Threaded
+ *  from `onOutcomePicked` through `armedExtras` to the final `submitAtBat`
+ *  call so the drag-to-fielder flow preserves them. Today only `foul_out` —
+ *  Stage 3 will add `fielder_chain`, `batted_ball_type`, `error_step_index`. */
+export interface AtBatExtras {
+  foul_out?: boolean;
+}
+
 export interface UseAtBatActionsResult {
   armedResult: ArmedState | null;
   setArmedResult: (v: ArmedState | null) => void;
-  onOutcomePicked: (result: AtBatResult) => void;
+  onOutcomePicked: (result: AtBatResult, extras?: AtBatExtras) => void;
   submitAtBat: (
     result: AtBatResult,
     spray: { x: number; y: number; fielder: FielderPosition } | null,
     k3Reach?: K3ReachSource,
+    extras?: AtBatExtras,
   ) => Promise<void>;
   submitPitch: (pitchType: PitchType) => Promise<void>;
   onFielderDrop: (x: number, y: number, fielder: FielderPosition) => void;
+  /** Commit the armed result with no spray. Reads internal armedResult +
+   *  armedExtras so the caller doesn't need to know which extras were
+   *  stashed on outcome selection (foul_out, etc). No-op if no live arm. */
+  skipLocation: () => void;
 }
 
 /**
@@ -95,11 +108,21 @@ export function useAtBatActions({
   opposingProfileCache,
 }: UseAtBatActionsArgs): UseAtBatActionsResult {
   const [armedResult, setArmedResult] = useState<ArmedState | null>(null);
+  // Extras (foul_out, etc) stashed when the in-play outcome is picked, so
+  // they ride through the drag-to-fielder gap and land on the AtBatPayload
+  // at commit time. Cleared on submit, cancel, or set to null.
+  const [armedExtras, setArmedExtras] = useState<AtBatExtras | null>(null);
+
+  const setArmedResultClearing = (v: ArmedState | null) => {
+    setArmedResult(v);
+    if (v === null) setArmedExtras(null);
+  };
 
   const submitAtBat = async (
     result: AtBatResult,
     spray: { x: number; y: number; fielder: FielderPosition } | null,
     k3Reach?: K3ReachSource,
+    extras?: AtBatExtras,
   ) => {
     if (submitting) return;
     setSubmitting(true);
@@ -149,6 +172,7 @@ export function useAtBatActions({
       runner_advances: advances,
       description: describePlay(result, runs, ourBatterId, names),
       batter_reached_on_k3: k3Reach,
+      foul_out: extras?.foul_out,
     };
 
     const clientEventId = `ab-${state.inning}-${state.half}-${nextSeq}`;
@@ -181,23 +205,27 @@ export function useAtBatActions({
       opposingProfileCache?.delete(currentOpponentBatterId);
     }
     setArmedResult(null);
+    setArmedExtras(null);
     applyPostResult(postResult);
     announceAutoEndHalf(postResult);
     setSubmitting(false);
   };
 
-  const onOutcomePicked = (result: AtBatResult) => {
+  const onOutcomePicked = (result: AtBatResult, extras?: AtBatExtras) => {
     if (submitting) return;
     if (isInPlay(result)) {
       // Arm drag mode on the diamond; drop will capture spray + fielder.
       // Transitions out of IN_PLAY_PENDING too — the user picked the
-      // specific result, so the banner / grid now reflects it.
+      // specific result, so the banner / grid now reflects it. Stash
+      // extras (foul_out, ...) on armedExtras so onFielderDrop can pass
+      // them through to submitAtBat.
       setArmedResult(result);
+      setArmedExtras(extras ?? null);
       return;
     }
     // Non-in-play outcome (K, BB, HBP, etc.) clears any IN_PLAY_PENDING
     // arm and fires directly. Treats a stray pending arm as user-corrected.
-    void submitAtBat(result, null);
+    void submitAtBat(result, null, undefined, extras);
   };
 
   const submitPitch = async (pitchType: PitchType) => {
@@ -264,15 +292,21 @@ export function useAtBatActions({
 
   const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
     if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
-    void submitAtBat(armedResult, { x, y, fielder });
+    void submitAtBat(armedResult, { x, y, fielder }, undefined, armedExtras ?? undefined);
+  };
+
+  const skipLocation = () => {
+    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
+    void submitAtBat(armedResult, null, undefined, armedExtras ?? undefined);
   };
 
   return {
     armedResult,
-    setArmedResult,
+    setArmedResult: setArmedResultClearing,
     onOutcomePicked,
     submitAtBat,
     submitPitch,
     onFielderDrop,
+    skipLocation,
   };
 }

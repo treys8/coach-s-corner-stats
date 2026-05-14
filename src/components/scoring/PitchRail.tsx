@@ -16,8 +16,10 @@ import type {
 import {
   ARMED_IN_PLAY_PENDING,
   type ArmedState,
+  type AtBatExtras,
 } from "@/hooks/scoring/useAtBatActions";
 import { OutcomeGrid } from "./OutcomeGrid";
+import { InPlayOutcomeSheet } from "./InPlayOutcomeSheet";
 
 interface PitchRailProps {
   balls: number;
@@ -26,14 +28,17 @@ interface PitchRailProps {
   hasRunners: boolean;
   submitting: boolean;
   onPitch: (t: PitchType) => void;
-  onOutcomePicked: (r: AtBatResult) => void;
+  onOutcomePicked: (r: AtBatResult, extras?: AtBatExtras) => void;
   onK3Reach: (src: K3ReachSource) => void;
   onIntentionalWalk: () => void;
   onBalk: () => void;
   canRecord: (r: AtBatResult) => boolean;
   armedResult: ArmedState | null;
   setArmedResult: (v: ArmedState | null) => void;
-  onSkipLocation: (result: AtBatResult) => void;
+  /** Commit the armed result with no spray. The hook reads internal
+   *  armedExtras so this is intentionally no-arg — keeps the foul_out
+   *  notation hint (and future Stage 3 extras) from being dropped. */
+  onSkipLocation: () => void;
 }
 
 type Mode = "pitchPad" | "armedDrag" | "pickContact";
@@ -220,14 +225,22 @@ export function PitchRail({
                 Cancel
               </Button>
             </div>
-            <OutcomeGrid
-              disabled={disabled}
-              onPick={onOutcomePicked}
-              onK3Reach={onK3Reach}
-              armedResult={armedResult}
-              currentStrikes={strikes}
-              canRecord={canRecord}
-            />
+            {armedResult === ARMED_IN_PLAY_PENDING ? (
+              <InPlayOutcomeSheet
+                disabled={disabled}
+                onPick={onOutcomePicked}
+                canRecord={canRecord}
+              />
+            ) : (
+              <OutcomeGrid
+                disabled={disabled}
+                onPick={onOutcomePicked}
+                onK3Reach={onK3Reach}
+                armedResult={armedResult}
+                currentStrikes={strikes}
+                canRecord={canRecord}
+              />
+            )}
           </div>
         )}
 
@@ -245,7 +258,7 @@ export function PitchRail({
             <div className="flex flex-col gap-2">
               <Button
                 variant="outline"
-                onClick={() => onSkipLocation(armedResult)}
+                onClick={onSkipLocation}
                 disabled={submitting}
               >
                 Skip location

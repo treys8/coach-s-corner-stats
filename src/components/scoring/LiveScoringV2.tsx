@@ -90,6 +90,7 @@ export function LiveScoringV2({
     submitAtBat,
     submitPitch,
     onFielderDrop,
+    skipLocation,
     submitMidPA,
     endHalfInning,
     submitPitchingChange,
@@ -187,7 +188,7 @@ export function LiveScoringV2({
           canRecord={(r) => canRecordResult(r, state)}
           armedResult={armedResult}
           setArmedResult={setArmedResult}
-          onSkipLocation={(result) => void submitAtBat(result, null)}
+          onSkipLocation={skipLocation}
         />
 
         <div className="relative min-h-0 flex items-center justify-center overflow-hidden p-2">
