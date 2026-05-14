@@ -40,7 +40,8 @@ export type GameEventType =
   | "correction"
   | "pitch"
   | "defensive_conference"
-  | "opposing_lineup_edit";
+  | "opposing_lineup_edit"
+  | "umpire_call";
 
 // ---- Generated Database type (regenerated; do not hand-edit) ----------------
 

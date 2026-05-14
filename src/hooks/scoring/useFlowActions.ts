@@ -10,6 +10,7 @@ import type {
   PitchingChangePayload,
   ReplayState,
   SubstitutionPayload,
+  UmpireCallPayload,
 } from "@/lib/scoring/types";
 import type { UseGameEventsResult } from "./useGameEvents";
 
@@ -32,6 +33,7 @@ export interface UseFlowActionsResult {
   submitPitchingChange: (newPitcherId: string) => Promise<boolean>;
   submitMoundVisit: () => Promise<{ forcedRemoval: boolean }>;
   submitSubstitution: (payload: SubstitutionPayload) => Promise<boolean>;
+  submitUmpireCall: (payload: UmpireCallPayload) => Promise<boolean>;
   editLastPlay: (supersededEventId: string, correctedAtBat: AtBatPayload) => Promise<boolean>;
   finalize: () => Promise<boolean>;
   submitUndo: () => Promise<void>;
@@ -158,22 +160,55 @@ export function useFlowActions({
     if (!result.ok) return { forcedRemoval: false };
     // Alert at the warning thresholds. The post-fold count comes from the
     // returned state; fall back to the +1 estimate if state is missing.
-    const newCount = result.state
-      ? result.state.defensive_conferences.filter(
-          (c) => c.pitcher_id === state.current_pitcher_id,
-        ).length
-      : state.defensive_conferences.filter(
-          (c) => c.pitcher_id === state.current_pitcher_id,
-        ).length + 1;
+    // NFHS 3-4-1 (play-catalog §8.7): 3 per pitcher per inning OR 4 per
+    // pitcher per game both force removal.
+    const conferences = result.state?.defensive_conferences
+      ?? [
+        ...state.defensive_conferences,
+        { pitcher_id: state.current_pitcher_id, inning: state.inning },
+      ];
+    const pitcherId = state.current_pitcher_id;
+    const newGameCount = conferences.filter((c) => c.pitcher_id === pitcherId).length;
+    const newInningCount = conferences.filter(
+      (c) => c.pitcher_id === pitcherId && c.inning === state.inning,
+    ).length;
     let forcedRemoval = false;
-    if (newCount >= 4) {
+    if (newGameCount >= 4) {
       toast.warning("4th conference — pitcher must be removed (NFHS 3-4-1)");
       forcedRemoval = true;
-    } else if (newCount === 3) {
-      toast.warning("3rd conference — next visit forces a pitching change");
+    } else if (newInningCount >= 3) {
+      toast.warning("3rd visit this inning — pitcher must be removed (NFHS 3-4-1)");
+      forcedRemoval = true;
+    } else if (newGameCount === 3 || newInningCount === 2) {
+      toast.warning("Next mound visit forces a pitching change");
     }
     applyPostResult(result);
     return { forcedRemoval };
+  };
+
+  const submitUmpireCall = async (payload: UmpireCallPayload): Promise<boolean> => {
+    if (submitting) return false;
+    setSubmitting(true);
+    const nextSeq = lastSeq + 1;
+    const result = await postEvent(gameId, {
+      client_event_id: `uc-${nextSeq}`,
+      event_type: "umpire_call",
+      payload,
+    });
+    setSubmitting(false);
+    if (!result.ok) return false;
+    const labels: Record<UmpireCallPayload["kind"], string> = {
+      IFR: "Infield fly",
+      obstruction_a: "Obstruction (play being made)",
+      obstruction_b: "Obstruction (no play)",
+      batter_interference: "Batter interference",
+      runner_interference: "Runner interference",
+      spectator_interference: "Spectator interference",
+      coach_interference: "Coach interference",
+    };
+    toast.success(`Umpire's call: ${labels[payload.kind]}`);
+    applyPostResult(result);
+    return true;
   };
 
   const submitSubstitution = async (payload: SubstitutionPayload): Promise<boolean> => {
@@ -273,6 +308,7 @@ export function useFlowActions({
     submitPitchingChange,
     submitMoundVisit,
     submitSubstitution,
+    submitUmpireCall,
     editLastPlay,
     finalize,
     submitUndo,

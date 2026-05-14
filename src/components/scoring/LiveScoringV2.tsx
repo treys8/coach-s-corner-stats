@@ -25,6 +25,9 @@ import { OpposingBatterPanel } from "@/components/score/OpposingBatterPanel";
 import { EditOpposingLineupDialog } from "@/components/scoring/EditOpposingLineupDialog";
 import { GameStatusBar } from "@/components/scoring/GameStatusBar";
 import { PitchRail } from "@/components/scoring/PitchRail";
+import { MoundVisitCounter } from "@/components/scoring/MoundVisitCounter";
+import { IFRBanner } from "@/components/scoring/IFRBanner";
+import { TagUpChip } from "@/components/scoring/TagUpChip";
 import { LineScoreSheet } from "@/components/scoring/sheets/LineScoreSheet";
 import { ARMED_IN_PLAY_PENDING } from "@/hooks/scoring/useAtBatActions";
 import { FlowControls } from "@/components/scoring/FlowControls";
@@ -34,6 +37,8 @@ import { SubstitutionDialog } from "@/components/scoring/dialogs/SubstitutionDia
 import { EditLastPlayDialog } from "@/components/scoring/dialogs/EditLastPlayDialog";
 import { RunnerActionDialog } from "@/components/scoring/dialogs/RunnerActionDialog";
 import { RbiOnLastPlayDialog } from "@/components/scoring/dialogs/RbiOnLastPlayDialog";
+import { HitOrErrorDialog } from "@/components/scoring/dialogs/HitOrErrorDialog";
+import { TimingPlayDialog } from "@/components/scoring/dialogs/TimingPlayDialog";
 import { FinalizeDialog } from "@/components/scoring/dialogs/FinalizeDialog";
 
 interface LiveScoringV2Props {
@@ -99,15 +104,21 @@ export function LiveScoringV2({
     setErrorStepIndex,
     undoChainStep,
     commitArmed,
+    pendingHitOrError,
+    resolveHitOrError,
+    cancelHitOrError,
     submitMidPA,
     submitRunnerDrag,
     pendingRbiPrompt,
     resolveRbiPrompt,
     cancelRbiPrompt,
+    pendingTimingPlay,
+    resolveTimingPlay,
     endHalfInning,
     submitPitchingChange,
     submitMoundVisit,
     submitSubstitution,
+    submitUmpireCall,
     editLastPlay,
     finalize,
     submitUndo,
@@ -254,15 +265,25 @@ export function LiveScoringV2({
               </Button>
             </div>
             {!weAreBatting && (
-              <OpposingBatterPanel
-                opponentPlayerId={currentOpponentBatterId}
-                slotLabel={
-                  currentOppSlot
-                    ? formatOpposingSlotLabel(currentOppSlot)
-                    : "Set opposing lineup to track batters."
-                }
-                cache={opposingProfileCache.current}
-              />
+              <>
+                <IFRBanner
+                  state={state}
+                  weAreBatting={weAreBatting}
+                  disabled={submitting}
+                  onConfirm={() => void submitUmpireCall({ kind: "IFR" })}
+                />
+                <TagUpChip state={state} onLeftEarly={() => setEditOpen(true)} />
+                <MoundVisitCounter state={state} weAreBatting={weAreBatting} />
+                <OpposingBatterPanel
+                  opponentPlayerId={currentOpponentBatterId}
+                  slotLabel={
+                    currentOppSlot
+                      ? formatOpposingSlotLabel(currentOppSlot)
+                      : "Set opposing lineup to track batters."
+                  }
+                  cache={opposingProfileCache.current}
+                />
+              </>
             )}
             <Card className="p-3">
               <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">
@@ -371,6 +392,17 @@ export function LiveScoringV2({
         bases={state.bases}
         onSubmit={submitMidPA}
         disabled={submitting}
+      />
+      <HitOrErrorDialog
+        pending={pendingHitOrError}
+        disabled={submitting}
+        onResolve={resolveHitOrError}
+        onCancel={cancelHitOrError}
+      />
+      <TimingPlayDialog
+        pending={pendingTimingPlay ? { runnerLabel: pendingTimingPlay.runnerLabel } : null}
+        disabled={submitting}
+        onResolve={(counted) => void resolveTimingPlay(counted)}
       />
       <RbiOnLastPlayDialog
         pending={pendingRbiPrompt}
