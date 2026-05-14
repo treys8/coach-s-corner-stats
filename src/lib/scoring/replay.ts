@@ -107,11 +107,6 @@ export function replay(events: GameEventRecord[]): ReplayState {
 
 // ---- Reducer ---------------------------------------------------------------
 
-// Exported so callers can fold an authoritative event onto an existing state
-// (e.g. consuming the live_state + new event returned from the events API)
-// without rebuilding from the full log. `replay()` is `events.reduce(applyEvent,
-// INITIAL_STATE)` modulo the supersession filter — see fold-equivalence test
-// in replay.test.ts.
 // Events that DON'T auto-resume a suspended game. Everything else flips
 // status from 'suspended' back to 'in_progress' before dispatch (per the
 // resume-on-any-event spec at /docs/live-scoring/schema-deltas-v2.md §4).
@@ -125,6 +120,11 @@ const NON_RESUMING_EVENT_TYPES: ReadonlySet<GameEventType> = new Set([
   "correction",
 ]);
 
+// Exported so callers can fold an authoritative event onto an existing state
+// (e.g. consuming the live_state + new event returned from the events API)
+// without rebuilding from the full log. `replay()` is `events.reduce(applyEvent,
+// INITIAL_STATE)` modulo the supersession filter — see fold-equivalence test
+// in replay.test.ts.
 export function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
   const resumedStatus =
     state.status === "suspended" && !NON_RESUMING_EVENT_TYPES.has(event.event_type)
@@ -410,10 +410,7 @@ function applyAtBat(state: ReplayState, eventId: string, raw: AtBatPayload): Rep
 
   return {
     ...state,
-    status:
-      state.status === "draft" || state.status === "suspended"
-        ? "in_progress"
-        : state.status,
+    status: state.status === "draft" ? "in_progress" : state.status,
     bases,
     outs: state.outs + outsAdded,
     team_score,

@@ -25,7 +25,7 @@ const EVENT_TYPES: GameEventType[] = [
   "substitution", "pitching_change", "position_change",
   "game_started", "inning_end", "game_finalized", "correction",
   "pitch", "defensive_conference", "opposing_lineup_edit",
-  "umpire_call",
+  "umpire_call", "game_suspended",
 ];
 
 const eventSchema = z.object({

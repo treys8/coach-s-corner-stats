@@ -43,6 +43,63 @@ BEGIN
     CHECK (status IN ('draft', 'in_progress', 'final', 'suspended'));
 END $$;
 
+-- ---- 1b. Public-read RLS: include 'suspended' ------------------------------
+--
+-- The public-read policies on games / game_live_state / game_links currently
+-- whitelist status IN ('in_progress', 'final'). A suspended game would drop
+-- out of /scores entirely. Per the v2 spec they should render as in_progress
+-- with a banner, so add 'suspended' to all three policies. Rebuilt from the
+-- shape in 20260509170000_public_scores_layer_4_privacy.sql and
+-- 20260509190000_public_scores_layer_2_game_links_public_read.sql.
+
+DROP POLICY IF EXISTS "games public read live or finalized" ON public.games;
+CREATE POLICY "games public read live or finalized" ON public.games
+  FOR SELECT USING (
+    status IN ('in_progress', 'final', 'suspended')
+    AND EXISTS (
+      SELECT 1 FROM public.teams t
+      JOIN public.schools s ON s.id = t.school_id
+      WHERE t.id = public.games.team_id
+        AND s.public_scores_enabled = TRUE
+    )
+  );
+
+DROP POLICY IF EXISTS "game_live_state public read live or final" ON public.game_live_state;
+CREATE POLICY "game_live_state public read live or final" ON public.game_live_state
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM public.games g
+      JOIN public.teams t   ON t.id = g.team_id
+      JOIN public.schools s ON s.id = t.school_id
+      WHERE g.id = public.game_live_state.game_id
+        AND g.status IN ('in_progress', 'final', 'suspended')
+        AND s.public_scores_enabled = TRUE
+    )
+  );
+
+DROP POLICY IF EXISTS "game_links public read when both sides public" ON public.game_links;
+CREATE POLICY "game_links public read when both sides public" ON public.game_links
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1
+      FROM public.games gh
+      JOIN public.teams th   ON th.id = gh.team_id
+      JOIN public.schools sh ON sh.id = th.school_id
+      WHERE gh.id = home_game_id
+        AND gh.status IN ('in_progress', 'final', 'suspended')
+        AND sh.public_scores_enabled = TRUE
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM public.games gv
+      JOIN public.teams tv   ON tv.id = gv.team_id
+      JOIN public.schools sv ON sv.id = tv.school_id
+      WHERE gv.id = visitor_game_id
+        AND gv.status IN ('in_progress', 'final', 'suspended')
+        AND sv.public_scores_enabled = TRUE
+    )
+  );
+
 -- ---- 2. game_events.event_type CHECK ---------------------------------------
 
 DO $$

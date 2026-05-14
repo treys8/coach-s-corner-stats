@@ -71,8 +71,9 @@ export default function OpponentsPage() {
       };
       const played =
         g.status === "final" ||
-        (g.status === "in_progress") ||
-        (g.game_date < today);
+        g.status === "in_progress" ||
+        g.status === "suspended" ||
+        g.game_date < today;
       if (played) existing.played += 1;
       else existing.upcoming += 1;
       byKey.set(key, existing);
