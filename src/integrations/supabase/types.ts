@@ -18,7 +18,7 @@ export type SchoolRole = "owner" | "admin";
 export type TeamRole = "coach" | "scorer" | "assistant";
 export type GameLocation = "home" | "away" | "neutral";
 export type GameResult = "W" | "L" | "T";
-export type GameStatus = "draft" | "in_progress" | "final";
+export type GameStatus = "draft" | "in_progress" | "final" | "suspended";
 export type GameResultType = "regulation" | "shortened" | "forfeit" | "suspended";
 export type InningHalf = "top" | "bottom";
 
@@ -41,7 +41,8 @@ export type GameEventType =
   | "pitch"
   | "defensive_conference"
   | "opposing_lineup_edit"
-  | "umpire_call";
+  | "umpire_call"
+  | "game_suspended";
 
 // ---- Generated Database type (regenerated; do not hand-edit) ----------------
 

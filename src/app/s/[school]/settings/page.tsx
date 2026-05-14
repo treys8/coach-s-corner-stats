@@ -386,9 +386,15 @@ export default function SchoolSettingsPage() {
 
       <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">School Settings</p>
       <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep mb-2">{school.name}</h2>
-      <p className="text-sm text-muted-foreground mb-8">
+      <p className="text-sm text-muted-foreground mb-4">
         Branding shows up across every page in your school&apos;s namespace.
       </p>
+
+      <div className="mb-8 flex flex-wrap gap-2">
+        <Link href={`/s/${school.slug}/settings/league-rules`}>
+          <Button variant="outline" size="sm">League rules &rarr;</Button>
+        </Link>
+      </div>
 
       <Card className="p-8 shadow-elevated space-y-5">
         <div>
