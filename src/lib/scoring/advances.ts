@@ -103,3 +103,14 @@ function toBase(
   if (baseIndex === 2) return { from, to: "second", player_id: playerId };
   return { from, to: "first", player_id: playerId };
 }
+
+// Balk: every occupied base advances exactly one base. R3 scores.
+// Returns [] when no runners are on — the live-scoring UI uses that to
+// disable the one-tap balk button.
+export function balkAdvances(prev: Bases): RunnerAdvance[] {
+  const advances: RunnerAdvance[] = [];
+  if (prev.third)  advances.push({ from: "third",  to: "home",   player_id: prev.third.player_id });
+  if (prev.second) advances.push({ from: "second", to: "third",  player_id: prev.second.player_id });
+  if (prev.first)  advances.push({ from: "first",  to: "second", player_id: prev.first.player_id });
+  return advances;
+}
