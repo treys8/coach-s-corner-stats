@@ -42,9 +42,8 @@ const PRIMARY: { type: PitchType; label: string; cls: string }[] = [
   { type: "ball",            label: "Ball",     cls: "bg-sa-blue hover:bg-sa-blue/90 text-white" },
   { type: "called_strike",   label: "Called K", cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
   { type: "swinging_strike", label: "Swing K",  cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
-  { type: "foul",            label: "Foul",     cls: "bg-muted hover:bg-muted/80 text-foreground" },
   { type: "in_play",         label: "In play",  cls: "bg-sa-blue-deep/80 hover:bg-sa-blue-deep text-white" },
-  { type: "hbp",             label: "HBP",      cls: "bg-muted hover:bg-muted/80 text-foreground" },
+  { type: "foul",            label: "Foul",     cls: "bg-muted hover:bg-muted/80 text-foreground" },
 ];
 
 /**
@@ -139,9 +138,20 @@ export function PitchRail({
                     disabled={disabled}
                     onClick={() => {
                       setMoreOpen(false);
+                      onPitch("hbp");
+                    }}
+                    className="h-9 text-sm font-semibold text-foreground justify-start"
+                  >
+                    HBP
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={disabled}
+                    onClick={() => {
+                      setMoreOpen(false);
                       onPitch("pitchout");
                     }}
-                    className="h-9 text-sm justify-start"
+                    className="h-9 text-sm font-semibold text-foreground justify-start"
                   >
                     Pitchout
                   </Button>
@@ -152,7 +162,7 @@ export function PitchRail({
                       setMoreOpen(false);
                       onIntentionalWalk();
                     }}
-                    className="h-9 text-sm justify-start"
+                    className="h-9 text-sm font-semibold text-foreground justify-start"
                   >
                     Intentional walk
                   </Button>
@@ -163,7 +173,7 @@ export function PitchRail({
                       setMoreOpen(false);
                       onBalk();
                     }}
-                    className="h-9 text-sm justify-start"
+                    className="h-9 text-sm font-semibold text-foreground justify-start"
                     title={hasRunners ? "All runners advance one base" : "No runners on — balk has no effect"}
                   >
                     Balk
