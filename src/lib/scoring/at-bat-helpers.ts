@@ -2,6 +2,8 @@ import type {
   AtBatPayload,
   AtBatResult,
   Bases,
+  BattedBallType,
+  FielderTouch,
   GameEventRecord,
   OpposingLineupSlot,
   PitchPayload,
@@ -160,6 +162,84 @@ export function describePlay(
     : " (opp)";
   if (runs === 0) return `${base}${who}`;
   return `${base}${who} — ${runs} run${runs === 1 ? "" : "s"}`;
+}
+
+// ---- Stage 3 chain notation ------------------------------------------------
+
+// Map a fielder position abbreviation to its 1..9 scorebook digit. Returns
+// the original token for unknown values so notation degrades gracefully if
+// a coach somehow gets an off-roster string in there.
+const POSITION_DIGIT: Record<string, string> = {
+  P: "1", C: "2",
+  "1B": "3", "2B": "4", "3B": "5", SS: "6",
+  LF: "7", CF: "8", RF: "9",
+};
+
+/** Scorebook notation for a fielder chain. Examples:
+ *  - `[{P:6,A:fielded}, {P:3,A:received,target:first}]`           → "6-3"
+ *  - `[{P:8,A:caught}]`                                           → "F8"
+ *  - `[{P:4,A:fielded}, {P:6,A:received,target:second}, {P:3,...}]` → "4-6-3"
+ *  - with `errorStepIndex=1` (the throw)                          → "6 E4"
+ *
+ *  Result-aware prefixes: FO/LO/PO render as "F8" / "L6" / "P3" when the
+ *  chain has a single step. SF gets an "SF" prefix on single-step chains.
+ *  Two+ step chains always render as digit-dash digits. Foul indicator
+ *  appends "(f)" when `foulOut=true`. */
+export function chainNotation(
+  chain: FielderTouch[] | undefined,
+  result: AtBatResult,
+  errorStepIndex: number | null | undefined,
+  foulOut: boolean | undefined,
+): string | null {
+  if (!chain || chain.length === 0) return null;
+  const digits = chain.map((t) => POSITION_DIGIT[t.position] ?? t.position);
+  const errIdx = errorStepIndex ?? null;
+
+  // Single-step + outfielder caught fly → F8 / L6 / P3 by result type.
+  if (chain.length === 1 && errIdx === null) {
+    const d = digits[0];
+    if (result === "FO" || result === "IF") return foulOut ? `F${d}(f)` : `F${d}`;
+    if (result === "LO") return `L${d}`;
+    if (result === "PO") return foulOut ? `F${d}(f)` : `P${d}`;
+    if (result === "SF") return `SF${d}`;
+  }
+
+  // Error somewhere in the chain → render non-error portion as digit-dash
+  // and tag the error step. Two patterns covered:
+  //   - error on first touch (mishandled grounder): "E6"
+  //   - error on a throw: "6 E4"
+  if (errIdx !== null && errIdx >= 0 && errIdx < digits.length) {
+    if (errIdx === 0) {
+      const tail = digits.slice(1).join("-");
+      return tail ? `E${digits[0]}-${tail}` : `E${digits[0]}`;
+    }
+    const head = digits.slice(0, errIdx).join("-");
+    return `${head} E${digits[errIdx]}`;
+  }
+
+  return digits.join("-");
+}
+
+/** Smart-default batted_ball_type from result. The chip-prompt UI pre-
+ *  selects this so the coach confirms with a tap rather than reading 5
+ *  options. Returns null when the outcome doesn't imply a type. */
+export function defaultBattedBallType(result: AtBatResult): BattedBallType | null {
+  switch (result) {
+    case "FO":
+    case "SF":
+    case "IF":
+      return "fly";
+    case "LO":
+      return "line";
+    case "PO":
+      return "pop";
+    case "GO":
+      return "ground";
+    case "SAC":
+      return "bunt";
+    default:
+      return null;
+  }
 }
 
 // Used by the undo toast: a one-liner describing what an event was, before

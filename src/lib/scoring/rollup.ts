@@ -454,12 +454,13 @@ export function rollupPitching(
 
 // ---- Fielding rollup ------------------------------------------------------
 //
-// Phase A: derive what we can from existing event payloads without changing
-// any payload schema. Per-fielder assists chains (e.g., 6-4-3 A→A→PO) are
-// out of scope here — they need explicit fielder-credit capture in the
-// scoring UI (Phase B). Until then, A === 0 for every player; DP/TP count
-// against the primary `fielder_position` and PO doesn't break out per
-// fielder for those plays.
+// Phase A captured PO/E/DP/TP against the primary `fielder_position`.
+// Stage 3 (v2 live scoring) adds drag-chain capture: when `fielder_chain`
+// is present on the at_bat, the rollup credits A on every non-terminal
+// step and PO on the terminal step (PO collapses to A when the play
+// didn't retire anyone). `error_step_index` pulls a single step out of
+// the A/PO line and credits it as E. Legacy events without a chain still
+// flow through the `fielder_position` path.
 
 export interface FieldingLine {
   TC: number;
@@ -518,18 +519,18 @@ const PUTOUT_FIELDER_RESULTS: ReadonlySet<AtBatResult> = new Set([
 /**
  * Compute per-player fielding lines from the replay state.
  *
- * Phase-A credits:
- *   - PO: primary fielder on FO/GO/LO/PO/IF; catcher on K_swinging/K_looking;
- *     catcher on CI (CI is a PA-not-AB outcome where the catcher interfered).
- *   - E:  primary fielder on result === "E".
- *   - DP/TP: increment the count on the primary fielder.
- *   - PB / SB / CS / PIK: credited to the catcher recorded at event time.
- *   - SBATT = SB + CS.
- *   - Per-position innings: outs / 3 from `defensive_innings_outs`.
- *   - Total: sum of all position innings for that player.
- *   - TC = PO + A + E (A = 0 in Phase A).
- *   - FPCT = (PO + A) / TC.
- *   - CS% = CS / (SB + CS).
+ * Credits (Stage 3):
+ *   - K_swinging/K_looking → catcher PO (unless batter reached on K3).
+ *   - CI → catcher CI.
+ *   - With `fielder_chain` present: A on every non-terminal step, PO on
+ *     terminal step (collapses to A when no out was recorded); the step at
+ *     `error_step_index` swaps PO/A for E. DP/TP overlay still credits
+ *     primary fielder for the column count.
+ *   - Without `fielder_chain` (legacy): PO on primary for FO/GO/LO/PO/IF,
+ *     E on primary for result === "E", DP/TP on primary for those results.
+ *   - PB / SB / CS / PIK: catcher recorded at event time.
+ *   - SBATT = SB + CS. TC = PO + A + E. FPCT = (PO + A) / TC.
+ *   - CS% = CS / (SB + CS). Per-position innings: outs / 3.
  */
 export function rollupFielding(
   atBats: DerivedAtBat[],
@@ -581,6 +582,47 @@ export function rollupFielding(
       if (ab.catcher_player_id) ensure(ab.catcher_player_id).CI += 1;
       continue;
     }
+
+    // Stage 3 path: when a fielder_chain is present, credit A on every
+    // non-terminal step and PO on the terminal step. An `error_step_index`
+    // pulls that step out of the A/PO line and credits it as E instead.
+    // Result-level overlays (DP/TP) still increment on the primary fielder.
+    const chain = ab.fielder_chain;
+    const chainIds = ab.fielder_chain_player_ids;
+    if (chain && chain.length > 0 && chainIds && chainIds.length === chain.length) {
+      const lastIdx = chain.length - 1;
+      const errIdx = ab.error_step_index ?? null;
+      for (let i = 0; i < chain.length; i++) {
+        const pid = chainIds[i];
+        if (!pid) continue;
+        if (errIdx === i) {
+          ensure(pid).E += 1;
+        } else if (i === lastIdx) {
+          // Terminal step is the PO — but only when the play produced an
+          // out. On a hit (1B/2B/3B/HR) or FC where the chain ends with no
+          // out, terminal counts as an A (the fielder handled the ball
+          // but didn't retire anyone). E results also skip the terminal-
+          // PO credit; the E credit lands via error_step_index.
+          if (ab.outs_recorded > 0 && ab.result !== "E") {
+            ensure(pid).PO += 1;
+          } else if (lastIdx > 0) {
+            ensure(pid).A += 1;
+          }
+        } else {
+          ensure(pid).A += 1;
+        }
+      }
+      // DP/TP overlay credit still goes to the primary fielder so the
+      // existing FieldingLine columns stay populated.
+      if (ab.fielder_player_id) {
+        if (ab.result === "DP") ensure(ab.fielder_player_id).DP += 1;
+        else if (ab.result === "TP") ensure(ab.fielder_player_id).TP += 1;
+      }
+      continue;
+    }
+
+    // Legacy / chain-absent path: credit the primary fielder via the
+    // existing fielder_position snapshot.
     if (!ab.fielder_player_id) continue;
 
     if (PUTOUT_FIELDER_RESULTS.has(ab.result)) {

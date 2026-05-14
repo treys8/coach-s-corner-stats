@@ -273,11 +273,28 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
 
   // Fielder + catcher snapshots: only meaningful when we were fielding.
   // When we batted, the fielder/catcher in play are the opponent's.
+  // When a Stage 3 fielder_chain is present, the first-touch position is
+  // canonical (replaces fielder_position semantics for primary credits);
+  // otherwise fall back to fielder_position for legacy events.
+  const primaryPosition =
+    p.fielder_chain && p.fielder_chain.length > 0
+      ? p.fielder_chain[0].position
+      : p.fielder_position;
   const fielderPlayerId =
-    !weAreBatting && p.fielder_position
-      ? resolveFielderPlayerId(state, p.fielder_position)
+    !weAreBatting && primaryPosition
+      ? resolveFielderPlayerId(state, primaryPosition)
       : null;
   const catcherPlayerId = weAreBatting ? null : resolveFielderPlayerId(state, "C");
+  // Resolve each chain step's position to a player_id in our defensive
+  // lineup at this moment. Null entries mean we batted (opponent fielders)
+  // or the position wasn't on the field for some reason. The rollup uses
+  // this parallel array to credit A/PO/E per step.
+  const fielderChainPlayerIds: (string | null)[] | undefined =
+    p.fielder_chain && !weAreBatting
+      ? p.fielder_chain.map((t) => resolveFielderPlayerId(state, t.position))
+      : p.fielder_chain
+        ? p.fielder_chain.map(() => null)
+        : undefined;
 
   // Defensive-innings ledger: accrue outs to each player currently in our
   // defensive lineup. Only when we were fielding (outs we recorded against
@@ -343,6 +360,10 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     batter_reached_on_k3: p.batter_reached_on_k3,
     fielder_player_id: fielderPlayerId,
     catcher_player_id: catcherPlayerId,
+    fielder_chain: p.fielder_chain,
+    fielder_chain_player_ids: fielderChainPlayerIds,
+    batted_ball_type: p.batted_ball_type,
+    error_step_index: p.error_step_index ?? null,
   };
 
   return {

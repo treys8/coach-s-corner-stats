@@ -895,6 +895,107 @@ describe("rollupFielding", () => {
     expect(fielding.get("p-ss")!.PO).toBe(0);
   });
 
+  // ---- Stage 3 fielder_chain attribution ------------------------------------
+
+  it("Stage 3: credits A on each non-terminal chain step and PO on the terminal step", () => {
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "GO",
+        fielder_chain: [
+          { position: "SS", action: "fielded" },
+          { position: "1B", action: "received", target: "first" },
+        ],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    const ss = fielding.get("p-ss")!;
+    const first = fielding.get("p-1b")!;
+    expect(ss.A).toBe(1);
+    expect(ss.PO).toBe(0);
+    expect(first.PO).toBe(1);
+    expect(first.A).toBe(0);
+    // TC should now include the assist on top of PO.
+    expect(ss.TC).toBe(1);
+    expect(first.TC).toBe(1);
+  });
+
+  it("Stage 3: caught fly to CF credits only the outfielder PO", () => {
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "FO",
+        fielder_chain: [{ position: "CF", action: "caught" }],
+        batted_ball_type: "fly",
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    expect(fielding.get("p-cf")!.PO).toBe(1);
+    expect(fielding.get("p-cf")!.A).toBe(0);
+    // No other fielder gets PO from this play.
+    expect(fielding.get("p-ss")?.PO ?? 0).toBe(0);
+  });
+
+  it("Stage 3: error_step_index swaps PO/A for E on that step", () => {
+    // 6-3 grounder where the SS makes a bad throw: result still "1B"
+    // because batter is safe, but SS gets E and 1B gets... nothing in this
+    // version (chain ends with no out, so terminal collapses to A).
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "1B",
+        fielder_chain: [
+          { position: "SS", action: "fielded" },
+          { position: "1B", action: "received", target: "first" },
+        ],
+        error_step_index: 0,
+        runner_advances: [{ from: "batter", to: "first", player_id: null }],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    const ss = fielding.get("p-ss")!;
+    const first = fielding.get("p-1b")!;
+    expect(ss.E).toBe(1);
+    expect(ss.A).toBe(0);
+    expect(first.A).toBe(1); // terminal step collapsed to A (no out)
+    expect(first.PO).toBe(0);
+  });
+
+  it("Stage 3: legacy events without fielder_chain still use fielder_position", () => {
+    const events = [
+      startGame(),
+      fieldingPA({ result: "GO", fielder_position: "SS" }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    // Legacy path: PO on the primary fielder, A stays at 0.
+    expect(fielding.get("p-ss")!.PO).toBe(1);
+    expect(fielding.get("p-ss")!.A).toBe(0);
+  });
+
   it("credits PB to the catcher in play at the moment", () => {
     const events = [
       startGame(),

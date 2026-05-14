@@ -43,6 +43,27 @@ export interface RunnerAdvance {
   opponent_synthetic?: boolean;
 }
 
+// ---- Stage 3 fielder chain -------------------------------------------------
+
+/** Batted-ball type captured by the post-drag chip prompt. Smart-defaults
+ *  from result (FO→fly, LO→line, PO→pop, SF→fly, SAC→bunt); coach can
+ *  override. Null when batter didn't put ball in play (K/BB/HBP/CI/IBB). */
+export type BattedBallType = "ground" | "fly" | "line" | "pop" | "bunt";
+
+/** One step in an ordered fielder chain. Stage 3 captures the chain on
+ *  drag-and-drop of fielder icons on the diamond: first step is who first
+ *  touched the ball, subsequent steps are throw recipients. `target` is the
+ *  base the throw is going to (set when the drop landed near a base), used
+ *  by notation rendering ("6-3") and the rollup attribution. */
+export interface FielderTouch {
+  /** Position abbreviation: 'P','C','1B','2B','3B','SS','LF','CF','RF'. */
+  position: string;
+  /** What this fielder did on this step. */
+  action: "fielded" | "caught" | "threw_to" | "received" | "tagged";
+  /** Throw destination / tag spot when applicable. */
+  target?: Base | "home";
+}
+
 // ---- Event payloads --------------------------------------------------------
 
 export interface LineupSlot {
@@ -155,6 +176,21 @@ export interface AtBatPayload {
    *  §2.17, §3.6). Pure notation hint — doesn't change base/out state.
    *  Stage 3 will surface it as the F2(f) / F7(f) scorebook suffix. */
   foul_out?: boolean;
+  /** Ordered fielder touches captured by drag-chain (Stage 3). Empty when
+   *  the coach skipped location (or pre-Stage-3 events). When present the
+   *  first element's position is the canonical first-touch (replaces
+   *  `fielder_position` semantics) and the rollup credits A on every
+   *  non-terminal step, PO on the terminal step. */
+  fielder_chain?: FielderTouch[];
+  /** Captured from the post-drag chip (Ground/Fly/Line/Pop/Bunt). Smart-
+   *  defaulted from `result` when the outcome implies it (FO→fly, etc.).
+   *  Absent on legacy events. */
+  batted_ball_type?: BattedBallType;
+  /** Index into `fielder_chain` of the step that was an error. When set,
+   *  that step's fielder gets +1 E (instead of A/PO), and the play retains
+   *  its original outcome (e.g., a hit + throwing error stays "1B" with the
+   *  error attributed to the throw). */
+  error_step_index?: number | null;
 }
 
 export interface SubstitutionPayload {
@@ -343,6 +379,20 @@ export interface DerivedAtBat {
    *  PA. Used by rollupFielding to credit catcher PO on strikeouts and CI
    *  on catcher's interference. Null when we were batting. In-memory only. */
   catcher_player_id?: string | null;
+  /** Pass-through of `AtBatPayload.fielder_chain`. The rollup reads this
+   *  when present to attribute A/PO per chain step. Absent on legacy
+   *  events; rollup falls back to `fielder_position` then. */
+  fielder_chain?: FielderTouch[];
+  /** Parallel array of player_ids resolved from each `fielder_chain` step
+   *  against our defensive lineup at the moment of the PA. Same length as
+   *  `fielder_chain`. Each element is null when we were batting (the
+   *  fielder belongs to the opponent) or the position wasn't in our
+   *  lineup. In-memory only — not persisted. */
+  fielder_chain_player_ids?: (string | null)[];
+  /** Pass-through of `AtBatPayload.batted_ball_type`. */
+  batted_ball_type?: BattedBallType;
+  /** Pass-through of `AtBatPayload.error_step_index`. */
+  error_step_index?: number | null;
 }
 
 export interface ReplayState {

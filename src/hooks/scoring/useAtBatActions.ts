@@ -5,6 +5,8 @@ import { defaultAdvances } from "@/lib/scoring/advances";
 import { postEvent } from "@/lib/scoring/events-client";
 import {
   autoRBI,
+  chainNotation,
+  defaultBattedBallType,
   describePlay,
   finalCount,
   isInPlay,
@@ -12,6 +14,8 @@ import {
 import type {
   AtBatPayload,
   AtBatResult,
+  BattedBallType,
+  FielderTouch,
   K3ReachSource,
   PitchType,
   ReplayState,
@@ -46,10 +50,22 @@ export interface UseAtBatActionsArgs {
 
 /** Additive fields the In Play sheet can attach to an armed result. Threaded
  *  from `onOutcomePicked` through `armedExtras` to the final `submitAtBat`
- *  call so the drag-to-fielder flow preserves them. Today only `foul_out` —
- *  Stage 3 will add `fielder_chain`, `batted_ball_type`, `error_step_index`. */
+ *  call so the drag-to-fielder flow preserves them. Stage 3 added the
+ *  fielder-chain triplet (chain, batted_ball_type, error_step_index) but
+ *  those live in dedicated state, not here, since they're built up across
+ *  multiple taps. `foul_out` stays as a simple notation hint. */
 export interface AtBatExtras {
   foul_out?: boolean;
+}
+
+/** First-drag spray + fielder, captured separately from the chain so the
+ *  spray chart point stays anchored to where the ball was first touched
+ *  even if subsequent drag steps move the focus to other parts of the
+ *  field. */
+interface SprayCapture {
+  x: number;
+  y: number;
+  fielder: FielderPosition;
 }
 
 export interface UseAtBatActionsResult {
@@ -61,13 +77,45 @@ export interface UseAtBatActionsResult {
     spray: { x: number; y: number; fielder: FielderPosition } | null,
     k3Reach?: K3ReachSource,
     extras?: AtBatExtras,
+    chainExtras?: ChainExtras,
   ) => Promise<void>;
   submitPitch: (pitchType: PitchType) => Promise<void>;
+  /** Drag-and-drop callback from the diamond. First call captures the
+   *  spray + first-touch fielder; subsequent calls extend the chain. The
+   *  hook converts each drop into a `FielderTouch`, inferring the `target`
+   *  base from drop coordinates (when within `BASE_DROP_THRESHOLD`). */
   onFielderDrop: (x: number, y: number, fielder: FielderPosition) => void;
-  /** Commit the armed result with no spray. Reads internal armedResult +
-   *  armedExtras so the caller doesn't need to know which extras were
-   *  stashed on outcome selection (foul_out, etc). No-op if no live arm. */
+  /** Legacy v1 path: a fielder drop is treated as drop-and-commit (single
+   *  chain step, no rail-side Commit button). v2 uses `onFielderDrop` +
+   *  `commitArmed` instead so the chain can grow across multiple drops. */
+  legacyDirectDrop: (x: number, y: number, fielder: FielderPosition) => void;
+  /** Commit the armed result with no spray and no chain. Used by v1's
+   *  "Skip location" footer button and v2's rail "Skip location" link
+   *  (when the coach armed an outcome but doesn't want to chart the
+   *  fielders). No-op if no live arm. */
   skipLocation: () => void;
+  /** Stage 3 chain state — read by the rail to render notation, the
+   *  batted-ball-type chip, and the Add-error affordance. */
+  chain: FielderTouch[];
+  battedBallType: BattedBallType | null;
+  errorStepIndex: number | null;
+  setBattedBallType: (t: BattedBallType | null) => void;
+  setErrorStepIndex: (idx: number | null) => void;
+  /** Pop the last chain step. Coach uses this when they dropped on the
+   *  wrong base; cheaper than cancel + re-arm. */
+  undoChainStep: () => void;
+  /** Commit the armed at_bat. Threads chain + chip + error_step_index
+   *  into the payload. The hook drives this from the rail's Commit
+   *  button; works whether or not the coach captured a chain (empty
+   *  chain = same as legacy Skip location). */
+  commitArmed: () => void;
+}
+
+/** Internal chain-extras bundle threaded into submitAtBat. */
+interface ChainExtras {
+  fielder_chain?: FielderTouch[];
+  batted_ball_type?: BattedBallType;
+  error_step_index?: number | null;
 }
 
 /**
@@ -92,6 +140,47 @@ function shouldOptimisticPitch(pitchType: PitchType, state: ReplayState): boolea
   return true;
 }
 
+// Distance (in 0..100 SVG units) within which a fielder drop snaps to a
+// base — the drop counts as a throw to that base for chain notation.
+// Tuned to match BASE_XY anchors in diamond-geometry: ~6 units = roughly
+// the radius of a base diamond, enough to forgive a sloppy finger but
+// tight enough that a drop near the mound doesn't read as "to second".
+const BASE_DROP_THRESHOLD = 7;
+
+// 0..100 SVG-coord base centers, mirrored from diamond-geometry so the
+// hook can run the proximity check without importing the SVG geometry
+// module directly (keeps the hook layer framework-agnostic).
+const BASE_COORDS: Record<"first" | "second" | "third" | "home", [number, number]> = {
+  first:  [66, 70],
+  second: [50, 54],
+  third:  [34, 70],
+  home:   [50, 92],
+};
+
+// Pick the nearest base within BASE_DROP_THRESHOLD of (xPct, yPct) — both
+// passed in 0..1. Returns null when no base is close enough (mid-relay
+// drop, generic catch in the outfield, etc).
+function nearestBase(xPct: number, yPct: number): "first" | "second" | "third" | "home" | null {
+  const x = xPct * 100;
+  const y = yPct * 100;
+  let best: { base: "first" | "second" | "third" | "home"; d: number } | null = null;
+  for (const [base, [bx, by]] of Object.entries(BASE_COORDS) as [
+    "first" | "second" | "third" | "home",
+    [number, number],
+  ][]) {
+    const d = Math.hypot(x - bx, y - by);
+    if (d <= BASE_DROP_THRESHOLD && (!best || d < best.d)) {
+      best = { base, d };
+    }
+  }
+  return best?.base ?? null;
+}
+
+// Outfield positions don't field "fielded" grounders — they catch fly/line
+// balls. The chain's first step infers action from the position so the
+// notation comes out right (F8 vs 8-2).
+const OUTFIELD = new Set(["LF", "CF", "RF"]);
+
 export function useAtBatActions({
   gameId,
   state,
@@ -112,10 +201,33 @@ export function useAtBatActions({
   // they ride through the drag-to-fielder gap and land on the AtBatPayload
   // at commit time. Cleared on submit, cancel, or set to null.
   const [armedExtras, setArmedExtras] = useState<AtBatExtras | null>(null);
+  // Stage 3 chain state. Built up across multiple drag drops on the
+  // diamond; committed via `commitArmed` from the rail. All four reset
+  // on submit / cancel / re-arm.
+  const [chain, setChain] = useState<FielderTouch[]>([]);
+  const [spray, setSpray] = useState<SprayCapture | null>(null);
+  const [battedBallType, setBattedBallType] = useState<BattedBallType | null>(null);
+  const [errorStepIndex, setErrorStepIndex] = useState<number | null>(null);
+
+  const resetChain = () => {
+    setChain([]);
+    setSpray(null);
+    setBattedBallType(null);
+    setErrorStepIndex(null);
+  };
 
   const setArmedResultClearing = (v: ArmedState | null) => {
     setArmedResult(v);
-    if (v === null) setArmedExtras(null);
+    if (v === null) {
+      setArmedExtras(null);
+      resetChain();
+    } else if (v !== ARMED_IN_PLAY_PENDING) {
+      // Transition from IN_PLAY_PENDING → concrete result. Smart-default
+      // the batted-ball-type chip based on the picked outcome (FO→fly,
+      // LO→line, PO→pop, SF→fly, SAC→bunt). Coach can override before
+      // committing.
+      setBattedBallType((cur) => cur ?? defaultBattedBallType(v));
+    }
   };
 
   const submitAtBat = async (
@@ -123,6 +235,7 @@ export function useAtBatActions({
     spray: { x: number; y: number; fielder: FielderPosition } | null,
     k3Reach?: K3ReachSource,
     extras?: AtBatExtras,
+    chainExtras?: ChainExtras,
   ) => {
     if (submitting) return;
     setSubmitting(true);
@@ -153,6 +266,26 @@ export function useAtBatActions({
       ? finalCount(result, state.current_balls, state.current_strikes)
       : { balls: state.current_balls, strikes: state.current_strikes };
 
+    // Stage 3: when a fielder_chain was captured, the first-touch position
+    // is the canonical `fielder_position` for legacy back-compat. The
+    // spray (x, y) still comes from the first-drop coords, which the
+    // diamond passes through `onFielderDrop`.
+    const chainFromExtras = chainExtras?.fielder_chain;
+    const fielderPosition =
+      chainFromExtras && chainFromExtras.length > 0
+        ? chainFromExtras[0].position
+        : spray?.fielder ?? null;
+    // Append a scorebook-notation suffix to the description when we have a
+    // chain — e.g., "Ground out by Koester — 6-3". Otherwise fall through
+    // to the legacy describePlay output.
+    const baseDescription = describePlay(result, runs, ourBatterId, names);
+    const notation = chainFromExtras
+      ? chainNotation(chainFromExtras, result, chainExtras?.error_step_index ?? null, extras?.foul_out)
+      : null;
+    const finalDescription = notation
+      ? `${baseDescription} — ${notation}`
+      : baseDescription;
+
     const payload: AtBatPayload = {
       inning: state.inning,
       half: state.half,
@@ -168,11 +301,14 @@ export function useAtBatActions({
       strikes: finalStrikes,
       spray_x: spray?.x ?? null,
       spray_y: spray?.y ?? null,
-      fielder_position: spray?.fielder ?? null,
+      fielder_position: fielderPosition,
       runner_advances: advances,
-      description: describePlay(result, runs, ourBatterId, names),
+      description: finalDescription,
       batter_reached_on_k3: k3Reach,
       foul_out: extras?.foul_out,
+      fielder_chain: chainExtras?.fielder_chain,
+      batted_ball_type: chainExtras?.batted_ball_type,
+      error_step_index: chainExtras?.error_step_index ?? null,
     };
 
     const clientEventId = `ab-${state.inning}-${state.half}-${nextSeq}`;
@@ -206,6 +342,7 @@ export function useAtBatActions({
     }
     setArmedResult(null);
     setArmedExtras(null);
+    resetChain();
     applyPostResult(postResult);
     announceAutoEndHalf(postResult);
     setSubmitting(false);
@@ -221,6 +358,10 @@ export function useAtBatActions({
       // them through to submitAtBat.
       setArmedResult(result);
       setArmedExtras(extras ?? null);
+      // Smart-default the batted-ball-type chip from the picked outcome
+      // (FO→fly, LO→line, PO→pop, SF→fly, SAC→bunt). Coach can override
+      // in the rail before committing.
+      setBattedBallType((cur) => cur ?? defaultBattedBallType(result));
       return;
     }
     // Non-in-play outcome (K, BB, HBP, etc.) clears any IN_PLAY_PENDING
@@ -292,6 +433,77 @@ export function useAtBatActions({
 
   const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
     if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
+    // First drop: stash spray + first-touch fielder, append a "fielded" or
+    // "caught" touch depending on whether it was an outfielder. Subsequent
+    // drops append a "received" touch and infer `target` from drop coords.
+    setChain((prev) => {
+      if (prev.length === 0) {
+        setSpray({ x, y, fielder });
+        // First-touch action depends on batted-ball type and fielder type.
+        // - Fly/pop to an outfielder → "caught"
+        // - Outfielder otherwise (line-drive grounder through) → "fielded"
+        // - Infielder → "fielded"
+        // When the chip hasn't been set yet (coach picked the outcome but
+        // didn't reach the chip), pick caught for OF on outright fly-out
+        // results and fielded everywhere else — refines after the chip
+        // lands if needed.
+        const isOf = OUTFIELD.has(fielder);
+        const looksFly =
+          battedBallType === "fly" ||
+          battedBallType === "pop" ||
+          armedResult === "FO" ||
+          armedResult === "PO" ||
+          armedResult === "SF" ||
+          armedResult === "IF";
+        const action: FielderTouch["action"] = isOf && looksFly ? "caught" : "fielded";
+        return [{ position: fielder, action }];
+      }
+      const base = nearestBase(x, y);
+      const touch: FielderTouch = base
+        ? { position: fielder, action: "received", target: base === "home" ? "home" : base }
+        : { position: fielder, action: "received" };
+      return [...prev, touch];
+    });
+  };
+
+  const undoChainStep = () => {
+    setChain((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.slice(0, -1);
+      if (next.length === 0) setSpray(null);
+      // Clamp errorStepIndex inside the same updater so the check uses the
+      // freshly-computed next.length, not a closure-captured chain.length
+      // (which would silently drift if undo were tapped rapidly).
+      setErrorStepIndex((cur) => (cur !== null && cur >= next.length ? null : cur));
+      return next;
+    });
+  };
+
+  const commitArmed = () => {
+    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
+    const chainExtras: ChainExtras | undefined =
+      chain.length > 0 || battedBallType !== null
+        ? {
+            fielder_chain: chain.length > 0 ? chain : undefined,
+            batted_ball_type: battedBallType ?? undefined,
+            error_step_index: errorStepIndex,
+          }
+        : undefined;
+    void submitAtBat(
+      armedResult,
+      spray,
+      undefined,
+      armedExtras ?? undefined,
+      chainExtras,
+    );
+  };
+
+  // Legacy single-tap commit path used by v1 — one drop = immediate
+  // submit with spray + fielder_position only (no chain capture). Keeps
+  // pre-Stage-3 events shaped exactly like before so the legacy rollup
+  // path keeps crediting them.
+  const legacyDirectDrop = (x: number, y: number, fielder: FielderPosition) => {
+    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
     void submitAtBat(armedResult, { x, y, fielder }, undefined, armedExtras ?? undefined);
   };
 
@@ -307,6 +519,14 @@ export function useAtBatActions({
     submitAtBat,
     submitPitch,
     onFielderDrop,
+    legacyDirectDrop,
     skipLocation,
+    chain,
+    battedBallType,
+    errorStepIndex,
+    setBattedBallType,
+    setErrorStepIndex,
+    undoChainStep,
+    commitArmed,
   };
 }

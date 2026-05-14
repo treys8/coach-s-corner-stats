@@ -86,7 +86,7 @@ export function LiveScoring({
     onOutcomePicked,
     submitAtBat,
     submitPitch,
-    onFielderDrop,
+    legacyDirectDrop,
     submitMidPA,
     endHalfInning,
     submitPitchingChange,
@@ -187,7 +187,7 @@ export function LiveScoring({
             weAreBatting={weAreBatting}
             currentBatterId={currentBatterIdForChip}
             dragMode={dragMode}
-            onFielderDrop={onFielderDrop}
+            onFielderDrop={legacyDirectDrop}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
             fillContainer
           />
