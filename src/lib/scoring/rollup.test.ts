@@ -623,6 +623,233 @@ describe("rollupPitching", () => {
     expect(line.balls_thrown).toBe(2);
     expect(line.strike_pct).toBeCloseTo(4 / 6, 6);
   });
+
+  // ---- Stage 6b — OSR 9.16 ER reconstruction --------------------------------
+
+  it("OSR 9.16 canonical: HR after phantom 3rd out — both runs unearned", () => {
+    // 2 outs, error lets batter reach (would have been 3rd out), HR scores 2.
+    // Without reconstruction, the runner reached on error → unearned, but
+    // the HR batter reached cleanly → earned (existing taint model gives 1 ER).
+    // With reconstruction: the inning would have ended on the error play, so
+    // BOTH runs are unearned (0 ER).
+    const tainted = r("opp1", "A", true); // batter who reached on E
+    const atBats: DerivedAtBat[] = [
+      ab({ pitcher_id: "A", pitcher_of_record_id: "A", result: "GO", outs_recorded: 1 }),
+      ab({ pitcher_id: "A", pitcher_of_record_id: "A", result: "GO", outs_recorded: 1 }),
+      ab({ pitcher_id: "A", pitcher_of_record_id: "A", result: "E", outs_recorded: 0 }),
+      ab({
+        pitcher_id: "A",
+        pitcher_of_record_id: "A",
+        result: "HR",
+        bases_before: { first: tainted, second: null, third: null },
+        runner_advances: [
+          { from: "first", to: "home", player_id: "opp1" },
+          { from: "batter", to: "home", player_id: null },
+        ],
+        // Stage 6b: applyInningEnd would set this. Set directly for unit test.
+        after_phantom_third_out: true,
+      }),
+      ab({ pitcher_id: "A", pitcher_of_record_id: "A", result: "K_swinging", outs_recorded: 1 }),
+    ];
+    const a = rollupPitching(atBats).get("A")!;
+    expect(a.R).toBe(2);
+    expect(a.ER).toBe(0);
+  });
+
+  it("ER reconstruction flag is set by replay() at inning_end", () => {
+    // End-to-end: drive events through replay() and confirm that
+    // applyInningEnd retroactively flags the HR as after_phantom_third_out.
+    // Half-inning: GO, GO, E (batter reaches), HR (2 runs), K (3rd actual out),
+    // then inning_end.
+    const ourLineup: LineupSlot[] = Array.from({ length: 9 }, (_, i) => ({
+      batting_order: i + 1,
+      player_id: `p${i + 1}`,
+      position: null,
+    }));
+    const events: GameEventRecord[] = [];
+    let seq = 0;
+    const evt = (
+      type: GameEventRecord["event_type"],
+      payload: object,
+    ): GameEventRecord => {
+      seq += 1;
+      return {
+        id: `e${seq}`,
+        game_id: "g1",
+        client_event_id: `c${seq}`,
+        sequence_number: seq,
+        event_type: type,
+        payload: payload as GameEventRecord["payload"],
+        supersedes_event_id: null,
+        created_at: new Date(2026, 4, 15, 18, seq).toISOString(),
+      };
+    };
+
+    events.push(
+      evt("game_started", {
+        we_are_home: true, // we're home → opp bats top of 1
+        use_dh: false,
+        starting_lineup: ourLineup,
+        starting_pitcher_id: "A",
+        opponent_starting_pitcher_id: "OP",
+      } satisfies GameStartedPayload),
+    );
+    const opAB = (overrides: Partial<AtBatPayload> = {}): AtBatPayload => ({
+      inning: 1,
+      half: "top",
+      batter_id: null,
+      opponent_batter_id: "ob1",
+      pitcher_id: "A",
+      opponent_pitcher_id: null,
+      batting_order: null,
+      result: "GO",
+      rbi: 0,
+      pitch_count: 0,
+      balls: 0,
+      strikes: 0,
+      spray_x: null,
+      spray_y: null,
+      fielder_position: null,
+      runner_advances: [],
+      description: null,
+      ...overrides,
+    });
+
+    events.push(evt("at_bat", opAB({ result: "GO" })));
+    events.push(evt("at_bat", opAB({ result: "GO" })));
+    // E: batter reaches on error — replay tracks reached_on_error=true on
+    // the new BaseRunner via applyAdvances' E branch. result="E" with
+    // runner_advances batter→first.
+    events.push(
+      evt("at_bat", opAB({
+        result: "E",
+        runner_advances: [{ from: "batter", to: "first", player_id: "ob_err" }],
+      })),
+    );
+    // HR — clean batter + tainted runner from 1st both score.
+    events.push(
+      evt("at_bat", opAB({
+        result: "HR",
+        rbi: 2,
+        runner_advances: [
+          { from: "first", to: "home", player_id: "ob_err" },
+          { from: "batter", to: "home", player_id: null },
+        ],
+      })),
+    );
+    events.push(evt("at_bat", opAB({ result: "K_swinging" })));
+    events.push(evt("inning_end", { inning: 1, half: "top" } satisfies InningEndPayload));
+
+    const state = replay(events);
+    // HR at_bat should have been flagged by inning_end.
+    const hr = state.at_bats.find((a) => a.result === "HR")!;
+    expect(hr.after_phantom_third_out).toBe(true);
+
+    // Now the rollup: 0 ER, 2 R.
+    const a = rollupPitching(state.at_bats, state.non_pa_runs).get("A")!;
+    expect(a.R).toBe(2);
+    expect(a.ER).toBe(0);
+  });
+
+  it("game_finalized runs reconstruction on the in-progress half (walk-off / mercy)", () => {
+    // Phantom 3rd out from an E in the top half, then a HR that scored,
+    // then finalize WITHOUT an inning_end. The HR should still be flagged.
+    const ourLineup: LineupSlot[] = Array.from({ length: 9 }, (_, i) => ({
+      batting_order: i + 1,
+      player_id: `p${i + 1}`,
+      position: null,
+    }));
+    let seq = 0;
+    const evt = (
+      type: GameEventRecord["event_type"],
+      payload: object,
+    ): GameEventRecord => {
+      seq += 1;
+      return {
+        id: `e${seq}`,
+        game_id: "g1",
+        client_event_id: `c${seq}`,
+        sequence_number: seq,
+        event_type: type,
+        payload: payload as GameEventRecord["payload"],
+        supersedes_event_id: null,
+        created_at: new Date(2026, 4, 15, 18, seq).toISOString(),
+      };
+    };
+    const opAB = (overrides: Partial<AtBatPayload> = {}): AtBatPayload => ({
+      inning: 1,
+      half: "top",
+      batter_id: null,
+      opponent_batter_id: "ob1",
+      pitcher_id: "A",
+      opponent_pitcher_id: null,
+      batting_order: null,
+      result: "GO",
+      rbi: 0,
+      pitch_count: 0,
+      balls: 0,
+      strikes: 0,
+      spray_x: null,
+      spray_y: null,
+      fielder_position: null,
+      runner_advances: [],
+      description: null,
+      ...overrides,
+    });
+
+    const events: GameEventRecord[] = [
+      evt("game_started", {
+        we_are_home: true,
+        use_dh: false,
+        starting_lineup: ourLineup,
+        starting_pitcher_id: "A",
+        opponent_starting_pitcher_id: "OP",
+      } satisfies GameStartedPayload),
+      evt("at_bat", opAB({ result: "GO" })),
+      evt("at_bat", opAB({ result: "GO" })),
+      evt("at_bat", opAB({
+        result: "E",
+        runner_advances: [{ from: "batter", to: "first", player_id: "ob_err" }],
+      })),
+      evt("at_bat", opAB({
+        result: "HR",
+        rbi: 2,
+        runner_advances: [
+          { from: "first", to: "home", player_id: "ob_err" },
+          { from: "batter", to: "home", player_id: null },
+        ],
+      })),
+      evt("game_finalized", {}),
+    ];
+
+    const state = replay(events);
+    const hr = state.at_bats.find((a) => a.result === "HR")!;
+    expect(hr.after_phantom_third_out).toBe(true);
+    expect(rollupPitching(state.at_bats, state.non_pa_runs).get("A")!.ER).toBe(0);
+  });
+
+  it("non-PA wild-pitch run after phantom 3rd out is unearned", () => {
+    // Half-inning with an early error, then 2 GOs (closing the reconstructed
+    // half), then a wild pitch scores a run. WP is normally earned, but
+    // after phantom 3rd out it becomes unearned.
+    const atBats: DerivedAtBat[] = [
+      ab({ pitcher_id: "A", pitcher_of_record_id: "A", result: "E", outs_recorded: 0 }),
+      ab({ pitcher_id: "A", pitcher_of_record_id: "A", result: "GO", outs_recorded: 1 }),
+      ab({ pitcher_id: "A", pitcher_of_record_id: "A", result: "GO", outs_recorded: 1 }),
+    ];
+    const nonPaRuns = [
+      {
+        event_id: "npr-1",
+        pitcher_id: "A",
+        runs: 1,
+        source: "wild_pitch" as const,
+        after_phantom_third_out: true,
+      },
+    ];
+    const a = rollupPitching(atBats, nonPaRuns).get("A")!;
+    expect(a.R).toBe(1);
+    expect(a.ER).toBe(0);
+  });
 });
 
 describe("computeWLS", () => {

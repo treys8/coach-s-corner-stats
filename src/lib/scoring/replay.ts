@@ -39,6 +39,7 @@ import type {
   UmpireCallPayload,
 } from "./types";
 import { EMPTY_BASES, INITIAL_STATE } from "./types";
+import { applyErReconstructionToHalf } from "./er-reconstruction";
 
 // Pre-Phase-4 placeholder prefix for opposing-batter ids when the opposing
 // lineup was empty. New games can't emit these (the pre-game gate requires
@@ -132,29 +133,41 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
     case "game_started":
       return applyGameStarted(next, event.payload as GameStartedPayload);
     case "at_bat":
-      return applyAtBat(next, event.id, event.payload as AtBatPayload);
+      return applyAtBat(next, event.id, event.sequence_number, event.payload as AtBatPayload);
     case "substitution":
       return applySubstitution(next, event.payload as SubstitutionPayload);
     case "pitching_change":
       return applyPitchingChange(next, event.payload as PitchingChangePayload);
     case "inning_end":
       return applyInningEnd(next, event.payload as InningEndPayload);
-    case "game_finalized":
-      return { ...next, status: "final" };
+    case "game_finalized": {
+      // Stage 6b: run ER reconstruction on the in-progress half too so a
+      // walk-off / mercy-finalize that doesn't fire inning_end still gets
+      // phantom-3rd-out attribution. Already-closed halves were handled at
+      // their respective inning_end events.
+      const { atBats: finalAtBats, nonPaRuns: finalNonPaRuns } =
+        applyErReconstructionToHalf(next.at_bats, next.non_pa_runs, next.inning, next.half);
+      return {
+        ...next,
+        status: "final",
+        at_bats: finalAtBats,
+        non_pa_runs: finalNonPaRuns,
+      };
+    }
     case "stolen_base":
-      return applyStolenBase(next, event.id, event.payload as StolenBasePayload);
+      return applyStolenBase(next, event.id, event.sequence_number, event.payload as StolenBasePayload);
     case "caught_stealing":
       return applyCaughtStealing(next, event.id, event.payload as CaughtStealingPayload);
     case "pickoff":
       return applyPickoff(next, event.id, event.payload as PickoffPayload);
     case "wild_pitch":
-      return applyRunnerMove(next, event.id, "wild_pitch", event.payload as RunnerMovePayload);
+      return applyRunnerMove(next, event.id, event.sequence_number, "wild_pitch", event.payload as RunnerMovePayload);
     case "passed_ball":
-      return applyRunnerMove(next, event.id, "passed_ball", event.payload as RunnerMovePayload);
+      return applyRunnerMove(next, event.id, event.sequence_number, "passed_ball", event.payload as RunnerMovePayload);
     case "balk":
-      return applyRunnerMove(next, event.id, "balk", event.payload as RunnerMovePayload);
+      return applyRunnerMove(next, event.id, event.sequence_number, "balk", event.payload as RunnerMovePayload);
     case "error_advance":
-      return applyRunnerMove(next, event.id, "error_advance", event.payload as RunnerMovePayload);
+      return applyRunnerMove(next, event.id, event.sequence_number, "error_advance", event.payload as RunnerMovePayload);
     case "pitch":
       return applyPitch(next, event.payload as PitchPayload);
     case "defensive_conference":
@@ -269,7 +282,7 @@ function applyOpposingLineupEdit(
   };
 }
 
-function applyAtBat(state: ReplayState, eventId: string, raw: AtBatPayload): ReplayState {
+function applyAtBat(state: ReplayState, eventId: string, sequence: number, raw: AtBatPayload): ReplayState {
   // Consume one pending umpire_call (FIFO). For IFR, rewrite the at_bat
   // payload so the batter is out regardless of the picked result and the
   // batter-to-base advance is stripped — even if the coach picked "1B"
@@ -384,6 +397,7 @@ function applyAtBat(state: ReplayState, eventId: string, raw: AtBatPayload): Rep
     batted_ball_type: p.batted_ball_type,
     error_step_index: p.error_step_index ?? null,
     applied_umpire_call: consumedCall,
+    sequence,
   };
 
   return {
@@ -561,6 +575,15 @@ function applyPitchingChange(state: ReplayState, p: PitchingChangePayload): Repl
 function applyInningEnd(state: ReplayState, p: InningEndPayload): ReplayState {
   const nextHalf = p.half === "top" ? "bottom" : "top";
   const nextInning = p.half === "bottom" ? p.inning + 1 : p.inning;
+
+  // Stage 6b — ER reconstruction (OSR 9.16). Walk the half-inning that just
+  // ended, count reconstructed outs (actual + phantom-from-errors), and
+  // produce fresh at_bats / non_pa_runs arrays with `after_phantom_third_out`
+  // populated for entries in this half. Idempotent and pure — re-running on
+  // already-flagged entries yields the same result.
+  const { atBats: nextAtBats, nonPaRuns: nextNonPaRuns } =
+    applyErReconstructionToHalf(state.at_bats, state.non_pa_runs, p.inning, p.half);
+
   return {
     ...state,
     inning: nextInning,
@@ -570,6 +593,8 @@ function applyInningEnd(state: ReplayState, p: InningEndPayload): ReplayState {
     current_balls: 0,
     current_strikes: 0,
     current_pa_pitches: [],
+    at_bats: nextAtBats,
+    non_pa_runs: nextNonPaRuns,
     // Per schema-deltas-v2.md §3 rule 3: unconsumed umpire calls drop at
     // inning_end (the play they were called against ended without a
     // play-resolving event consuming them).
@@ -638,7 +663,7 @@ function applyUmpireCall(
 
 // ---- Mid-PA running events -------------------------------------------------
 
-function applyStolenBase(state: ReplayState, eventId: string, p: StolenBasePayload): ReplayState {
+function applyStolenBase(state: ReplayState, eventId: string, sequence: number, p: StolenBasePayload): ReplayState {
   const sourceRunner = state.bases[p.from];
   const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
   const catcherId = ourCatcherIfFielding(state);
@@ -652,7 +677,7 @@ function applyStolenBase(state: ReplayState, eventId: string, p: StolenBasePaylo
       ? sourceRunner
       : makeBaseRunner(p.runner_id ?? "", pitcherOfRecordFor(state), false);
   }
-  const credited = creditRunningEvent(state, eventId, "stolen_base", bases, runsScored, 0);
+  const credited = creditRunningEvent(state, eventId, sequence, "stolen_base", bases, runsScored, 0);
   return {
     ...credited,
     stolen_bases: [
@@ -668,7 +693,9 @@ function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtSteal
   const catcherId = ourCatcherIfFielding(state);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
-  const credited = creditRunningEvent(state, eventId, "stolen_base", bases, 0, 1);
+  // CS / pickoff record an out but don't score, so sequence threading
+  // isn't needed — they never write into non_pa_runs.
+  const credited = creditRunningEvent(state, eventId, 0, "stolen_base", bases, 0, 1);
   return {
     ...credited,
     caught_stealing: [
@@ -684,7 +711,7 @@ function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): R
   const catcherId = ourCatcherIfFielding(state);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
-  const credited = creditRunningEvent(state, eventId, "stolen_base", bases, 0, 1);
+  const credited = creditRunningEvent(state, eventId, 0, "stolen_base", bases, 0, 1);
   return {
     ...credited,
     pickoffs: [
@@ -697,6 +724,7 @@ function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): R
 function applyRunnerMove(
   state: ReplayState,
   eventId: string,
+  sequence: number,
   source: NonPaRunSource,
   p: RunnerMovePayload,
 ): ReplayState {
@@ -711,7 +739,7 @@ function applyRunnerMove(
     pitcherOfRecordFor(state),
     taint,
   );
-  const credited = creditRunningEvent(state, eventId, source, bases, runsScored, outsAdded);
+  const credited = creditRunningEvent(state, eventId, sequence, source, bases, runsScored, outsAdded);
   if (source === "passed_ball") {
     return {
       ...credited,
@@ -731,6 +759,7 @@ function applyRunnerMove(
 function creditRunningEvent(
   state: ReplayState,
   eventId: string,
+  sequence: number,
   source: NonPaRunSource,
   bases: Bases,
   runsScored: number,
@@ -756,7 +785,15 @@ function creditRunningEvent(
   if (!weAreBatting && runsScored > 0 && state.current_pitcher_id) {
     next.non_pa_runs = [
       ...state.non_pa_runs,
-      { event_id: eventId, pitcher_id: state.current_pitcher_id, runs: runsScored, source },
+      {
+        event_id: eventId,
+        pitcher_id: state.current_pitcher_id,
+        runs: runsScored,
+        source,
+        sequence,
+        inning: state.inning,
+        half: state.half,
+      },
     ];
   }
   return next;

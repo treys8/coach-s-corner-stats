@@ -432,12 +432,14 @@ export function rollupPitching(
     }
   }
   // Non-PA runs: R is always credited; ER only when the source is in
-  // EARNED_NON_PA_SOURCES (WP, balk, SB-home).
+  // EARNED_NON_PA_SOURCES (WP, balk, SB-home). Stage 6b: a run scored
+  // at-or-after the phantom 3rd out (OSR 9.16) is unearned regardless of
+  // source.
   for (const npr of nonPaRuns) {
     if (!npr.pitcher_id || npr.runs <= 0) continue;
     const line = ensure(npr.pitcher_id);
     line.R += npr.runs;
-    if (EARNED_NON_PA_SOURCES.has(npr.source)) {
+    if (EARNED_NON_PA_SOURCES.has(npr.source) && !npr.after_phantom_third_out) {
       line.ER += npr.runs;
     }
   }
@@ -822,6 +824,9 @@ export function verifyBoxScore(b: BoxScoreInputs): {
 //   - K3 with dropped strike on PB or E: ALL runs on the play are
 //     unearned (PDF §17 #2/#4) — without the error/PB, the K would
 //     have ended the play and no run would have scored.
+//   - Stage 6b: any PA flagged `after_phantom_third_out` by OSR 9.16
+//     reconstruction is unearned regardless of taint, since the inning
+//     would have already ended in the error-free version.
 function classifyScoringRunner(
   ab: DerivedAtBat,
   adv: RunnerAdvance,
@@ -829,21 +834,26 @@ function classifyScoringRunner(
   if (adv.to !== "home") return null;
   const k3DroppedTaint =
     ab.batter_reached_on_k3 === "E" || ab.batter_reached_on_k3 === "PB";
+  const phantomTaint = ab.after_phantom_third_out === true;
   if (adv.from === "batter") {
     const batterReachedOnError = ab.result === "E" || k3DroppedTaint;
     return {
       pitcher_id: ab.pitcher_of_record_id,
-      earned: !batterReachedOnError,
+      earned: !batterReachedOnError && !phantomTaint,
     };
   }
   const src = ab.bases_before[adv.from];
   if (!src) {
     // Defensive fallback: source base unexpectedly empty. Credit current
-    // PA pitcher; assume earned unless this PA was K3-dropped.
-    return { pitcher_id: ab.pitcher_of_record_id, earned: !k3DroppedTaint };
+    // PA pitcher; assume earned unless this PA was K3-dropped or past
+    // phantom 3rd out.
+    return {
+      pitcher_id: ab.pitcher_of_record_id,
+      earned: !k3DroppedTaint && !phantomTaint,
+    };
   }
   return {
     pitcher_id: src.pitcher_of_record_id,
-    earned: !src.reached_on_error && !k3DroppedTaint,
+    earned: !src.reached_on_error && !k3DroppedTaint && !phantomTaint,
   };
 }

@@ -432,6 +432,16 @@ export interface DerivedAtBat {
    *  engine has already forced the batter out / cleared forced advances.
    *  In-memory only — not persisted. */
   applied_umpire_call?: PendingUmpireCall;
+  /** Event sequence_number copied from the source game_event. Lets ER
+   *  reconstruction interleave at_bats with non-PA running events
+   *  chronologically inside a half-inning. In-memory only. Stage 6b. */
+  sequence?: number;
+  /** Set at the half-inning's `inning_end` by ER reconstruction (OSR 9.16)
+   *  when this PA started at-or-after the "phantom 3rd out" — the
+   *  would-have-been 3rd out that errors prevented. Runs scored on a PA
+   *  flagged here are unearned, on top of the existing per-runner
+   *  `reached_on_error` taint. In-memory only. Stage 6b. */
+  after_phantom_third_out?: boolean;
 }
 
 export interface ReplayState {
@@ -560,6 +570,20 @@ export interface NonPaRun {
   pitcher_id: string | null;
   runs: number;
   source: NonPaRunSource;
+  /** Event sequence_number, used by ER reconstruction (Stage 6b) to interleave
+   *  non-PA running events with at_bats chronologically inside a half-inning.
+   *  Optional for back-compat with replay states materialized before 6b. */
+  sequence?: number;
+  /** Set at the half-inning's `inning_end` by ER reconstruction (OSR 9.16)
+   *  when this run scored at-or-after the "phantom 3rd out" — the would-have-
+   *  been 3rd out that errors prevented. Such runs are unearned regardless
+   *  of source. Stage 6b. */
+  after_phantom_third_out?: boolean;
+  /** Half-inning the run scored in. Populated by the replay engine so
+   *  reconstruction can group non-PA runs by (inning, half) without an
+   *  out-of-band lookup. Optional for back-compat with pre-6b state. */
+  inning?: number;
+  half?: InningHalf;
 }
 
 export const EMPTY_BASES: Bases = { first: null, second: null, third: null };
