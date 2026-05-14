@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultAdvances } from "./advances";
+import { balkAdvances, defaultAdvances } from "./advances";
 import type { BaseRunner, Bases } from "./types";
 
 // Compact helper for fixtures: wrap a player_id in a BaseRunner with no
@@ -77,5 +77,34 @@ describe("defaultAdvances()", () => {
 
   it("E produces no auto-advances (coach overrides)", () => {
     expect(defaultAdvances(empty, "b", "E")).toEqual([]);
+  });
+});
+
+describe("balkAdvances()", () => {
+  it("empty bases produces no advances", () => {
+    expect(balkAdvances(empty)).toEqual([]);
+  });
+
+  it("runner on 1st advances to 2nd", () => {
+    const bases: Bases = { first: r("p1"), second: null, third: null };
+    expect(balkAdvances(bases)).toEqual([
+      { from: "first", to: "second", player_id: "p1" },
+    ]);
+  });
+
+  it("runner on 3rd scores", () => {
+    const bases: Bases = { first: null, second: null, third: r("p3") };
+    expect(balkAdvances(bases)).toEqual([
+      { from: "third", to: "home", player_id: "p3" },
+    ]);
+  });
+
+  it("bases loaded — every runner advances one base, R3 scores", () => {
+    const loaded: Bases = { first: r("p1"), second: r("p2"), third: r("p3") };
+    expect(balkAdvances(loaded)).toEqual([
+      { from: "third", to: "home", player_id: "p3" },
+      { from: "second", to: "third", player_id: "p2" },
+      { from: "first", to: "second", player_id: "p1" },
+    ]);
   });
 });

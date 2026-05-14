@@ -28,6 +28,10 @@ interface GameStatusBarProps {
   /** When false, the bar renders without the `-mx-6 px-6` overhang used by
    *  the legacy container-shell layout. Defaults to true for back-compat. */
   bleed?: boolean;
+  /** When false, the B-S count is hidden from the StateChip. v2 shell sets
+   *  this so the large count badge in the PitchRail is the only count
+   *  display. Defaults to true for back-compat. */
+  showCount?: boolean;
 }
 
 export function GameStatusBar({
@@ -45,6 +49,7 @@ export function GameStatusBar({
   onOpenBox,
   onOpenBatter,
   bleed = true,
+  showCount = true,
 }: GameStatusBarProps) {
   const halfLabel = state.half === "top" ? "Top" : "Bot";
   const batterLine = weAreBatting
@@ -101,6 +106,7 @@ export function GameStatusBar({
           outs={state.outs}
           balls={state.current_balls}
           strikes={state.current_strikes}
+          showCount={showCount}
         />
 
         <MiniBases bases={state.bases} className="shrink-0" />
@@ -188,12 +194,14 @@ function StateChip({
   outs,
   balls,
   strikes,
+  showCount,
 }: {
   halfLabel: string;
   inning: number;
   outs: number;
   balls: number;
   strikes: number;
+  showCount: boolean;
 }) {
   return (
     <div className="flex items-center gap-2 text-sm shrink-0">
@@ -201,9 +209,11 @@ function StateChip({
         {halfLabel} {inning}
       </span>
       <OutsDots outs={outs} />
-      <span className="font-mono-stat text-base md:text-lg text-sa-blue-deep whitespace-nowrap">
-        {balls}-{strikes}
-      </span>
+      {showCount && (
+        <span className="font-mono-stat text-base md:text-lg text-sa-blue-deep whitespace-nowrap">
+          {balls}-{strikes}
+        </span>
+      )}
     </div>
   );
 }
