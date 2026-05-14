@@ -27,6 +27,7 @@ import type {
   InningEndPayload,
   NonPaRunSource,
   OpposingLineupEditPayload,
+  PendingUmpireCall,
   PickoffPayload,
   PitchPayload,
   PitchingChangePayload,
@@ -35,6 +36,7 @@ import type {
   RunnerMovePayload,
   StolenBasePayload,
   SubstitutionPayload,
+  UmpireCallPayload,
 } from "./types";
 import { EMPTY_BASES, INITIAL_STATE } from "./types";
 
@@ -90,6 +92,7 @@ export function replay(events: GameEventRecord[]): ReplayState {
     current_pa_pitches: [],
     non_pa_runs: [],
     passed_balls: [],
+    pending_umpire_calls: [],
     defensive_innings_outs: {},
   };
 
@@ -120,6 +123,7 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
     caught_stealing: state.caught_stealing,
     pickoffs: state.pickoffs,
     passed_balls: state.passed_balls,
+    pending_umpire_calls: state.pending_umpire_calls,
     defensive_innings_outs: state.defensive_innings_outs,
     last_event_at: event.created_at,
   };
@@ -157,6 +161,8 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
       return applyDefensiveConference(next, event.payload as DefensiveConferencePayload);
     case "opposing_lineup_edit":
       return applyOpposingLineupEdit(next, event.payload as OpposingLineupEditPayload);
+    case "umpire_call":
+      return applyUmpireCall(next, event.id, event.payload as UmpireCallPayload);
     case "correction": {
       const p = event.payload as CorrectionPayload;
       // Void correction: original is in `superseded` and skipped; nothing to
@@ -263,7 +269,20 @@ function applyOpposingLineupEdit(
   };
 }
 
-function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): ReplayState {
+function applyAtBat(state: ReplayState, eventId: string, raw: AtBatPayload): ReplayState {
+  // Consume one pending umpire_call (FIFO). For IFR, rewrite the at_bat
+  // payload so the batter is out regardless of the picked result and the
+  // batter-to-base advance is stripped — even if the coach picked "1B"
+  // because the ball dropped, the rule auto-outs the batter.
+  const consumedCall: PendingUmpireCall | undefined = state.pending_umpire_calls[0];
+  const p: AtBatPayload =
+    consumedCall?.kind === "IFR"
+      ? applyIFRToAtBat(raw)
+      : raw;
+  const remainingCalls = consumedCall
+    ? state.pending_umpire_calls.slice(1)
+    : state.pending_umpire_calls;
+
   const weAreBatting = isOurHalf(state.we_are_home, p.half);
   const pitcherOfRecord = weAreBatting
     ? state.current_opponent_pitcher_id
@@ -364,6 +383,7 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     fielder_chain_player_ids: fielderChainPlayerIds,
     batted_ball_type: p.batted_ball_type,
     error_step_index: p.error_step_index ?? null,
+    applied_umpire_call: consumedCall,
   };
 
   return {
@@ -380,8 +400,54 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     current_balls: 0,
     current_strikes: 0,
     current_pa_pitches: [],
+    pending_umpire_calls: remainingCalls,
     defensive_innings_outs,
   };
+}
+
+// IFR rewrite: batter is auto-out the instant the umpire calls "Infield
+// Fly", regardless of catch outcome. Forces result to 'IF' if it isn't
+// already an out-shaped result, strips the batter-to-base advance (turns
+// batter→base into batter→out) and removes any default forced-runner
+// pushes the UI emitted assuming the batter reached.
+function applyIFRToAtBat(p: AtBatPayload): AtBatPayload {
+  // Treat anything that wasn't a fly/pop/line/sac-fly/IF as a hit that
+  // dropped uncaught — rewrite to IF so DEFAULT_OUTS_FOR['IF']=1 applies
+  // (or the explicit batter→out advance below counts the out).
+  const treatedAsOut =
+    p.result === "FO" || p.result === "PO" || p.result === "LO" ||
+    p.result === "SF" || p.result === "IF";
+  const result: AtBatResult = treatedAsOut ? p.result : "IF";
+
+  // Filter the batter advance. If the batter was credited reaching a base
+  // (1B, 2B, etc.) on this payload, rewrite that single advance to an out;
+  // existing runners keep whatever the coach drag-set on the diamond.
+  const filteredAdvances: RunnerAdvance[] = [];
+  let sawBatterOut = false;
+  for (const adv of p.runner_advances) {
+    if (adv.from === "batter") {
+      if (adv.to === "out") {
+        filteredAdvances.push(adv);
+        sawBatterOut = true;
+      } else {
+        filteredAdvances.push({ from: "batter", to: "out", player_id: adv.player_id });
+        sawBatterOut = true;
+      }
+    } else {
+      filteredAdvances.push(adv);
+    }
+  }
+  // If the UI emitted runner movement but no batter entry, append a
+  // batter→out advance so the engine counts the auto-out (otherwise the
+  // DEFAULT_OUTS_FOR fallback only fires on a fully-empty advance list).
+  let runner_advances = filteredAdvances;
+  if (!sawBatterOut && filteredAdvances.length > 0) {
+    runner_advances = [
+      { from: "batter", to: "out", player_id: p.batter_id },
+      ...filteredAdvances,
+    ];
+  }
+  return { ...p, result, rbi: 0, runner_advances };
 }
 
 function countFromPitches(trail: PitchPayload[]): { balls: number; strikes: number } {
@@ -504,6 +570,10 @@ function applyInningEnd(state: ReplayState, p: InningEndPayload): ReplayState {
     current_balls: 0,
     current_strikes: 0,
     current_pa_pitches: [],
+    // Per schema-deltas-v2.md §3 rule 3: unconsumed umpire calls drop at
+    // inning_end (the play they were called against ended without a
+    // play-resolving event consuming them).
+    pending_umpire_calls: [],
   };
 }
 
@@ -540,6 +610,29 @@ function applyDefensiveConference(
       ...state.defensive_conferences,
       { pitcher_id: p.pitcher_id, inning: p.inning },
     ],
+  };
+}
+
+// Umpire calls are modifier events — they push onto pending_umpire_calls and
+// are consumed (FIFO) by the next play-resolving event (at_bat / stolen_base
+// / caught_stealing / pickoff / wild_pitch / passed_ball / balk /
+// error_advance). Effects depend on kind; see schema-deltas-v2.md §3.
+function applyUmpireCall(
+  state: ReplayState,
+  eventId: string,
+  p: UmpireCallPayload,
+): ReplayState {
+  const pending: PendingUmpireCall = {
+    event_id: eventId,
+    kind: p.kind,
+    fielder_position: p.fielder_position,
+    offender_id: p.offender_id ?? null,
+    awarded_to: p.awarded_to,
+    notes: p.notes ?? null,
+  };
+  return {
+    ...state,
+    pending_umpire_calls: [...state.pending_umpire_calls, pending],
   };
 }
 
@@ -650,6 +743,12 @@ function creditRunningEvent(
     outs: state.outs + outsAdded,
     team_score: weAreBatting ? state.team_score + runsScored : state.team_score,
     opponent_score: weAreBatting ? state.opponent_score : state.opponent_score + runsScored,
+    // Running events consume the head umpire_call too (FIFO). Effects per
+    // kind are not yet wired in this stage; the queue clears so it doesn't
+    // misapply to a later at_bat. Stage 6 expands handling per kind.
+    pending_umpire_calls: state.pending_umpire_calls.length > 0
+      ? state.pending_umpire_calls.slice(1)
+      : state.pending_umpire_calls,
   };
   // Pitcher R only matters when our pitcher is on the mound — i.e., the
   // opposing team is batting (we're fielding). Eventid empty → SB/CS/PO,

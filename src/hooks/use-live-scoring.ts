@@ -6,6 +6,7 @@ import { useReplayState, type RosterDisplay } from "./scoring/useReplayState";
 import { useAtBatActions } from "./scoring/useAtBatActions";
 import { useRunnerActions } from "./scoring/useRunnerActions";
 import { useFlowActions } from "./scoring/useFlowActions";
+import { useTimingPlayPrompt } from "./scoring/useTimingPlayPrompt";
 
 export type { RosterDisplay };
 
@@ -88,6 +89,15 @@ export function useLiveScoring({
     onFinalized,
   });
 
+  const timingPlay = useTimingPlayPrompt({
+    gameId,
+    state,
+    names,
+    submitting,
+    setSubmitting,
+    applyPostResult,
+  });
+
   return {
     state,
     loading,
@@ -103,5 +113,6 @@ export function useLiveScoring({
     ...atBatActions,
     ...runnerActions,
     ...flowActions,
+    ...timingPlay,
   };
 }

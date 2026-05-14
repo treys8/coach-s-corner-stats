@@ -259,6 +259,39 @@ export interface DefensiveConferencePayload {
   inning: number;
 }
 
+// ---- Stage 5 umpire calls --------------------------------------------------
+
+/** Umpire calls modeled as modifier events consumed by the next play-
+ *  resolving event (at_bat / stolen_base / error_advance / etc).
+ *  See /docs/live-scoring/schema-deltas-v2.md §3. */
+export type UmpireCallKind =
+  | "IFR"                       // infield fly — batter auto-out on next at_bat
+  | "obstruction_a"             // play being made — base awarded immediately
+  | "obstruction_b"             // no play being made — base awarded if put out
+  | "batter_interference"       // batter out; runner returns
+  | "runner_interference"       // runner out; ball dead
+  | "spectator_interference"    // umpire-judged base award
+  | "coach_interference";       // runner out
+
+export interface UmpireCallPayload {
+  kind: UmpireCallKind;
+  fielder_position?: string;
+  offender_id?: string | null;
+  awarded_to?: Base | "home";
+  notes?: string | null;
+}
+
+/** A queued umpire call awaiting consumption by the next play-resolving
+ *  event. Stored on ReplayState; cleared in FIFO order when consumed. */
+export interface PendingUmpireCall {
+  event_id: string;
+  kind: UmpireCallKind;
+  fielder_position?: string;
+  offender_id?: string | null;
+  awarded_to?: Base | "home";
+  notes?: string | null;
+}
+
 export interface InningEndPayload {
   inning: number;
   half: InningHalf;
@@ -294,7 +327,8 @@ export type GameEventPayload =
   | RunnerMovePayload
   | PitchPayload
   | DefensiveConferencePayload
-  | OpposingLineupEditPayload;
+  | OpposingLineupEditPayload
+  | UmpireCallPayload;
 
 // ---- Persisted shape used by the engine ------------------------------------
 
@@ -393,6 +427,11 @@ export interface DerivedAtBat {
   batted_ball_type?: BattedBallType;
   /** Pass-through of `AtBatPayload.error_step_index`. */
   error_step_index?: number | null;
+  /** The umpire_call that this at_bat consumed (FIFO from the pending
+   *  queue), if any. IFR sets this to `{ kind: 'IFR', ... }` and the
+   *  engine has already forced the batter out / cleared forced advances.
+   *  In-memory only — not persisted. */
+  applied_umpire_call?: PendingUmpireCall;
 }
 
 export interface ReplayState {
@@ -494,6 +533,13 @@ export interface ReplayState {
    *  fielding. PB-derived runs continue to flow through `non_pa_runs`. */
   passed_balls: { event_id: string; catcher_id: string | null }[];
 
+  /** Umpire calls that have been emitted but not yet consumed by a
+   *  play-resolving event. FIFO. IFR flips the batter to an automatic out
+   *  on the next at_bat; obstruction overrides the runner's destination on
+   *  the next runner-movement event. Cleared on inning_end with a warning
+   *  if anything remained (per /docs/live-scoring/schema-deltas-v2.md §3). */
+  pending_umpire_calls: PendingUmpireCall[];
+
   /** Defensive outs accumulated per (player_id, position). Every at_bat
    *  with outs_recorded > 0 during a half we were fielding contributes
    *  those outs to each player currently in our defensive lineup (the 8
@@ -554,5 +600,6 @@ export const INITIAL_STATE: ReplayState = {
   caught_stealing: [],
   pickoffs: [],
   passed_balls: [],
+  pending_umpire_calls: [],
   defensive_innings_outs: {},
 };

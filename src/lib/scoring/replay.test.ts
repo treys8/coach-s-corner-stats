@@ -1054,6 +1054,131 @@ describe("Stage 3 fielder_chain pass-through", () => {
     expect(ab.fielder_player_id).toBe("p6");
   });
 
+  // ---- Stage 5 umpire calls ----------------------------------------------
+
+  // Stage 5 hit-vs-error escape route: when the coach picks "Error" on a
+  // safe outcome with chain ending without a base, the hook posts result=E
+  // with an explicit batter advance (defaultAdvances("E") returns []).
+  // The engine must still place the batter on the base AND taint
+  // reached_on_error so unearned-run reconstruction credits it correctly.
+  it("at_bat with result=E and explicit batter advance places the batter with reached_on_error=true", () => {
+    const state = replay([
+      startGame({ we_are_home: true, starting_pitcher_id: "us_p1" }),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "E",
+        opponent_batter_id: "o1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "o1" }],
+      })),
+    ]);
+    expect(state.bases.first?.player_id).toBe("o1");
+    expect(state.bases.first?.reached_on_error).toBe(true);
+    expect(state.bases.first?.pitcher_of_record_id).toBe("us_p1");
+    const ab = state.at_bats[0];
+    expect(ab.result).toBe("E");
+    expect(ab.rbi).toBe(0);
+  });
+
+  it("umpire_call(IFR) queues and is consumed by the next at_bat", () => {
+    const state = replay([
+      startGame({ we_are_home: true }),
+      evt("umpire_call", { kind: "IFR", fielder_position: "SS" }),
+    ]);
+    expect(state.pending_umpire_calls).toHaveLength(1);
+    expect(state.pending_umpire_calls[0].kind).toBe("IFR");
+
+    // Now bases-loaded fly that drops (coach picks 1B — bot field error
+    // dropped it). IFR forces batter out anyway; runners hold per drag.
+    const after = replay([
+      startGame({ we_are_home: true }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", opponent_batter_id: "o1",
+        runner_advances: [
+          { from: "batter", to: "first", player_id: "o1" },
+        ],
+      })),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", opponent_batter_id: "o2",
+        runner_advances: [
+          { from: "first", to: "second", player_id: "o1" },
+          { from: "batter", to: "first", player_id: "o2" },
+        ],
+      })),
+      // Bases R1+R2 now loaded enough for IFR preconditions.
+      evt("umpire_call", { kind: "IFR", fielder_position: "SS" }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", opponent_batter_id: "o3",
+        // Coach drag-set R1→2nd, R2→3rd, batter→1B because the ball was
+        // dropped. IFR must override: batter is out, no forced runner
+        // pushes (we keep coach-entered runner moves since they may have
+        // tried anyway).
+        runner_advances: [
+          { from: "second", to: "third", player_id: "o1" },
+          { from: "first", to: "second", player_id: "o2" },
+          { from: "batter", to: "first", player_id: "o3" },
+        ],
+      })),
+    ]);
+    // Outs should have ticked +1 for the IFR batter; opponent_score is 0.
+    expect(after.outs).toBe(1);
+    // The forced batter→first was rewritten to batter→out: 1B should now
+    // hold o3 only if no other runner was put on first by the rewrite.
+    // After rewrite the runners that the coach drag-set still apply:
+    // R1 (o1) → third, R2 (o2) → second.
+    expect(after.bases.third?.player_id).toBe("o1");
+    expect(after.bases.second?.player_id).toBe("o2");
+    expect(after.bases.first).toBeNull();
+    // applied_umpire_call surfaces on the derived at_bat.
+    const ab = after.at_bats[after.at_bats.length - 1];
+    expect(ab.applied_umpire_call?.kind).toBe("IFR");
+    // Result rewritten from 1B → IF.
+    expect(ab.result).toBe("IF");
+    expect(ab.rbi).toBe(0);
+    // Queue cleared after consumption.
+    expect(after.pending_umpire_calls).toHaveLength(0);
+  });
+
+  it("umpire_call(IFR) on an already-out result keeps the result as-is", () => {
+    const after = replay([
+      startGame({ we_are_home: true }),
+      evt("umpire_call", { kind: "IFR", fielder_position: "SS" }),
+      evt("at_bat", atBat({
+        half: "top", result: "PO", opponent_batter_id: "o1",
+        fielder_position: "SS",
+      })),
+    ]);
+    const ab = after.at_bats[after.at_bats.length - 1];
+    // PO already represents the batter out; no result rewrite needed.
+    expect(ab.result).toBe("PO");
+    expect(ab.applied_umpire_call?.kind).toBe("IFR");
+    expect(after.outs).toBe(1);
+  });
+
+  it("inning_end drops unconsumed umpire calls", () => {
+    const after = replay([
+      startGame({ we_are_home: true }),
+      evt("umpire_call", { kind: "IFR" }),
+      evt<InningEndPayload>("inning_end", { inning: 1, half: "top" }),
+    ]);
+    expect(after.pending_umpire_calls).toHaveLength(0);
+  });
+
+  it("non-IFR umpire calls are consumed (queue clears) but do not rewrite the at_bat", () => {
+    const after = replay([
+      startGame({ we_are_home: true }),
+      evt("umpire_call", { kind: "obstruction_b", fielder_position: "1B" }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", opponent_batter_id: "o1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "o1" }],
+      })),
+    ]);
+    const ab = after.at_bats[0];
+    expect(ab.result).toBe("1B");
+    expect(ab.applied_umpire_call?.kind).toBe("obstruction_b");
+    expect(after.pending_umpire_calls).toHaveLength(0);
+    expect(after.bases.first?.player_id).toBe("o1");
+  });
+
   it("legacy events without fielder_chain still flow through fielder_position", () => {
     const state = replay([
       startGame({

@@ -19,6 +19,7 @@ import type {
   K3ReachSource,
   PitchType,
   ReplayState,
+  RunnerAdvance,
 } from "@/lib/scoring/types";
 import type { OpposingBatterProfile } from "@/lib/opponents/profile";
 import type { FielderPosition } from "@/components/scoring/DefensiveDiamond";
@@ -78,6 +79,7 @@ export interface UseAtBatActionsResult {
     k3Reach?: K3ReachSource,
     extras?: AtBatExtras,
     chainExtras?: ChainExtras,
+    advancesOverride?: RunnerAdvance[],
   ) => Promise<void>;
   submitPitch: (pitchType: PitchType) => Promise<void>;
   /** Drag-and-drop callback from the diamond. First call captures the
@@ -109,6 +111,12 @@ export interface UseAtBatActionsResult {
    *  button; works whether or not the coach captured a chain (empty
    *  chain = same as legacy Skip location). */
   commitArmed: () => void;
+  /** Hit-vs-error prompt state. Non-null when the coach committed a
+   *  drag chain that ends WITHOUT a base on a safe outcome (1B/2B/3B) —
+   *  no default per v2 spec. Resolve via `resolveHitOrError`. */
+  pendingHitOrError: { armedResult: AtBatResult; terminalFielder: string } | null;
+  resolveHitOrError: (choice: "hit" | "error") => void;
+  cancelHitOrError: () => void;
 }
 
 /** Internal chain-extras bundle threaded into submitAtBat. */
@@ -197,6 +205,9 @@ export function useAtBatActions({
   opposingProfileCache,
 }: UseAtBatActionsArgs): UseAtBatActionsResult {
   const [armedResult, setArmedResult] = useState<ArmedState | null>(null);
+  const [pendingHitOrError, setPendingHitOrError] = useState<
+    { armedResult: AtBatResult; terminalFielder: string } | null
+  >(null);
   // Extras (foul_out, etc) stashed when the in-play outcome is picked, so
   // they ride through the drag-to-fielder gap and land on the AtBatPayload
   // at commit time. Cleared on submit, cancel, or set to null.
@@ -236,6 +247,7 @@ export function useAtBatActions({
     k3Reach?: K3ReachSource,
     extras?: AtBatExtras,
     chainExtras?: ChainExtras,
+    advancesOverride?: RunnerAdvance[],
   ) => {
     if (submitting) return;
     setSubmitting(true);
@@ -253,9 +265,19 @@ export function useAtBatActions({
     // K3-reach: pitcher gets the K, batter goes to first instead of being out.
     // Override defaultAdvances with an explicit batter→first plan; downstream
     // RBI logic excludes runs from the tainted batter (E/PB) automatically.
-    const advances = k3Reach
-      ? [{ from: "batter" as const, to: "first" as const, player_id: reachId }]
-      : defaultAdvances(state.bases, reachId, result);
+    // advancesOverride takes precedence over k3 and defaults — the hit-vs-
+    // error path uses it to preserve the batter's destination when the
+    // outcome is rewritten to E (defaultAdvances for E returns []).
+    const advances: RunnerAdvance[] = advancesOverride
+      ? advancesOverride.map((a) => ({
+          // Re-stamp the batter-source player_id so opposing-PA paths get
+          // a stable reachId instead of whatever the caller computed.
+          ...a,
+          player_id: a.from === "batter" ? reachId : a.player_id,
+        }))
+      : k3Reach
+        ? [{ from: "batter" as const, to: "first" as const, player_id: reachId }]
+        : defaultAdvances(state.bases, reachId, result);
     const runs = advances.filter((a) => a.to === "home").length;
     const rbi = autoRBI(advances, result, state.bases);
     // If pitches are logged for this PA, the engine will derive the final
@@ -479,14 +501,44 @@ export function useAtBatActions({
     });
   };
 
+  // Outcomes where the batter reaches safely AND the play could have been
+  // a hit or an error depending on judgment — v2 spec calls for an
+  // always-prompt when the drag chain ends without a base target.
+  const isSafeHitResult = (r: AtBatResult): boolean =>
+    r === "1B" || r === "2B" || r === "3B";
+
   const commitArmed = () => {
+    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
+    // Hit-vs-Error ambiguity check: safe outcome + drag chain with at
+    // least one step + terminal step has no base target = no default per
+    // play-catalog §10.7. Prompt the coach before committing. If the
+    // coach already explicitly set an error step or picked "Error"
+    // (armed E), no prompt — they've already declared judgment.
+    if (
+      isSafeHitResult(armedResult) &&
+      chain.length > 0 &&
+      errorStepIndex === null &&
+      chain[chain.length - 1].target === undefined
+    ) {
+      setPendingHitOrError({
+        armedResult,
+        terminalFielder: chain[chain.length - 1].position,
+      });
+      return;
+    }
+    commitArmedNow(errorStepIndex);
+  };
+
+  // The actual commit, separated so resolveHitOrError can drive it with a
+  // possibly-overridden error_step_index.
+  const commitArmedNow = (effectiveErrorStepIndex: number | null) => {
     if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
     const chainExtras: ChainExtras | undefined =
       chain.length > 0 || battedBallType !== null
         ? {
             fielder_chain: chain.length > 0 ? chain : undefined,
             batted_ball_type: battedBallType ?? undefined,
-            error_step_index: errorStepIndex,
+            error_step_index: effectiveErrorStepIndex,
           }
         : undefined;
     void submitAtBat(
@@ -497,6 +549,41 @@ export function useAtBatActions({
       chainExtras,
     );
   };
+
+  const resolveHitOrError = (choice: "hit" | "error") => {
+    if (!pendingHitOrError) return;
+    const armed = pendingHitOrError.armedResult;
+    setPendingHitOrError(null);
+    if (choice === "hit") {
+      commitArmedNow(errorStepIndex);
+      return;
+    }
+    // Error: rewrite to result=E, attribute the terminal step as the
+    // error, BUT keep the batter AND existing-runner pushes that the
+    // original armed outcome would have produced. `defaultAdvances("E")`
+    // returns [] (E is the coach-override case), so we synthesize the
+    // plan from the armed outcome and pass it via advancesOverride. The
+    // engine's batterReachedOnError flag taints reached_on_error
+    // correctly because result===E; auto-RBI returns 0 for E regardless.
+    const terminalIdx = chain.length - 1;
+    // player_id=null on the batter row — submitAtBat re-stamps it to
+    // the correct reachId (ours or opposing) before posting.
+    const synthesizedAdvances = defaultAdvances(state.bases, null, armed);
+    void submitAtBat(
+      "E",
+      spray,
+      undefined,
+      armedExtras ?? undefined,
+      {
+        fielder_chain: chain.length > 0 ? chain : undefined,
+        batted_ball_type: battedBallType ?? undefined,
+        error_step_index: terminalIdx,
+      },
+      synthesizedAdvances,
+    );
+  };
+
+  const cancelHitOrError = () => setPendingHitOrError(null);
 
   // Legacy single-tap commit path used by v1 — one drop = immediate
   // submit with spray + fielder_position only (no chain capture). Keeps
@@ -528,5 +615,8 @@ export function useAtBatActions({
     setErrorStepIndex,
     undoChainStep,
     commitArmed,
+    pendingHitOrError,
+    resolveHitOrError,
+    cancelHitOrError,
   };
 }
