@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import type { FielderTouch, OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
 import { BASE_XY, FIELDER_POSITIONS, POSITION_XY, type FielderPosition } from "./diamond-geometry";
 import { FieldBackground } from "./FieldBackground";
 
@@ -29,6 +29,14 @@ interface DefensiveDiamondProps {
    *  fits inside a fixed-row grid cell. The viewBox + preserveAspectRatio
    *  keep the diamond square (letterboxed by the parent). */
   fillContainer?: boolean;
+  /** Stage 3 chain — when present, the diamond renders each step as a
+   *  numbered marker at the drop spot with arrows linking the sequence.
+   *  Coach can see what they've captured before committing. The step at
+   *  `errorStepIndex` is recolored red. The diamond owns the marker
+   *  coordinates internally (tied to chain length) so the hook layer
+   *  doesn't have to round-trip them. */
+  chain?: FielderTouch[];
+  errorStepIndex?: number | null;
 }
 
 // When we're batting, runners are ours and we know names. When we're
@@ -120,6 +128,8 @@ export function DefensiveDiamond({
   onFielderDrop,
   onRunnerAction,
   fillContainer = false,
+  chain,
+  errorStepIndex = null,
 }: DefensiveDiamondProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<{
@@ -127,6 +137,15 @@ export function DefensiveDiamond({
     x: number;
     y: number;
   } | null>(null);
+  // Per-step drop coordinates for the chain markers. Kept in sync with
+  // `chain` length: appended on each drop (via endDrag), truncated when
+  // the hook shrinks chain (undo step), cleared when chain is empty
+  // (commit / cancel).
+  const [markerCoords, setMarkerCoords] = useState<{ x: number; y: number }[]>([]);
+  const chainLen = chain?.length ?? 0;
+  useEffect(() => {
+    setMarkerCoords((prev) => (prev.length > chainLen ? prev.slice(0, chainLen) : prev));
+  }, [chainLen]);
 
   const svgCoords = (clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -162,6 +181,11 @@ export function DefensiveDiamond({
     const c = svgCoords(e.clientX, e.clientY) ?? { x: drag.x, y: drag.y };
     const { position } = drag;
     setDrag(null);
+    // Optimistically record the drop in our local marker list. If the
+    // parent rejects the drop (no-op), the chain prop won't grow and the
+    // useEffect above will trim this entry on the next render — markers
+    // stay in sync with the canonical chain.
+    setMarkerCoords((prev) => [...prev, { x: c.x, y: c.y }]);
     onFielderDrop?.(c.x / 100, c.y / 100, position);
   };
 
@@ -255,6 +279,54 @@ export function DefensiveDiamond({
           </g>
         );
       })}
+      {/* Chain markers + arrows — one numbered chip per chain step at its
+          drop spot. Drawn before the fielders so the floating name labels
+          stay readable. Arrow segments connect consecutive drops so the
+          coach sees the sequence at a glance. */}
+      {chain && chain.length > 0 && markerCoords.length === chain.length && (
+        <g pointerEvents="none">
+          {/* Connecting segments between drop spots */}
+          {markerCoords.map((c, i) => {
+            if (i === 0) return null;
+            const prev = markerCoords[i - 1];
+            const isErr = errorStepIndex === i;
+            return (
+              <line
+                key={`chain-link-${i}`}
+                x1={prev.x}
+                y1={prev.y}
+                x2={c.x}
+                y2={c.y}
+                stroke={isErr ? "#ef4444" : "#1f3252"}
+                strokeWidth={0.55}
+                strokeDasharray={isErr ? "1.2 0.8" : undefined}
+                opacity={0.85}
+              />
+            );
+          })}
+          {/* Numbered chips at each drop spot */}
+          {markerCoords.map((c, i) => {
+            const isErr = errorStepIndex === i;
+            const fill = isErr ? "#ef4444" : "#1f3252";
+            return (
+              <g key={`chain-marker-${i}`}>
+                <circle cx={c.x} cy={c.y} r={2.4} fill={fill} stroke="#fff" strokeWidth={0.4} />
+                <text
+                  x={c.x}
+                  y={c.y + 0.9}
+                  textAnchor="middle"
+                  fontSize={2.4}
+                  fontWeight={700}
+                  fill="#fff"
+                >
+                  {i + 1}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      )}
+
       {/* Ghost markers at canonical positions while dragging — show where each
           fielder started so the user has spatial context as they pull one out. */}
       {dragMode && drag && FIELDER_POSITIONS.map((pos) => {

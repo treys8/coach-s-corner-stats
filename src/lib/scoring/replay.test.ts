@@ -1012,6 +1012,79 @@ describe("replay()", () => {
   });
 });
 
+describe("Stage 3 fielder_chain pass-through", () => {
+  beforeEach(() => { seq = 0; });
+
+  it("passes fielder_chain, batted_ball_type, error_step_index onto DerivedAtBat", () => {
+    const state = replay([
+      startGame({
+        starting_lineup: [
+          { batting_order: 1, player_id: "p1", position: "P" },
+          { batting_order: 2, player_id: "p2", position: "C" },
+          { batting_order: 3, player_id: "p3", position: "1B" },
+          { batting_order: 4, player_id: "p4", position: "2B" },
+          { batting_order: 5, player_id: "p5", position: "3B" },
+          { batting_order: 6, player_id: "p6", position: "SS" },
+          { batting_order: 7, player_id: "p7", position: "LF" },
+          { batting_order: 8, player_id: "p8", position: "CF" },
+          { batting_order: 9, player_id: "p9", position: "RF" },
+        ],
+      }),
+      evt("at_bat", atBat({
+        half: "top", // we are home, so top = opposing bats
+        result: "GO",
+        opponent_batter_id: "opp1",
+        fielder_chain: [
+          { position: "SS", action: "fielded" },
+          { position: "1B", action: "received", target: "first" },
+        ],
+        batted_ball_type: "ground",
+        error_step_index: null,
+      })),
+    ]);
+
+    const ab = state.at_bats[0];
+    expect(ab.fielder_chain).toHaveLength(2);
+    expect(ab.fielder_chain?.[0]).toEqual({ position: "SS", action: "fielded" });
+    expect(ab.batted_ball_type).toBe("ground");
+    expect(ab.error_step_index).toBeNull();
+    // First-touch SS → p6, 1B → p3 (resolved from our_lineup when fielding).
+    expect(ab.fielder_chain_player_ids).toEqual(["p6", "p3"]);
+    // Primary fielder snapshot pulls from chain[0] when present.
+    expect(ab.fielder_player_id).toBe("p6");
+  });
+
+  it("legacy events without fielder_chain still flow through fielder_position", () => {
+    const state = replay([
+      startGame({
+        starting_lineup: [
+          { batting_order: 1, player_id: "p1", position: "P" },
+          { batting_order: 2, player_id: "p2", position: "C" },
+          { batting_order: 3, player_id: "p3", position: "1B" },
+          { batting_order: 4, player_id: "p4", position: "2B" },
+          { batting_order: 5, player_id: "p5", position: "3B" },
+          { batting_order: 6, player_id: "p6", position: "SS" },
+          { batting_order: 7, player_id: "p7", position: "LF" },
+          { batting_order: 8, player_id: "p8", position: "CF" },
+          { batting_order: 9, player_id: "p9", position: "RF" },
+        ],
+      }),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "FO",
+        opponent_batter_id: "opp1",
+        fielder_position: "CF",
+      })),
+    ]);
+
+    const ab = state.at_bats[0];
+    expect(ab.fielder_chain).toBeUndefined();
+    expect(ab.fielder_chain_player_ids).toBeUndefined();
+    expect(ab.fielder_position).toBe("CF");
+    expect(ab.fielder_player_id).toBe("p8");
+  });
+});
+
 // Folding an authoritative event onto an existing state must match running
 // `replay()` from scratch. Callers that consume the server's returned
 // live_state + new event rely on this — if it ever drifts, optimistic UI and

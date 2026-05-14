@@ -91,6 +91,13 @@ export function LiveScoringV2({
     submitPitch,
     onFielderDrop,
     skipLocation,
+    chain,
+    battedBallType,
+    errorStepIndex,
+    setBattedBallType,
+    setErrorStepIndex,
+    undoChainStep,
+    commitArmed,
     submitMidPA,
     endHalfInning,
     submitPitchingChange,
@@ -189,6 +196,13 @@ export function LiveScoringV2({
           armedResult={armedResult}
           setArmedResult={setArmedResult}
           onSkipLocation={skipLocation}
+          chain={chain}
+          battedBallType={battedBallType}
+          errorStepIndex={errorStepIndex}
+          setBattedBallType={setBattedBallType}
+          setErrorStepIndex={setErrorStepIndex}
+          undoChainStep={undoChainStep}
+          commitArmed={commitArmed}
         />
 
         <div className="relative min-h-0 flex items-center justify-center overflow-hidden p-2">
@@ -212,6 +226,8 @@ export function LiveScoringV2({
             onFielderDrop={onFielderDrop}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
             fillContainer
+            chain={chain}
+            errorStepIndex={errorStepIndex}
           />
         </div>
 

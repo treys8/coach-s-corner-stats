@@ -7,9 +7,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { RESULT_DESC } from "@/lib/scoring/at-bat-helpers";
+import { chainNotation, RESULT_DESC } from "@/lib/scoring/at-bat-helpers";
 import type {
   AtBatResult,
+  BattedBallType,
+  FielderTouch,
   K3ReachSource,
   PitchType,
 } from "@/lib/scoring/types";
@@ -39,7 +41,31 @@ interface PitchRailProps {
    *  armedExtras so this is intentionally no-arg — keeps the foul_out
    *  notation hint (and future Stage 3 extras) from being dropped. */
   onSkipLocation: () => void;
+  /** Stage 3 chain — controlled by the hook; the rail reads it for the
+   *  notation HUD and lets the coach select an error step. */
+  chain: FielderTouch[];
+  battedBallType: BattedBallType | null;
+  errorStepIndex: number | null;
+  setBattedBallType: (t: BattedBallType | null) => void;
+  setErrorStepIndex: (idx: number | null) => void;
+  undoChainStep: () => void;
+  commitArmed: () => void;
 }
+
+/** Chip row options in the order they render. Pre-selecting the smart-
+ *  default leaves a single visual tap to confirm; coach can override. */
+const BBT_OPTIONS: { value: BattedBallType; label: string }[] = [
+  { value: "ground", label: "Ground" },
+  { value: "fly", label: "Fly" },
+  { value: "line", label: "Line" },
+  { value: "pop", label: "Pop" },
+  { value: "bunt", label: "Bunt" },
+];
+
+const POSITION_DIGIT_DISPLAY: Record<string, string> = {
+  P: "1", C: "2", "1B": "3", "2B": "4", "3B": "5", SS: "6",
+  LF: "7", CF: "8", RF: "9",
+};
 
 type Mode = "pitchPad" | "armedDrag" | "pickContact";
 
@@ -78,9 +104,21 @@ export function PitchRail({
   armedResult,
   setArmedResult,
   onSkipLocation,
+  chain,
+  battedBallType,
+  errorStepIndex,
+  setBattedBallType,
+  setErrorStepIndex,
+  undoChainStep,
+  commitArmed,
 }: PitchRailProps) {
   const [showOutcomesManually, setShowOutcomesManually] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // "Add error" mode highlights chain step buttons as targets; coach taps
+  // one to mark it as the error step (then re-renders into normal mode).
+  // Tap the existing error step again to clear it. Local state since it's
+  // a pure UI affordance — no need to round-trip through the hook.
+  const [pickingError, setPickingError] = useState(false);
   const disabled = submitting || outs >= 3;
 
   const mode: Mode =
@@ -245,34 +283,205 @@ export function PitchRail({
         )}
 
         {mode === "armedDrag" && armedResult && armedResult !== ARMED_IN_PLAY_PENDING && (
-          <div className="space-y-3 text-sm">
-            <div className="rounded-md border bg-muted/40 px-3 py-2">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground">Recording</div>
-              <div className="mt-1 font-semibold text-sa-blue-deep">
-                {RESULT_DESC[armedResult] ?? armedResult}
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Drag the fielder who made the play on the diamond.
-              </p>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Button
-                variant="outline"
-                onClick={onSkipLocation}
-                disabled={submitting}
-              >
-                Skip location
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => setArmedResult(null)}
-                disabled={submitting}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
+          <ArmedDragBody
+            armedResult={armedResult}
+            chain={chain}
+            battedBallType={battedBallType}
+            errorStepIndex={errorStepIndex}
+            setBattedBallType={setBattedBallType}
+            setErrorStepIndex={(idx) => {
+              setErrorStepIndex(idx);
+              setPickingError(false);
+            }}
+            pickingError={pickingError}
+            setPickingError={setPickingError}
+            undoChainStep={undoChainStep}
+            commitArmed={() => {
+              commitArmed();
+              setPickingError(false);
+            }}
+            onSkipLocation={() => {
+              onSkipLocation();
+              setPickingError(false);
+            }}
+            onCancel={() => {
+              setArmedResult(null);
+              setPickingError(false);
+            }}
+            submitting={submitting}
+          />
         )}
+      </div>
+    </div>
+  );
+}
+
+interface ArmedDragBodyProps {
+  armedResult: AtBatResult;
+  chain: FielderTouch[];
+  battedBallType: BattedBallType | null;
+  errorStepIndex: number | null;
+  setBattedBallType: (t: BattedBallType | null) => void;
+  setErrorStepIndex: (idx: number | null) => void;
+  pickingError: boolean;
+  setPickingError: (v: boolean) => void;
+  undoChainStep: () => void;
+  commitArmed: () => void;
+  onSkipLocation: () => void;
+  onCancel: () => void;
+  submitting: boolean;
+}
+
+/** Body shown during the post-outcome "drag the chain" phase. Combines:
+ *  - notation preview HUD ("6-3" / "F8" / "6 E4")
+ *  - chip-tap batted-ball-type row (smart-pre-selected from result)
+ *  - "Add error" affordance: tap → step buttons highlight; tap a step to flag it
+ *  - Commit / Skip location / Cancel actions
+ *  - Undo last step when the chain isn't empty
+ */
+function ArmedDragBody({
+  armedResult,
+  chain,
+  battedBallType,
+  errorStepIndex,
+  setBattedBallType,
+  setErrorStepIndex,
+  pickingError,
+  setPickingError,
+  undoChainStep,
+  commitArmed,
+  onSkipLocation,
+  onCancel,
+  submitting,
+}: ArmedDragBodyProps) {
+  const notation = chainNotation(chain, armedResult, errorStepIndex, undefined);
+  const hasChain = chain.length > 0;
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="rounded-md border bg-muted/40 px-3 py-2">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Recording</div>
+        <div className="mt-1 font-semibold text-sa-blue-deep">
+          {RESULT_DESC[armedResult] ?? armedResult}
+        </div>
+        {notation ? (
+          <div className="mt-1 font-mono-stat text-lg text-foreground tabular-nums">{notation}</div>
+        ) : (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Drag the fielder who made the play. Drag others to add throws.
+          </p>
+        )}
+      </div>
+
+      {/* Chain step list — visible once the coach has dropped at least one
+          fielder. Doubles as the "Add error" picker: in pickingError mode
+          tapping a step flips errorStepIndex; otherwise it's read-only. */}
+      {hasChain && (
+        <div className="rounded-md border px-2 py-2 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              {pickingError ? "Pick error step" : "Chain"}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={undoChainStep}
+              disabled={submitting}
+              title="Remove the most recent step"
+            >
+              Undo step
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {chain.map((t, i) => {
+              const digit = POSITION_DIGIT_DISPLAY[t.position] ?? t.position;
+              const isErr = errorStepIndex === i;
+              const clickable = pickingError;
+              return (
+                <button
+                  key={`step-${i}`}
+                  type="button"
+                  disabled={submitting || !clickable}
+                  onClick={() => {
+                    if (!clickable) return;
+                    setErrorStepIndex(isErr ? null : i);
+                  }}
+                  className={`h-7 min-w-[2.25rem] rounded border px-2 text-xs font-bold tabular-nums ${
+                    isErr
+                      ? "bg-red-600 text-white border-red-700"
+                      : clickable
+                        ? "bg-background hover:bg-muted"
+                        : "bg-muted/50"
+                  }`}
+                  title={t.target ? `${t.position} → ${t.target}` : t.position}
+                >
+                  {digit}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Batted-ball-type chip row — smart-pre-selected from result. Coach
+          taps to confirm or pick a different type. */}
+      <div className="rounded-md border px-2 py-2 space-y-1.5">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          Batted ball
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {BBT_OPTIONS.map((opt) => {
+            const active = battedBallType === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                disabled={submitting}
+                onClick={() => setBattedBallType(active ? null : opt.value)}
+                className={`h-7 rounded border px-2 text-xs font-semibold ${
+                  active
+                    ? "bg-sa-blue text-white border-sa-blue"
+                    : "bg-background hover:bg-muted"
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Button
+          className="bg-sa-orange hover:bg-sa-orange/90 text-white"
+          onClick={commitArmed}
+          disabled={submitting}
+        >
+          Commit
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => setPickingError(!pickingError)}
+          disabled={submitting || !hasChain}
+        >
+          {pickingError ? "Cancel error pick" : "Add error"}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={onSkipLocation}
+          disabled={submitting}
+          title="Skip the drag chain — commit with no fielder info."
+        >
+          Skip location
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={onCancel}
+          disabled={submitting}
+        >
+          Cancel
+        </Button>
       </div>
     </div>
   );
