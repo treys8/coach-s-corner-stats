@@ -33,6 +33,7 @@ import { PitchingChangeDialog } from "@/components/scoring/dialogs/PitchingChang
 import { SubstitutionDialog } from "@/components/scoring/dialogs/SubstitutionDialog";
 import { EditLastPlayDialog } from "@/components/scoring/dialogs/EditLastPlayDialog";
 import { RunnerActionDialog } from "@/components/scoring/dialogs/RunnerActionDialog";
+import { RbiOnLastPlayDialog } from "@/components/scoring/dialogs/RbiOnLastPlayDialog";
 import { FinalizeDialog } from "@/components/scoring/dialogs/FinalizeDialog";
 
 interface LiveScoringV2Props {
@@ -99,6 +100,10 @@ export function LiveScoringV2({
     undoChainStep,
     commitArmed,
     submitMidPA,
+    submitRunnerDrag,
+    pendingRbiPrompt,
+    resolveRbiPrompt,
+    cancelRbiPrompt,
     endHalfInning,
     submitPitchingChange,
     submitMoundVisit,
@@ -224,6 +229,9 @@ export function LiveScoringV2({
             currentBatterId={currentBatterIdForChip}
             dragMode={dragMode}
             onFielderDrop={onFielderDrop}
+            onRunnerDrop={(from, target, runnerId) => {
+              void submitRunnerDrag(from, target.base, target.verdict, runnerId);
+            }}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
             fillContainer
             chain={chain}
@@ -362,6 +370,26 @@ export function LiveScoringV2({
         names={names}
         bases={state.bases}
         onSubmit={submitMidPA}
+        disabled={submitting}
+      />
+      <RbiOnLastPlayDialog
+        pending={pendingRbiPrompt}
+        runnerLabel={(() => {
+          if (!pendingRbiPrompt) return null;
+          const id = pendingRbiPrompt.runnerId;
+          if (!id) return null;
+          if (weAreBatting) {
+            const full = names.get(id);
+            if (!full) return null;
+            const m = full.match(/^#\S+\s+(.*)$/);
+            return m ? m[1] : full;
+          }
+          const slot = state.opposing_lineup.find((s) => s.opponent_player_id === id);
+          if (!slot) return null;
+          return slot.last_name ?? (slot.jersey_number ? `#${slot.jersey_number}` : null);
+        })()}
+        onResolve={(b) => void resolveRbiPrompt(b)}
+        onCancel={cancelRbiPrompt}
         disabled={submitting}
       />
       <EditOpposingLineupDialog

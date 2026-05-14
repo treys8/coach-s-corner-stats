@@ -1,11 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { FielderTouch, OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
+import type { Base, FielderTouch, OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
 import { BASE_XY, FIELDER_POSITIONS, POSITION_XY, type FielderPosition } from "./diamond-geometry";
 import { FieldBackground } from "./FieldBackground";
 
 export { FIELDER_POSITIONS, type FielderPosition };
+
+/** Drop target produced by the SAFE/OUT zones during a runner drag. */
+export interface RunnerDropTarget {
+  base: Base | "home";
+  verdict: "safe" | "out";
+}
 
 interface DefensiveDiamondProps {
   state: ReplayState;
@@ -17,9 +23,14 @@ interface DefensiveDiamondProps {
    *  batting this is one of our roster ids; when we are fielding it is an
    *  `opponent_players.id` resolved via `state.opposing_lineup`. */
   currentBatterId?: string | null;
-  /** When set, fielders become draggable. Drop fires onFielderDrop. */
+  /** When set, fielders become draggable. Drop fires onFielderDrop.
+   *  Suppresses runner drag while active. */
   dragMode?: boolean;
   onFielderDrop?: (x: number, y: number, fielderPosition: FielderPosition) => void;
+  /** Stage 4 — when a runner chip drag ends on a SAFE/OUT zone, fire this.
+   *  When unset, runner chips fall back to the tap behavior wired via
+   *  `onRunnerAction`. */
+  onRunnerDrop?: (from: Base, target: RunnerDropTarget, runnerId: string | null) => void;
   /** When set (and not in dragMode), tapping an occupied base fires this. */
   onRunnerAction?: (
     base: "first" | "second" | "third",
@@ -32,9 +43,7 @@ interface DefensiveDiamondProps {
   /** Stage 3 chain — when present, the diamond renders each step as a
    *  numbered marker at the drop spot with arrows linking the sequence.
    *  Coach can see what they've captured before committing. The step at
-   *  `errorStepIndex` is recolored red. The diamond owns the marker
-   *  coordinates internally (tied to chain length) so the hook layer
-   *  doesn't have to round-trip them. */
+   *  `errorStepIndex` is recolored red. */
   chain?: FielderTouch[];
   errorStepIndex?: number | null;
 }
@@ -46,6 +55,38 @@ const BASE_GENERIC: Record<"first" | "second" | "third", string> = {
   second: "R2",
   third: "R3",
 };
+
+// Drop targets the runner-drag SAFE/OUT zones surface. Home is included
+// only as a destination (you can't drag a runner from home).
+const DROP_BASES: (Base | "home")[] = ["first", "second", "third", "home"];
+
+// Center of home plate in SVG coords (matches FieldBackground geometry).
+const HOME_XY: [number, number] = [50, 92];
+
+// 2D offsets for SAFE/OUT zones placed relative to each base. SAFE sits
+// on the "forward / center-field" side, OUT on the "back / foul" side,
+// so the spatial cue matches the verdict.
+const ZONE_OFFSET: Record<Base | "home", {
+  safe: [number, number];
+  out: [number, number];
+}> = {
+  first:  { safe: [+4.5, -5.0], out: [+4.5, +5.0] },
+  second: { safe: [0,    -5.5], out: [0,    +5.5] },
+  third:  { safe: [-4.5, -5.0], out: [-4.5, +5.0] },
+  // Home plate sits at the bottom of the diamond — SAFE pulls upward
+  // toward the mound (where the runner approaches from), OUT pulls
+  // sideways into foul territory so it doesn't overlap the catcher.
+  home:   { safe: [0,    -6.5], out: [+9.0, -2.0] },
+};
+
+// Pixel radius around a zone center that counts as a drop. Larger than
+// the base diamond's half-width so finger drops are forgiving.
+const ZONE_HIT_RADIUS = 5.5;
+
+// Pixel distance (in SVG coords) that a runner pointer must move before
+// the drag activates — keeps short taps routed through the tap handler
+// for the existing RunnerActionDialog.
+const RUNNER_DRAG_THRESHOLD = 2.5;
 
 function lastNameOf(full: string): string {
   // names are formatted "#5 Koester" or "Koester Smith" — strip a leading
@@ -119,6 +160,20 @@ function batterChipLabel(
   return "AB";
 }
 
+interface RunnerDragState {
+  from: Base;
+  runnerId: string | null;
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+  /** True once the pointer moved past RUNNER_DRAG_THRESHOLD — until then
+   *  the gesture can still resolve as a tap. */
+  active: boolean;
+  /** Highlighted drop target under the current pointer, if any. */
+  hover: RunnerDropTarget | null;
+}
+
 export function DefensiveDiamond({
   state,
   names,
@@ -126,6 +181,7 @@ export function DefensiveDiamond({
   currentBatterId,
   dragMode = false,
   onFielderDrop,
+  onRunnerDrop,
   onRunnerAction,
   fillContainer = false,
   chain,
@@ -137,6 +193,7 @@ export function DefensiveDiamond({
     x: number;
     y: number;
   } | null>(null);
+  const [runnerDrag, setRunnerDrag] = useState<RunnerDragState | null>(null);
   // Per-step drop coordinates for the chain markers. Kept in sync with
   // `chain` length: appended on each drop (via endDrag), truncated when
   // the hook shrinks chain (undo step), cleared when chain is empty
@@ -189,6 +246,79 @@ export function DefensiveDiamond({
     onFielderDrop?.(c.x / 100, c.y / 100, position);
   };
 
+  // Compute hover target by snapping pointer to nearest SAFE/OUT zone
+  // within ZONE_HIT_RADIUS. Returns null when no zone is close.
+  const hoverTargetAt = (x: number, y: number): RunnerDropTarget | null => {
+    let best: { tgt: RunnerDropTarget; d: number } | null = null;
+    for (const base of DROP_BASES) {
+      const [bx, by] = base === "home" ? HOME_XY : BASE_XY[base];
+      const offsets = ZONE_OFFSET[base];
+      const safe: [number, number] = [bx + offsets.safe[0], by + offsets.safe[1]];
+      const out: [number, number]  = [bx + offsets.out[0],  by + offsets.out[1]];
+      const dSafe = Math.hypot(x - safe[0], y - safe[1]);
+      if (dSafe <= ZONE_HIT_RADIUS && (!best || dSafe < best.d)) {
+        best = { tgt: { base, verdict: "safe" }, d: dSafe };
+      }
+      const dOut = Math.hypot(x - out[0], y - out[1]);
+      if (dOut <= ZONE_HIT_RADIUS && (!best || dOut < best.d)) {
+        best = { tgt: { base, verdict: "out" }, d: dOut };
+      }
+    }
+    return best?.tgt ?? null;
+  };
+
+  const beginRunnerDrag = (
+    e: ReactPointerEvent<SVGGElement>,
+    base: Base,
+    runnerId: string | null,
+  ) => {
+    if (dragMode) return;
+    if (!onRunnerDrop) return;
+    e.preventDefault();
+    const c = svgCoords(e.clientX, e.clientY);
+    if (!c) return;
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    setRunnerDrag({
+      from: base,
+      runnerId,
+      startX: c.x,
+      startY: c.y,
+      x: c.x,
+      y: c.y,
+      active: false,
+      hover: null,
+    });
+  };
+
+  const continueRunnerDrag = (e: ReactPointerEvent<SVGGElement>) => {
+    if (!runnerDrag) return;
+    const c = svgCoords(e.clientX, e.clientY);
+    if (!c) return;
+    const moved = Math.hypot(c.x - runnerDrag.startX, c.y - runnerDrag.startY);
+    const active = runnerDrag.active || moved >= RUNNER_DRAG_THRESHOLD;
+    const hover = active ? hoverTargetAt(c.x, c.y) : null;
+    setRunnerDrag({ ...runnerDrag, x: c.x, y: c.y, active, hover });
+  };
+
+  const endRunnerDrag = (e: ReactPointerEvent<SVGGElement>) => {
+    if (!runnerDrag) return;
+    const c = svgCoords(e.clientX, e.clientY) ?? { x: runnerDrag.x, y: runnerDrag.y };
+    const wasActive = runnerDrag.active;
+    const { from, runnerId } = runnerDrag;
+    setRunnerDrag(null);
+    if (!wasActive) {
+      // No meaningful movement — treat as a tap. Route through the
+      // existing RunnerActionDialog opener if provided.
+      onRunnerAction?.(from, runnerId);
+      return;
+    }
+    const target = hoverTargetAt(c.x, c.y);
+    if (!target) return; // dropped outside any zone — cancelled
+    onRunnerDrop?.(from, target, runnerId);
+  };
+
+  const runnerDragShowing = runnerDrag !== null && runnerDrag.active;
+
   return (
     <svg
       ref={svgRef}
@@ -233,30 +363,15 @@ export function DefensiveDiamond({
         );
       })()}
 
-      {/* Bases (rotated squares; orange when occupied). The runner's jersey
-          number (or last name / R1-3 fallback) sits inside the orange chip
-          so coaches can identify base-runners at a glance. */}
+      {/* Bases (rotated squares; orange when occupied). The runner chip
+          is rendered as a separate layer below so it can pick up its own
+          pointer events for the Stage 4 drag-with-SAFE/OUT flow. */}
       {(["first", "second", "third"] as const).map((b) => {
         const [bx, by] = BASE_XY[b];
         const runner = state.bases[b];
         const occupied = runner !== null;
-        const tappable = occupied && !dragMode && !!onRunnerAction;
-        const label = occupied
-          ? runnerChipLabel(b, runner?.player_id ?? null, names, weAreBatting, state.opposing_lineup)
-          : null;
-        // Shrink the label slightly when it's longer than two characters so
-        // jerseys / short last-name fallbacks still fit inside the chip.
-        const labelFont = label && label.length > 2 ? 2.2 : 2.8;
         return (
-          <g
-            key={b}
-            onClick={tappable ? () => onRunnerAction!(b, runner?.player_id ?? null) : undefined}
-            style={tappable ? { cursor: "pointer" } : undefined}
-            data-base={b}
-          >
-            {tappable && (
-              <title>Tap to record runner action</title>
-            )}
+          <g key={b} data-base={b}>
             <g transform={`translate(${bx} ${by}) rotate(45)`}>
               <rect
                 x={-2.6} y={-2.6} width={5.2} height={5.2}
@@ -264,21 +379,127 @@ export function DefensiveDiamond({
                 stroke="#1f3252" strokeWidth="0.35"
               />
             </g>
-            {label && (
-              <text
-                x={bx} y={by + labelFont / 3}
-                textAnchor="middle"
-                fontSize={labelFont}
-                fontWeight="700"
-                fill="#fff"
-                pointerEvents="none"
-              >
-                {label}
-              </text>
-            )}
           </g>
         );
       })}
+
+      {/* SAFE / OUT drop zones — only rendered during an active runner
+          drag. Snap zones are sized via ZONE_HIT_RADIUS; the visible
+          ellipse matches roughly so the coach sees the snap target. */}
+      {runnerDragShowing && (
+        <g pointerEvents="none">
+          {DROP_BASES.map((base) => {
+            const [bx, by] = base === "home" ? HOME_XY : BASE_XY[base];
+            const offsets = ZONE_OFFSET[base];
+            const safeC = [bx + offsets.safe[0], by + offsets.safe[1]] as const;
+            const outC  = [bx + offsets.out[0],  by + offsets.out[1]]  as const;
+            const hoverSafe =
+              runnerDrag?.hover?.base === base && runnerDrag.hover.verdict === "safe";
+            const hoverOut =
+              runnerDrag?.hover?.base === base && runnerDrag.hover.verdict === "out";
+            return (
+              <g key={`zone-${base}`}>
+                <ellipse
+                  cx={safeC[0]} cy={safeC[1]} rx={5.4} ry={2.6}
+                  fill="#22c55e"
+                  stroke={hoverSafe ? "#fff" : "#15803d"}
+                  strokeWidth={hoverSafe ? 0.7 : 0.35}
+                  opacity={hoverSafe ? 1 : 0.85}
+                />
+                <text
+                  x={safeC[0]} y={safeC[1] + 0.95}
+                  textAnchor="middle"
+                  fontSize={2.4}
+                  fontWeight={800}
+                  fill="#fff"
+                >
+                  SAFE
+                </text>
+                <ellipse
+                  cx={outC[0]} cy={outC[1]} rx={5.0} ry={2.4}
+                  fill="#ef4444"
+                  stroke={hoverOut ? "#fff" : "#991b1b"}
+                  strokeWidth={hoverOut ? 0.7 : 0.35}
+                  opacity={hoverOut ? 1 : 0.85}
+                />
+                <text
+                  x={outC[0]} y={outC[1] + 0.9}
+                  textAnchor="middle"
+                  fontSize={2.3}
+                  fontWeight={800}
+                  fill="#fff"
+                >
+                  OUT
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      )}
+
+      {/* Runner chips — separate layer from the base diamond so each chip
+          can carry its own pointer events. Keyed by player_id (not base)
+          so React keeps the same DOM node when a runner advances; the CSS
+          transform transition then slides the chip to the new base. The
+          transition is suppressed while the coach is dragging so the chip
+          tracks the pointer without easing. */}
+      {(["first", "second", "third"] as const).map((b) => {
+        const runner = state.bases[b];
+        if (!runner) return null;
+        const [bx, by] = BASE_XY[b];
+        const label = runnerChipLabel(b, runner.player_id, names, weAreBatting, state.opposing_lineup);
+        const labelFont = label.length > 2 ? 2.2 : 2.8;
+        const dragging = runnerDrag?.from === b && runnerDrag.active;
+        const cx = dragging ? runnerDrag!.x : bx;
+        const cy = dragging ? runnerDrag!.y : by;
+        const draggable = !!onRunnerDrop && !dragMode;
+        const tappable = !dragging && !dragMode && !!onRunnerAction;
+        // Stable key — same player on different bases reuses the DOM node
+        // so the CSS transition can animate the move. Falls back to base
+        // when player_id is missing so the chip still renders.
+        const stableKey = runner.player_id ?? `unknown-${b}`;
+        return (
+          <g
+            key={stableKey}
+            transform={`translate(${cx} ${cy})`}
+            style={{
+              transition: dragging ? "none" : "transform 200ms ease-out",
+              ...(draggable
+                ? { cursor: dragging ? "grabbing" : "grab" }
+                : tappable
+                  ? { cursor: "pointer" }
+                  : undefined),
+            }}
+            onPointerDown={
+              draggable
+                ? (e) => beginRunnerDrag(e, b, runner.player_id)
+                : undefined
+            }
+            onPointerMove={dragging ? continueRunnerDrag : undefined}
+            onPointerUp={dragging || runnerDrag?.from === b ? endRunnerDrag : undefined}
+            onPointerCancel={dragging || runnerDrag?.from === b ? endRunnerDrag : undefined}
+          >
+            {tappable && <title>Drag to SAFE/OUT or tap to record action</title>}
+            <circle
+              cx={0} cy={0} r={dragging ? 3.2 : 2.8}
+              fill="#ee8233"
+              stroke={dragging ? "#fff" : "#1f3252"}
+              strokeWidth={dragging ? 0.55 : 0.35}
+            />
+            <text
+              x={0} y={labelFont / 3}
+              textAnchor="middle"
+              fontSize={labelFont}
+              fontWeight="700"
+              fill="#fff"
+              pointerEvents="none"
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })}
+
       {/* Chain markers + arrows — one numbered chip per chain step at its
           drop spot. Drawn before the fielders so the floating name labels
           stay readable. Arrow segments connect consecutive drops so the
