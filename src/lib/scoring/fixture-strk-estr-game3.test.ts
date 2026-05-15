@@ -24,6 +24,7 @@
 
 import { describe, expect, it } from "vitest";
 import { replay } from "./replay";
+import { rollupFielding } from "./rollup";
 import type {
   AtBatPayload,
   CaughtStealingPayload,
@@ -186,9 +187,17 @@ describe("STRK (home) vs ESTR (rematch) 2026-05-15 — Game 3 walk-off fixture",
       fielder_position: "P",
     })));
     // Mid-PA CS during Ingram's K: Tillman caught stealing 2nd (C → 2B).
+    // Attached chain exercises the running-event fielder-attribution path —
+    // C Mullins should accrue +1 A, 2B Templeton +1 PO in the fielding
+    // rollup, alongside the catcher-specific +1 CS that Mullins gets from
+    // `catcher_id`.
     events.push(evt<CaughtStealingPayload>("caught_stealing", {
       runner_id: OPP_TILLMAN_R1,
       from: "first",
+      fielder_chain: [
+        { position: "C",  action: "fielded", target: "second" },
+        { position: "2B", action: "tagged" },
+      ],
     }));
     // (3) Ingram K-swinging — independently 3rd out (CS already gave 2nd out).
     events.push(evt<AtBatPayload>("at_bat", oppAtBat({
@@ -950,11 +959,27 @@ describe("STRK (home) vs ESTR (rematch) 2026-05-15 — Game 3 walk-off fixture",
 
     // ---------- Edge-case spot checks ----------
 
-    // (1) Tillman CS is recorded in state.caught_stealing exactly once.
+    // (1) Tillman CS is recorded in state.caught_stealing exactly once,
+    //     with `from` echoed and the C→2B chain snapshotted to player_ids.
     const tillmanCs = state.caught_stealing.filter(
       (cs) => cs.runner_id === OPP_TILLMAN_R1,
     );
     expect(tillmanCs.length, "Tillman CS @ 2nd in Top 1st").toBe(1);
+    expect(tillmanCs[0].from).toBe("first");
+    expect(tillmanCs[0].fielder_chain_player_ids).toEqual([P_MULLINS, P_TEMPLETON]);
+
+    // (1b) Rollup credits flow through the chain: C Mullins +1 A and +1 CS
+    //      (catcher stat); 2B Templeton +1 PO.
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+      error_advance_fielders: state.error_advance_fielders,
+    });
+    expect(fielding.get(P_MULLINS)!.CS).toBe(1);
+    expect(fielding.get(P_MULLINS)!.A).toBeGreaterThanOrEqual(1);
+    expect(fielding.get(P_TEMPLETON)!.PO).toBeGreaterThanOrEqual(1);
 
     // (2) Top 2nd Bankston FC 5-2: result=FC, outs_recorded=1, Carlisle out
     //     at home.

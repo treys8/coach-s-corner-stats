@@ -144,6 +144,7 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
     caught_stealing: state.caught_stealing,
     pickoffs: state.pickoffs,
     passed_balls: state.passed_balls,
+    error_advance_fielders: state.error_advance_fielders,
     pending_umpire_calls: state.pending_umpire_calls,
     defensive_innings_outs: state.defensive_innings_outs,
     last_event_at: event.created_at,
@@ -709,6 +710,11 @@ function applyStolenBase(state: ReplayState, eventId: string, sequence: number, 
   };
 }
 
+// Engine invariant for CS and pickoff: outsAdded is always 1 (line below).
+// rollupFielding relies on this when crediting the terminal step of
+// `fielder_chain` as a PO — if a future variant ever emits a CS/PO with no
+// out (e.g., a "failed pickoff attempt"), that rollup branch will need a
+// guard so it doesn't over-credit.
 function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtStealingPayload): ReplayState {
   const sourceRunner = state.bases[p.from];
   const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
@@ -728,6 +734,10 @@ function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtSteal
         event_id: eventId,
         catcher_id: catcherId,
         from: p.from,
+        // We persist the raw payload chain alongside the resolved player_ids
+        // as a debug breadcrumb (rollup only reads `fielder_chain_player_ids`).
+        // Keeps the original position labels visible in the state for any
+        // downstream consumer that wants to render notation like "2-6".
         fielder_chain: p.fielder_chain,
         fielder_chain_player_ids: chainIds,
       },
@@ -735,6 +745,7 @@ function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtSteal
   };
 }
 
+// Same outsAdded=1 invariant as applyCaughtStealing — see comment there.
 function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): ReplayState {
   const sourceRunner = state.bases[p.from];
   const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
@@ -752,6 +763,8 @@ function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): R
         event_id: eventId,
         catcher_id: catcherId,
         from: p.from,
+        // Raw payload chain persisted alongside resolved player_ids as a
+        // debug breadcrumb. See applyCaughtStealing for the rationale.
         fielder_chain: p.fielder_chain,
         fielder_chain_player_ids: chainIds,
       },
