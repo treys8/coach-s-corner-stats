@@ -126,6 +126,91 @@ describe("replay()", () => {
     expect(state.bases).toEqual({ first: null, second: null, third: null });
   });
 
+  it("implicit batter-out applies when other runners are enumerated", () => {
+    // SF with a scoring R3 and no enumerated `{batter, to: "out"}`. The
+    // result implies the batter is out — engine charges the out so callers
+    // can describe just the runners that moved.
+    const state = replay([
+      startGame({ we_are_home: false }),
+      // Get a runner to third.
+      evt("at_bat", atBat({
+        half: "top",
+        result: "3B",
+        batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "third", player_id: "p1" }],
+      })),
+      // SF: R3 scores, batter's disposition implicit.
+      evt("at_bat", atBat({
+        half: "top",
+        result: "SF",
+        batter_id: "p2",
+        rbi: 1,
+        runner_advances: [{ from: "third", to: "home", player_id: "p1" }],
+      })),
+    ]);
+    expect(state.outs).toBe(1);
+    expect(state.team_score).toBe(1);
+    expect(state.bases.third).toBeNull();
+  });
+
+  it("implicit batter-out also fires for DP/TP when batter not enumerated", () => {
+    // DP with only the runner force at 2nd enumerated — batter is implicitly
+    // the second out.
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "DP",
+        batter_id: "p2",
+        runner_advances: [{ from: "first", to: "out", player_id: "p1" }],
+      })),
+    ]);
+    expect(state.outs).toBe(2);
+    expect(state.bases.first).toBeNull();
+  });
+
+  it("implicit batter-out does NOT fire when enumerated outs already meet default", () => {
+    // DP where the encoder enumerated BOTH runner outs (batter safe at first).
+    // Without the cap, the engine used to charge 2 + 1 = 3 outs.
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: "p2",
+        runner_advances: [
+          { from: "first",  to: "second", player_id: "p1" },
+          { from: "batter", to: "first",  player_id: "p2" },
+        ],
+      })),
+      // Weird DP shape: both runners out, batter safe at first (encoder
+      // didn't enumerate the batter). Engine must cap at DEFAULT_OUTS_FOR[DP]
+      // = 2 rather than over-charge with an implicit batter-out.
+      evt("at_bat", atBat({
+        half: "top",
+        result: "DP",
+        batter_id: "p3",
+        runner_advances: [
+          { from: "first",  to: "out", player_id: "p2" },
+          { from: "second", to: "out", player_id: "p1" },
+        ],
+      })),
+    ]);
+    expect(state.outs).toBe(2);
+  });
+
   it("solo HR with explicit batter→home advance scores 1 for batting team", () => {
     // We are home; opponent batting in top of 1st means runs go to opponent_score.
     // To verify our scoring, run a bottom-of-1 at_bat with us batting.
@@ -966,8 +1051,12 @@ describe("replay()", () => {
     // catcher_id is null because we_are_home=false + half='top' means our
     // team was at-bat — the catcher on the field is the opponent's.
     expect(state.stolen_bases).toEqual([{ runner_id: "p1", event_id: "sb-1", catcher_id: null }]);
-    expect(state.caught_stealing).toEqual([{ runner_id: "p2", event_id: "cs-1", catcher_id: null }]);
-    expect(state.pickoffs).toEqual([{ runner_id: "p3", event_id: "pk-1", catcher_id: null }]);
+    expect(state.caught_stealing).toEqual([
+      { runner_id: "p2", event_id: "cs-1", catcher_id: null, from: "first" },
+    ]);
+    expect(state.pickoffs).toEqual([
+      { runner_id: "p3", event_id: "pk-1", catcher_id: null, from: "first" },
+    ]);
   });
 
   it("opp-pa-* synthetic player_ids are rewritten to null on derived advances", () => {

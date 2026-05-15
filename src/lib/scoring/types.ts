@@ -221,18 +221,43 @@ export interface StolenBasePayload {
 export interface CaughtStealingPayload {
   runner_id: string | null;
   from: Base;
+  /** Ordered fielders who handled the ball on the CS play. First step is
+   *  the throwing fielder (usually the catcher); subsequent steps are
+   *  receivers / taggers. When present, the rollup credits A on every
+   *  non-terminal step and PO on the terminal step. Catcher-specific CS
+   *  credit (caught_stealing column) is independent and lands via
+   *  `catcher_id` regardless of chain. */
+  fielder_chain?: FielderTouch[];
 }
 
 export interface PickoffPayload {
   runner_id: string | null;
   from: Base;
+  /** Ordered fielders on the pickoff play. Same semantics as
+   *  CaughtStealingPayload.fielder_chain — A on non-terminal, PO on
+   *  terminal. */
+  fielder_chain?: FielderTouch[];
 }
 
 // Used for wild_pitch, passed_ball, balk, error_advance — UI provides an
 // explicit advance plan because these can move multiple runners. Sources
 // must be base names (no `batter`); destinations are bases / home / out.
+//
+// `error_fielder_position` + `error_type` are populated only by runner-drag
+// → "fielding/throwing error" attribution. Carry the fielder who
+// committed the error so a future engine pass can credit it. Today the
+// replay engine ignores both fields (error rollup happens at the at-bat
+// fielder_chain level) — they're persisted for the follow-up.
+//
+// `attribution_label` is a free-form descriptor for non-error runner-drag
+// advances ("Advanced on the throw", "Tag-up advance", "Defensive
+// indifference"). Drives the description string in the timeline; not yet
+// read by the stats rollup.
 export interface RunnerMovePayload {
   advances: RunnerAdvance[];
+  error_fielder_position?: string;
+  error_type?: "fielding" | "throwing";
+  attribution_label?: string;
 }
 
 // ---- Per-pitch events (Phase E) -------------------------------------------
@@ -546,13 +571,38 @@ export interface ReplayState {
    *  we were batting — rollupFielding uses it to credit catcher SB
    *  (allowed) / CS / PIK. */
   stolen_bases: { runner_id: string | null; event_id: string; catcher_id: string | null }[];
-  caught_stealing: { runner_id: string | null; event_id: string; catcher_id: string | null }[];
-  pickoffs: { runner_id: string | null; event_id: string; catcher_id: string | null }[];
+  /** `from` echoes the payload base so consumers can distinguish CS-at-2nd
+   *  from CS-at-home in rollups without an out-of-band event lookup.
+   *  `fielder_chain` + `fielder_chain_player_ids` are snapshotted from the
+   *  event when a chain was attached; rollupFielding walks them for A/PO
+   *  credit. */
+  caught_stealing: {
+    runner_id: string | null;
+    event_id: string;
+    catcher_id: string | null;
+    from: Base;
+    fielder_chain?: FielderTouch[];
+    fielder_chain_player_ids?: (string | null)[];
+  }[];
+  pickoffs: {
+    runner_id: string | null;
+    event_id: string;
+    catcher_id: string | null;
+    from: Base;
+    fielder_chain?: FielderTouch[];
+    fielder_chain_player_ids?: (string | null)[];
+  }[];
 
   /** Passed-ball events logged so rollupFielding can credit each one to
    *  the catcher in play at the moment. Only populated when we were
    *  fielding. PB-derived runs continue to flow through `non_pa_runs`. */
   passed_balls: { event_id: string; catcher_id: string | null }[];
+
+  /** Between-PA error_advance events tagged with the fielder who committed
+   *  the error (resolved from `RunnerMovePayload.error_fielder_position`
+   *  at apply time). Only populated when we were fielding AND the payload
+   *  named a position. rollupFielding credits each entry as +1 E. */
+  error_advance_fielders: { event_id: string; fielder_player_id: string }[];
 
   /** Umpire calls that have been emitted but not yet consumed by a
    *  play-resolving event. FIFO. IFR flips the batter to an automatic out
@@ -635,6 +685,7 @@ export const INITIAL_STATE: ReplayState = {
   caught_stealing: [],
   pickoffs: [],
   passed_balls: [],
+  error_advance_fielders: [],
   pending_umpire_calls: [],
   defensive_innings_outs: {},
 };

@@ -485,6 +485,7 @@ export async function rederive(
         caught_stealing: state.caught_stealing,
         pickoffs: state.pickoffs,
         passed_balls: state.passed_balls,
+        error_advance_fielders: state.error_advance_fielders,
       });
       const wls = computeWLS(
         state.at_bats,

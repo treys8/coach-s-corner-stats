@@ -1424,4 +1424,108 @@ describe("rollupFielding", () => {
     // (no defensive innings either, since the half was us batting).
     expect(catcher).toBeUndefined();
   });
+
+  it("credits A/PO from a caught_stealing fielder_chain (2-6 throw to SS)", () => {
+    // Classic CS at 2nd: catcher fields the steal attempt, throws to SS
+    // who tags the runner. Catcher: CS (catcher stat) + A (chain non-
+    // terminal). SS: PO (chain terminal).
+    const events = [
+      startGame(),
+      // Put an opp runner on first via a single.
+      fieldingPA({
+        result: "1B",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r1" }],
+      }),
+      ev("caught_stealing", {
+        runner_id: "opp-r1",
+        from: "first",
+        fielder_chain: [
+          { position: "C",  action: "fielded", target: "second" },
+          { position: "SS", action: "tagged" },
+        ],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+      error_advance_fielders: state.error_advance_fielders,
+    });
+    expect(fielding.get("p-c")!.CS).toBe(1);
+    expect(fielding.get("p-c")!.A).toBe(1);
+    expect(fielding.get("p-ss")!.PO).toBe(1);
+  });
+
+  it("credits A/PO from a pickoff fielder_chain (3-6 back-pick)", () => {
+    // Pickoff with 1B catching the throw, then throwing to SS at 2nd.
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "1B",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r2" }],
+      }),
+      ev("pickoff", {
+        runner_id: "opp-r2",
+        from: "first",
+        fielder_chain: [
+          { position: "1B", action: "fielded", target: "second" },
+          { position: "SS", action: "tagged" },
+        ],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+      error_advance_fielders: state.error_advance_fielders,
+    });
+    expect(fielding.get("p-1b")!.A).toBe(1);
+    expect(fielding.get("p-ss")!.PO).toBe(1);
+    // Catcher gets PIK credit (catcher stat) even though the chain didn't
+    // include them — that's pre-existing engine behavior.
+    expect(fielding.get("p-c")!.PIK).toBe(1);
+  });
+
+  it("credits +1 E from error_advance with error_fielder_position", () => {
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "1B",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r3" }],
+      }),
+      // Between-PA error: runner advances 1→3 on a wild throw by SS.
+      ev<RunnerMovePayload>("error_advance", {
+        advances: [{ from: "first", to: "third", player_id: "opp-r3" }],
+        error_fielder_position: "SS",
+        error_type: "throwing",
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+      error_advance_fielders: state.error_advance_fielders,
+    });
+    expect(fielding.get("p-ss")!.E).toBe(1);
+  });
+
+  it("state.caught_stealing entries echo `from`", () => {
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "1B",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r4" }],
+      }),
+      ev("caught_stealing", { runner_id: "opp-r4", from: "first" }),
+    ];
+    const state = replay(events);
+    expect(state.caught_stealing).toHaveLength(1);
+    expect(state.caught_stealing[0].from).toBe("first");
+  });
 });

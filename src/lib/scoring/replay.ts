@@ -144,6 +144,7 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
     caught_stealing: state.caught_stealing,
     pickoffs: state.pickoffs,
     passed_balls: state.passed_balls,
+    error_advance_fielders: state.error_advance_fielders,
     pending_umpire_calls: state.pending_umpire_calls,
     defensive_innings_outs: state.defensive_innings_outs,
     last_event_at: event.created_at,
@@ -709,10 +710,16 @@ function applyStolenBase(state: ReplayState, eventId: string, sequence: number, 
   };
 }
 
+// Engine invariant for CS and pickoff: outsAdded is always 1 (line below).
+// rollupFielding relies on this when crediting the terminal step of
+// `fielder_chain` as a PO — if a future variant ever emits a CS/PO with no
+// out (e.g., a "failed pickoff attempt"), that rollup branch will need a
+// guard so it doesn't over-credit.
 function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtStealingPayload): ReplayState {
   const sourceRunner = state.bases[p.from];
   const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
   const catcherId = ourCatcherIfFielding(state);
+  const chainIds = snapshotRunningEventChain(state, p.fielder_chain);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
   // CS / pickoff record an out but don't score, so sequence threading
@@ -722,15 +729,28 @@ function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtSteal
     ...credited,
     caught_stealing: [
       ...state.caught_stealing,
-      { runner_id: runnerId, event_id: eventId, catcher_id: catcherId },
+      {
+        runner_id: runnerId,
+        event_id: eventId,
+        catcher_id: catcherId,
+        from: p.from,
+        // We persist the raw payload chain alongside the resolved player_ids
+        // as a debug breadcrumb (rollup only reads `fielder_chain_player_ids`).
+        // Keeps the original position labels visible in the state for any
+        // downstream consumer that wants to render notation like "2-6".
+        fielder_chain: p.fielder_chain,
+        fielder_chain_player_ids: chainIds,
+      },
     ],
   };
 }
 
+// Same outsAdded=1 invariant as applyCaughtStealing — see comment there.
 function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): ReplayState {
   const sourceRunner = state.bases[p.from];
   const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
   const catcherId = ourCatcherIfFielding(state);
+  const chainIds = snapshotRunningEventChain(state, p.fielder_chain);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
   const credited = creditRunningEvent(state, eventId, 0, "stolen_base", bases, 0, 1);
@@ -738,9 +758,32 @@ function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): R
     ...credited,
     pickoffs: [
       ...state.pickoffs,
-      { runner_id: runnerId, event_id: eventId, catcher_id: catcherId },
+      {
+        runner_id: runnerId,
+        event_id: eventId,
+        catcher_id: catcherId,
+        from: p.from,
+        // Raw payload chain persisted alongside resolved player_ids as a
+        // debug breadcrumb. See applyCaughtStealing for the rationale.
+        fielder_chain: p.fielder_chain,
+        fielder_chain_player_ids: chainIds,
+      },
     ],
   };
+}
+
+// Snapshot fielder positions in a CS/PO chain into player_ids using the
+// current defensive lineup. Returns undefined when no chain was provided
+// or the snapshot would carry no information (we're batting → opposing
+// fielders aren't in our lineup).
+function snapshotRunningEventChain(
+  state: ReplayState,
+  chain: { position: string }[] | undefined,
+): (string | null)[] | undefined {
+  if (!chain || chain.length === 0) return undefined;
+  const weAreBatting = isOurHalf(state.we_are_home, state.half);
+  if (weAreBatting) return chain.map(() => null);
+  return chain.map((t) => resolveFielderPlayerId(state, t.position));
 }
 
 function applyRunnerMove(
@@ -762,6 +805,23 @@ function applyRunnerMove(
     taint,
   );
   const credited = creditRunningEvent(state, eventId, sequence, source, bases, runsScored, outsAdded);
+  // Resolve the named error fielder on between-PA error_advance events
+  // (e.g., runner-drag → fielding/throwing error). Only credited when we
+  // were fielding; opposing fielders aren't in our lineup so we can't
+  // attribute their errors.
+  if (
+    source === "error_advance" &&
+    p.error_fielder_position &&
+    !isOurHalf(state.we_are_home, state.half)
+  ) {
+    const fielderId = resolveFielderPlayerId(credited, p.error_fielder_position);
+    if (fielderId) {
+      credited.error_advance_fielders = [
+        ...credited.error_advance_fielders,
+        { event_id: eventId, fielder_player_id: fielderId },
+      ];
+    }
+  }
   if (source === "passed_ball") {
     return {
       ...credited,
@@ -964,6 +1024,25 @@ function resolveRunnerAdvances(
   // Implicit outs for outcomes the UI didn't enumerate (e.g., a clean K).
   if (p.runner_advances.length === 0) {
     outsAdded = DEFAULT_OUTS_FOR[p.result] ?? 0;
+  } else {
+    const defaultOuts = DEFAULT_OUTS_FOR[p.result];
+    if (
+      defaultOuts !== undefined &&
+      outsAdded < defaultOuts &&
+      !p.runner_advances.some((adv) => adv.from === "batter")
+    ) {
+      // Result implies the batter is out (K/FO/GO/LO/PO/IF/SAC/SF/DP/TP) and
+      // other runners were enumerated but the batter's disposition was left
+      // implicit. Charge the implicit batter-out so callers can describe
+      // just the runners that moved (e.g., SF with a scoring R3, FO with a
+      // tag-up advance) without having to spell out `{batter, to: "out"}`.
+      //
+      // The `outsAdded < defaultOuts` guard prevents over-counting on
+      // DP/TP when the encoder enumerated all the runner-outs the result
+      // implies — adding an implicit batter-out on top would charge 3
+      // outs for a DP (the runners were the 2 outs; batter was safe).
+      outsAdded += 1;
+    }
   }
 
   return { bases: next, runsScored, outsAdded };
