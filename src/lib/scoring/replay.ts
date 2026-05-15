@@ -964,6 +964,16 @@ function resolveRunnerAdvances(
   // Implicit outs for outcomes the UI didn't enumerate (e.g., a clean K).
   if (p.runner_advances.length === 0) {
     outsAdded = DEFAULT_OUTS_FOR[p.result] ?? 0;
+  } else if (
+    DEFAULT_OUTS_FOR[p.result] !== undefined &&
+    !p.runner_advances.some((adv) => adv.from === "batter")
+  ) {
+    // Result implies the batter is out (K/FO/GO/LO/PO/IF/SAC/SF/DP/TP) and
+    // other runners were enumerated but the batter's disposition was left
+    // implicit. Charge the implicit batter-out so callers can describe just
+    // the runners that moved (e.g., SF with a scoring R3, FO with a tag-up
+    // advance) without having to spell out `{batter, to: "out"}`.
+    outsAdded += 1;
   }
 
   return { bases: next, runsScored, outsAdded };

@@ -126,6 +126,55 @@ describe("replay()", () => {
     expect(state.bases).toEqual({ first: null, second: null, third: null });
   });
 
+  it("implicit batter-out applies when other runners are enumerated", () => {
+    // SF with a scoring R3 and no enumerated `{batter, to: "out"}`. The
+    // result implies the batter is out — engine charges the out so callers
+    // can describe just the runners that moved.
+    const state = replay([
+      startGame({ we_are_home: false }),
+      // Get a runner to third.
+      evt("at_bat", atBat({
+        half: "top",
+        result: "3B",
+        batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "third", player_id: "p1" }],
+      })),
+      // SF: R3 scores, batter's disposition implicit.
+      evt("at_bat", atBat({
+        half: "top",
+        result: "SF",
+        batter_id: "p2",
+        rbi: 1,
+        runner_advances: [{ from: "third", to: "home", player_id: "p1" }],
+      })),
+    ]);
+    expect(state.outs).toBe(1);
+    expect(state.team_score).toBe(1);
+    expect(state.bases.third).toBeNull();
+  });
+
+  it("implicit batter-out also fires for DP/TP when batter not enumerated", () => {
+    // DP with only the runner force at 2nd enumerated — batter is implicitly
+    // the second out.
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "DP",
+        batter_id: "p2",
+        runner_advances: [{ from: "first", to: "out", player_id: "p1" }],
+      })),
+    ]);
+    expect(state.outs).toBe(2);
+    expect(state.bases.first).toBeNull();
+  });
+
   it("solo HR with explicit batter→home advance scores 1 for batting team", () => {
     // We are home; opponent batting in top of 1st means runs go to opponent_score.
     // To verify our scoring, run a bottom-of-1 at_bat with us batting.
