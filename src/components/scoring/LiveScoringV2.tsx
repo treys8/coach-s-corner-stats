@@ -41,7 +41,7 @@ import { SubstitutionDialog } from "@/components/scoring/dialogs/SubstitutionDia
 import { EditLastPlayDialog } from "@/components/scoring/dialogs/EditLastPlayDialog";
 import { RunnerActionDialog } from "@/components/scoring/dialogs/RunnerActionDialog";
 import { RbiOnLastPlayDialog } from "@/components/scoring/dialogs/RbiOnLastPlayDialog";
-import { HitOrErrorDialog } from "@/components/scoring/dialogs/HitOrErrorDialog";
+import { RunnerAdvanceAttributionDialog } from "@/components/scoring/dialogs/RunnerAdvanceAttributionDialog";
 import { TimingPlayDialog } from "@/components/scoring/dialogs/TimingPlayDialog";
 import { FinalizeDialog } from "@/components/scoring/dialogs/FinalizeDialog";
 
@@ -100,22 +100,14 @@ export function LiveScoringV2({
     submitAtBat,
     submitPitch,
     onFielderDrop,
-    skipLocation,
-    chain,
-    battedBallType,
-    errorStepIndex,
-    setBattedBallType,
-    setErrorStepIndex,
-    undoChainStep,
-    commitArmed,
-    pendingHitOrError,
-    resolveHitOrError,
-    cancelHitOrError,
     submitMidPA,
     submitRunnerDrag,
     pendingRbiPrompt,
     resolveRbiPrompt,
     cancelRbiPrompt,
+    pendingRunnerAttribution,
+    resolveRunnerAttribution,
+    cancelRunnerAttribution,
     pendingTimingPlay,
     resolveTimingPlay,
     endHalfInning,
@@ -218,14 +210,6 @@ export function LiveScoringV2({
           canRecord={(r) => canRecordResult(r, state)}
           armedResult={armedResult}
           setArmedResult={setArmedResult}
-          onSkipLocation={skipLocation}
-          chain={chain}
-          battedBallType={battedBallType}
-          errorStepIndex={errorStepIndex}
-          setBattedBallType={setBattedBallType}
-          setErrorStepIndex={setErrorStepIndex}
-          undoChainStep={undoChainStep}
-          commitArmed={commitArmed}
         />
 
         <div className="relative min-h-0 flex items-center justify-center overflow-hidden p-2">
@@ -252,8 +236,6 @@ export function LiveScoringV2({
             }}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
             fillContainer
-            chain={chain}
-            errorStepIndex={errorStepIndex}
           />
         </div>
 
@@ -404,16 +386,18 @@ export function LiveScoringV2({
         onSubmit={submitMidPA}
         disabled={submitting}
       />
-      <HitOrErrorDialog
-        pending={pendingHitOrError}
-        disabled={submitting}
-        onResolve={resolveHitOrError}
-        onCancel={cancelHitOrError}
-      />
       <TimingPlayDialog
         pending={pendingTimingPlay ? { runnerLabel: pendingTimingPlay.runnerLabel } : null}
         disabled={submitting}
         onResolve={(counted) => void resolveTimingPlay(counted)}
+      />
+      <RunnerAdvanceAttributionDialog
+        pending={pendingRunnerAttribution}
+        disabled={submitting}
+        onResolve={(choice, fielderPosition) =>
+          void resolveRunnerAttribution(choice, fielderPosition)
+        }
+        onCancel={cancelRunnerAttribution}
       />
       <RbiOnLastPlayDialog
         pending={pendingRbiPrompt}

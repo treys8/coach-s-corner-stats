@@ -525,11 +525,13 @@ describe("rollupPitching", () => {
       { event_id: "e3", pitcher_id: "A", runs: 1, source: "balk" as const },
       { event_id: "e4", pitcher_id: "A", runs: 1, source: "error_advance" as const },
       { event_id: "e5", pitcher_id: "A", runs: 1, source: "stolen_base" as const },
+      { event_id: "e6", pitcher_id: "A", runs: 1, source: "advance_on_throw" as const },
     ];
     const a = rollupPitching(atBats, nonPa).get("A")!;
-    expect(a.R).toBe(5);
-    // Earned: WP + balk + SB-home = 3. Unearned: PB + error_advance.
-    expect(a.ER).toBe(3);
+    expect(a.R).toBe(6);
+    // Earned: WP + balk + SB-home + advance_on_throw = 4.
+    // Unearned: PB + error_advance.
+    expect(a.ER).toBe(4);
   });
 
   it("K3-PB with bases loaded: forced runner from third scores unearned", () => {

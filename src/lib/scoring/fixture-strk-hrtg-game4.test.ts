@@ -456,14 +456,10 @@ describe("STRK (home) vs HRTG 2026-05-15 — Game 4 pitcher's duel fixture", () 
     // Encoding: emit each mid-PA event discretely, then the at_bat.
     //   1. stolen_base (Mullins 1→3) — full extra-base steal (GC scored 3rd
     //      as the SB destination; Little's advance on the throw isn't a SB).
-    //   2. error_advance with attribution_label "Advanced on the throw" for
-    //      Little 1→2. PUNCH LIST (FF, LOSSY): there's no clean event type
-    //      for "advance on throw of SB w/o error charged." We piggyback on
-    //      `error_advance` w/ no error fielder, but this leaks a phantom
-    //      error semantic into the stats rollup. Alternative: skip emitting
-    //      Little's advance and let her ride; we choose to emit it so the
-    //      bases state stays correct (engine doesn't auto-move trail runners
-    //      on SB).
+    //   2. advance_on_throw for Little 1→2 — judgment-call advance with no
+    //      error charged. Engine treats it as earned, no taint, no fielder
+    //      error attribution. (Previously encoded as `error_advance` with
+    //      an attribution_label; punch list #3 fixed this.)
     //   3. wild_pitch (Mullins 3→home, Little 2→3 on same pitch).
     //   4. at_bat 1B — Little 3→home, batter to 1st.
     //
@@ -471,13 +467,7 @@ describe("STRK (home) vs HRTG 2026-05-15 — Game 4 pitcher's duel fixture", () 
     events.push(evt<StolenBasePayload>("stolen_base", {
       runner_id: P_MULLINS, from: "second", to: "third",
     }));
-    // Little's advance-on-throw (no SB credit per GC, no error charged).
-    // PUNCH LIST: we encode as `error_advance` because there's no "neutral
-    // advance" event type. The fielder/error_type fields are omitted, which
-    // documents intent but the rollup may still treat this as a fielding
-    // error if/when error_advance-derived errors get tracked. Acceptable
-    // tradeoff today since error-rollup-from-events is not yet implemented.
-    events.push(evt<RunnerMovePayload>("error_advance", {
+    events.push(evt<RunnerMovePayload>("advance_on_throw", {
       advances: [{ from: "first", to: "second", player_id: P_LITTLE }],
       attribution_label: "Advanced on the throw",
     }));
@@ -843,13 +833,13 @@ describe("STRK (home) vs HRTG 2026-05-15 — Game 4 pitcher's duel fixture", () 
     expect(templeton1b.rbi).toBe(1);
     expect(templeton1b.runs_scored_on_play, "Little scores on Templeton 1B").toBe(1);
 
-    // Stolen base credit for Mullins (1→3) and a separate error_advance for
-    // Little. SB log should have an entry for Mullins.
+    // Stolen base credit for Mullins (1→3) and a separate advance_on_throw
+    // for Little. SB log should have an entry for Mullins.
     const mullinsSb = state.stolen_bases.filter((sb) => sb.runner_id === P_MULLINS);
     expect(mullinsSb.length, "Mullins SB credit in Bot 4th").toBeGreaterThanOrEqual(1);
 
-    // (FF) Defensive indifference / advance-on-throw for Little: we encoded
-    // it as error_advance w/o fielder. No SB credit for Little on that play.
+    // (FF) Advance-on-throw for Little: encoded as the dedicated
+    // advance_on_throw event (no SB credit, no error charged).
     const littleSb = state.stolen_bases.filter((sb) => sb.runner_id === P_LITTLE);
     // Little also has a separate SB elsewhere? Not in this game's play log,
     // so should be 0.

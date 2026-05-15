@@ -114,11 +114,13 @@ const NON_AB_RESULTS: ReadonlySet<AtBatResult> = new Set([
 
 // Non-PA event sources whose runs are EARNED (charged to pitcher's ER).
 // Per PDF §14 (WP=earned, PB=unearned), §17 (errors=unearned), §23.5
-// (balks=earned), §8 (SB-home=earned).
+// (balks=earned), §8 (SB-home=earned). advance_on_throw is a judgment-
+// call advance with no error charged — also earned.
 const EARNED_NON_PA_SOURCES: ReadonlySet<NonPaRunSource> = new Set([
   "wild_pitch",
   "balk",
   "stolen_base",
+  "advance_on_throw",
 ]);
 
 function emptyBatting(): BattingLine {

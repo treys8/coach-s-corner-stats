@@ -71,6 +71,7 @@ export function useLiveScoring({
 
   const runnerActions = useRunnerActions({
     gameId,
+    state,
     lastSeq,
     submitting,
     setSubmitting,

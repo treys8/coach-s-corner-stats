@@ -624,7 +624,12 @@ export type NonPaRunSource =
   | "passed_ball"
   | "balk"
   | "error_advance"
-  | "stolen_base";
+  | "stolen_base"
+  // Runner takes an extra base "on the throw" with no error charged — a
+  // judgment-call advance (e.g., RF throws to 3rd trying to nab the lead
+  // runner; trail runner takes home). Earned-run treatment matches
+  // wild_pitch/balk (earned, no taint). No fielder-error attribution.
+  | "advance_on_throw";
 
 export interface NonPaRun {
   event_id: string;
