@@ -114,6 +114,14 @@ function isOurHalfOf(weAreHome: boolean, half: "top" | "bottom"): boolean {
 // in describePlay. Returns null if the player can't be resolved; the
 // description will read "by us" which is the same fallback the client
 // already produces for missing roster entries.
+//
+// Phase 4 perf note: this fires once per closing pitch (~3-4 per game in
+// our half), bounded by O(at_bats) — not a true N+1. Cleanest fix
+// (state-cached lineup names) requires growing the wire format on
+// game_started + substitution to carry display names, which we deferred
+// rather than couple to this performance pass. Phase 1 instrumentation
+// (rpc_apply_ms) will surface whether this fetch is a real cost; revisit
+// if so.
 async function fetchOurBatterName(
   admin: AnyClient,
   playerId: string | null,
@@ -425,7 +433,12 @@ export async function rederive(
     state = replay(events);
   }
 
-  // Upsert live state (one row per game; PK is game_id).
+  // Three independent writes target different tables with no inter-
+  // dependency, so we fire them concurrently. Saves ~2 round-trips of
+  // sequential await latency per applyEvent call. The Promise.all rejects
+  // on the first error, but every started write completes regardless;
+  // post-await error checks attribute the failure to the right table.
+  //
   // runner_first/second/third are FK'd to players(id), so only emit them when
   // our team is batting. When the opposing team is batting, the player_ids on
   // base are either opponent_players UUIDs or synthesized per-PA strings —
@@ -433,79 +446,89 @@ export async function rederive(
   // invariant "runners on base belong to the team batting this half" holds.
   const weAreBatting =
     state.we_are_home ? state.half === "bottom" : state.half === "top";
-  const liveUpsert = await admin.from("game_live_state").upsert({
-    game_id: gameId,
-    inning: state.inning,
-    half: state.half,
-    outs: state.outs,
-    runner_first: weAreBatting ? state.bases.first?.player_id ?? null : null,
-    runner_second: weAreBatting ? state.bases.second?.player_id ?? null : null,
-    runner_third: weAreBatting ? state.bases.third?.player_id ?? null : null,
-    team_score: state.team_score,
-    opponent_score: state.opponent_score,
-    last_play_text: state.last_play_text,
-    last_event_at: state.last_event_at,
-  });
-  if (liveUpsert.error) {
-    throw new Error(`game_live_state upsert failed: ${liveUpsert.error.message}`);
-  }
 
-  // Insert any at_bats we don't yet have. UNIQUE(event_id) makes this idempotent.
-  if (state.at_bats.length > 0) {
-    const rows = state.at_bats.map((ab) => ({
-      game_id: gameId,
-      event_id: ab.event_id,
-      inning: ab.inning,
-      half: ab.half,
-      batting_order: ab.batting_order,
-      batter_id: ab.batter_id,
-      opponent_batter_id: ab.opponent_batter_id,
-      pitcher_id: ab.pitcher_id,
-      opponent_pitcher_id: ab.opponent_pitcher_id,
-      result: ab.result,
-      rbi: ab.rbi,
-      pitch_count: ab.pitch_count,
-      balls: ab.balls,
-      strikes: ab.strikes,
-      spray_x: ab.spray_x,
-      spray_y: ab.spray_y,
-      fielder_position: ab.fielder_position,
-      runs_scored_on_play: ab.runs_scored_on_play,
-      outs_recorded: ab.outs_recorded,
-      description: ab.description,
-    }));
-    const abUpsert = await admin
-      .from("at_bats")
-      .upsert(rows, { onConflict: "event_id", ignoreDuplicates: true });
-    if (abUpsert.error) {
-      throw new Error(`at_bats upsert failed: ${abUpsert.error.message}`);
-    }
-  }
+  // Build the at_bats row set (null when there are no at_bats yet — first
+  // pitch of the game, etc.).
+  const abRows = state.at_bats.length > 0
+    ? state.at_bats.map((ab) => ({
+        game_id: gameId,
+        event_id: ab.event_id,
+        inning: ab.inning,
+        half: ab.half,
+        batting_order: ab.batting_order,
+        batter_id: ab.batter_id,
+        opponent_batter_id: ab.opponent_batter_id,
+        pitcher_id: ab.pitcher_id,
+        opponent_pitcher_id: ab.opponent_pitcher_id,
+        result: ab.result,
+        rbi: ab.rbi,
+        pitch_count: ab.pitch_count,
+        balls: ab.balls,
+        strikes: ab.strikes,
+        spray_x: ab.spray_x,
+        spray_y: ab.spray_y,
+        fielder_position: ab.fielder_position,
+        runs_scored_on_play: ab.runs_scored_on_play,
+        outs_recorded: ab.outs_recorded,
+        description: ab.description,
+      }))
+    : null;
 
   // Reflect the game lifecycle on `games.status` so the existing /scores
   // query (and future LIVE-tile filter) sees the right state. When the
   // game is finalized via tablet, also write the score and result back
   // so /scores can read everything from the games table (it falls back
-  // to game_live_state only for in-progress tiles).
+  // to game_live_state only for in-progress tiles). Null while still draft.
+  let gameUpdate:
+    | {
+        status: typeof state.status;
+        team_score?: number;
+        opponent_score?: number;
+        result?: "W" | "L" | "T";
+      }
+    | null = null;
   if (state.status !== "draft") {
-    const update: {
-      status: typeof state.status;
-      team_score?: number;
-      opponent_score?: number;
-      result?: "W" | "L" | "T";
-    } = { status: state.status };
+    gameUpdate = { status: state.status };
     if (state.status === "final") {
-      update.team_score = state.team_score;
-      update.opponent_score = state.opponent_score;
-      update.result =
+      gameUpdate.team_score = state.team_score;
+      gameUpdate.opponent_score = state.opponent_score;
+      gameUpdate.result =
         state.team_score > state.opponent_score ? "W"
         : state.team_score < state.opponent_score ? "L"
         : "T";
     }
-    const statusUpdate = await admin.from("games").update(update).eq("id", gameId);
-    if (statusUpdate.error) {
-      throw new Error(`games update failed: ${statusUpdate.error.message}`);
-    }
+  }
+
+  const [liveRes, abRes, statusRes] = await Promise.all([
+    admin.from("game_live_state").upsert({
+      game_id: gameId,
+      inning: state.inning,
+      half: state.half,
+      outs: state.outs,
+      runner_first: weAreBatting ? state.bases.first?.player_id ?? null : null,
+      runner_second: weAreBatting ? state.bases.second?.player_id ?? null : null,
+      runner_third: weAreBatting ? state.bases.third?.player_id ?? null : null,
+      team_score: state.team_score,
+      opponent_score: state.opponent_score,
+      last_play_text: state.last_play_text,
+      last_event_at: state.last_event_at,
+    }),
+    abRows
+      ? admin.from("at_bats").upsert(abRows, { onConflict: "event_id", ignoreDuplicates: true })
+      : Promise.resolve(null),
+    gameUpdate
+      ? admin.from("games").update(gameUpdate).eq("id", gameId)
+      : Promise.resolve(null),
+  ]);
+
+  if (liveRes.error) {
+    throw new Error(`game_live_state upsert failed: ${liveRes.error.message}`);
+  }
+  if (abRes && abRes.error) {
+    throw new Error(`at_bats upsert failed: ${abRes.error.message}`);
+  }
+  if (statusRes && statusRes.error) {
+    throw new Error(`games update failed: ${statusRes.error.message}`);
   }
 
   // Tablet stat rollup. Gated to final-status writes (and corrections /
