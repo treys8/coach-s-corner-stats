@@ -495,9 +495,22 @@ export interface FieldingLine {
 
 export interface CatcherEventLog {
   stolen_bases: { catcher_id: string | null }[];
-  caught_stealing: { catcher_id: string | null }[];
-  pickoffs: { catcher_id: string | null }[];
+  /** caught_stealing entries may carry a `fielder_chain_player_ids`
+   *  snapshot — when present rollupFielding credits A on every non-terminal
+   *  step and PO on the terminal step. Catcher CS credit is independent
+   *  and lands via `catcher_id`. */
+  caught_stealing: {
+    catcher_id: string | null;
+    fielder_chain_player_ids?: (string | null)[];
+  }[];
+  pickoffs: {
+    catcher_id: string | null;
+    fielder_chain_player_ids?: (string | null)[];
+  }[];
   passed_balls: { catcher_id: string | null }[];
+  /** Between-PA error_advance events with the fielder credited for the
+   *  error already resolved. Each entry adds +1 E to the named fielder. */
+  error_advance_fielders?: { fielder_player_id: string }[];
 }
 
 const FIELDING_POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"] as const;
@@ -517,6 +530,25 @@ function emptyFielding(): FieldingLine {
 const PUTOUT_FIELDER_RESULTS: ReadonlySet<AtBatResult> = new Set([
   "FO", "GO", "LO", "PO", "IF",
 ]);
+
+// Credit A on every non-terminal step of a CS/PO fielder chain and PO on
+// the terminal step. CS and PO always produce an out, so the terminal
+// step is always a putout — no chain-ends-without-out branch like at-bats
+// have. Catcher-specific CS/PIK credit is independent and handled by
+// the caller.
+function creditRunningEventChain(
+  chainIds: (string | null)[] | undefined,
+  ensure: (id: string) => FieldingLine,
+): void {
+  if (!chainIds || chainIds.length === 0) return;
+  const lastIdx = chainIds.length - 1;
+  for (let i = 0; i < chainIds.length; i++) {
+    const pid = chainIds[i];
+    if (!pid) continue;
+    if (i === lastIdx) ensure(pid).PO += 1;
+    else ensure(pid).A += 1;
+  }
+}
 
 /**
  * Compute per-player fielding lines from the replay state.
@@ -648,9 +680,14 @@ export function rollupFielding(
   }
   for (const ev of catcherEvents.caught_stealing) {
     if (ev.catcher_id) ensure(ev.catcher_id).CS += 1;
+    creditRunningEventChain(ev.fielder_chain_player_ids, ensure);
   }
   for (const ev of catcherEvents.pickoffs) {
     if (ev.catcher_id) ensure(ev.catcher_id).PIK += 1;
+    creditRunningEventChain(ev.fielder_chain_player_ids, ensure);
+  }
+  for (const ev of catcherEvents.error_advance_fielders ?? []) {
+    ensure(ev.fielder_player_id).E += 1;
   }
 
   // Derive composite counts and rates.

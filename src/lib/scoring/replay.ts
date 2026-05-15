@@ -713,6 +713,7 @@ function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtSteal
   const sourceRunner = state.bases[p.from];
   const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
   const catcherId = ourCatcherIfFielding(state);
+  const chainIds = snapshotRunningEventChain(state, p.fielder_chain);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
   // CS / pickoff record an out but don't score, so sequence threading
@@ -722,7 +723,14 @@ function applyCaughtStealing(state: ReplayState, eventId: string, p: CaughtSteal
     ...credited,
     caught_stealing: [
       ...state.caught_stealing,
-      { runner_id: runnerId, event_id: eventId, catcher_id: catcherId },
+      {
+        runner_id: runnerId,
+        event_id: eventId,
+        catcher_id: catcherId,
+        from: p.from,
+        fielder_chain: p.fielder_chain,
+        fielder_chain_player_ids: chainIds,
+      },
     ],
   };
 }
@@ -731,6 +739,7 @@ function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): R
   const sourceRunner = state.bases[p.from];
   const runnerId = sourceRunner?.player_id ?? p.runner_id ?? null;
   const catcherId = ourCatcherIfFielding(state);
+  const chainIds = snapshotRunningEventChain(state, p.fielder_chain);
   const bases: Bases = { ...state.bases };
   bases[p.from] = null;
   const credited = creditRunningEvent(state, eventId, 0, "stolen_base", bases, 0, 1);
@@ -738,9 +747,30 @@ function applyPickoff(state: ReplayState, eventId: string, p: PickoffPayload): R
     ...credited,
     pickoffs: [
       ...state.pickoffs,
-      { runner_id: runnerId, event_id: eventId, catcher_id: catcherId },
+      {
+        runner_id: runnerId,
+        event_id: eventId,
+        catcher_id: catcherId,
+        from: p.from,
+        fielder_chain: p.fielder_chain,
+        fielder_chain_player_ids: chainIds,
+      },
     ],
   };
+}
+
+// Snapshot fielder positions in a CS/PO chain into player_ids using the
+// current defensive lineup. Returns undefined when no chain was provided
+// or the snapshot would carry no information (we're batting → opposing
+// fielders aren't in our lineup).
+function snapshotRunningEventChain(
+  state: ReplayState,
+  chain: { position: string }[] | undefined,
+): (string | null)[] | undefined {
+  if (!chain || chain.length === 0) return undefined;
+  const weAreBatting = isOurHalf(state.we_are_home, state.half);
+  if (weAreBatting) return chain.map(() => null);
+  return chain.map((t) => resolveFielderPlayerId(state, t.position));
 }
 
 function applyRunnerMove(
@@ -762,6 +792,23 @@ function applyRunnerMove(
     taint,
   );
   const credited = creditRunningEvent(state, eventId, sequence, source, bases, runsScored, outsAdded);
+  // Resolve the named error fielder on between-PA error_advance events
+  // (e.g., runner-drag → fielding/throwing error). Only credited when we
+  // were fielding; opposing fielders aren't in our lineup so we can't
+  // attribute their errors.
+  if (
+    source === "error_advance" &&
+    p.error_fielder_position &&
+    !isOurHalf(state.we_are_home, state.half)
+  ) {
+    const fielderId = resolveFielderPlayerId(credited, p.error_fielder_position);
+    if (fielderId) {
+      credited.error_advance_fielders = [
+        ...credited.error_advance_fielders,
+        { event_id: eventId, fielder_player_id: fielderId },
+      ];
+    }
+  }
   if (source === "passed_ball") {
     return {
       ...credited,

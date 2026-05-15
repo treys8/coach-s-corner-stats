@@ -1015,8 +1015,12 @@ describe("replay()", () => {
     // catcher_id is null because we_are_home=false + half='top' means our
     // team was at-bat — the catcher on the field is the opponent's.
     expect(state.stolen_bases).toEqual([{ runner_id: "p1", event_id: "sb-1", catcher_id: null }]);
-    expect(state.caught_stealing).toEqual([{ runner_id: "p2", event_id: "cs-1", catcher_id: null }]);
-    expect(state.pickoffs).toEqual([{ runner_id: "p3", event_id: "pk-1", catcher_id: null }]);
+    expect(state.caught_stealing).toEqual([
+      { runner_id: "p2", event_id: "cs-1", catcher_id: null, from: "first" },
+    ]);
+    expect(state.pickoffs).toEqual([
+      { runner_id: "p3", event_id: "pk-1", catcher_id: null, from: "first" },
+    ]);
   });
 
   it("opp-pa-* synthetic player_ids are rewritten to null on derived advances", () => {
