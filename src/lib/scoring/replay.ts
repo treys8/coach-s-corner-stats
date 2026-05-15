@@ -191,6 +191,8 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
       return applyRunnerMove(next, event.id, event.sequence_number, "balk", event.payload as RunnerMovePayload);
     case "error_advance":
       return applyRunnerMove(next, event.id, event.sequence_number, "error_advance", event.payload as RunnerMovePayload);
+    case "advance_on_throw":
+      return applyRunnerMove(next, event.id, event.sequence_number, "advance_on_throw", event.payload as RunnerMovePayload);
     case "pitch":
       return applyPitch(next, event.payload as PitchPayload);
     case "defensive_conference":

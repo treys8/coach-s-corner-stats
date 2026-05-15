@@ -21,7 +21,7 @@ import type { GameEventType } from "@/integrations/supabase/types";
 
 const EVENT_TYPES: GameEventType[] = [
   "at_bat", "stolen_base", "caught_stealing", "pickoff",
-  "wild_pitch", "passed_ball", "balk", "error_advance",
+  "wild_pitch", "passed_ball", "balk", "error_advance", "advance_on_throw",
   "substitution", "pitching_change", "position_change",
   "game_started", "inning_end", "game_finalized", "correction",
   "pitch", "defensive_conference", "opposing_lineup_edit",

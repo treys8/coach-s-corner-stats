@@ -916,6 +916,125 @@ describe("replay()", () => {
     expect(balkState.bases.second?.reached_on_error).toBe(false);
   });
 
+  it("advance_on_throw moves the runner without tainting and credits the run as non_pa_runs when fielding", () => {
+    // We are home → top = opp batting (we're fielding). Opp triples,
+    // then takes home on the throw without an error charged.
+    const state = replay([
+      startGame({ we_are_home: true }),
+      evt("at_bat", atBat({
+        half: "top", result: "3B",
+        runner_advances: [{ from: "batter", to: "third", player_id: "opp1" }],
+      })),
+      evt("advance_on_throw", {
+        advances: [{ from: "third", to: "home", player_id: "opp1" }],
+      }),
+    ]);
+    expect(state.bases.third).toBeNull();
+    expect(state.opponent_score).toBe(1);
+    expect(state.non_pa_runs).toHaveLength(1);
+    expect(state.non_pa_runs[0].source).toBe("advance_on_throw");
+    expect(state.non_pa_runs[0].runs).toBe(1);
+  });
+
+  it("advance_on_throw does NOT taint the runner (run is earned)", () => {
+    const state = replay([
+      startGame({ we_are_home: true }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp1" }],
+      })),
+      evt("advance_on_throw", {
+        advances: [{ from: "first", to: "second", player_id: "opp1" }],
+      }),
+    ]);
+    expect(state.bases.second?.player_id).toBe("opp1");
+    expect(state.bases.second?.reached_on_error).toBe(false);
+  });
+
+  it("advance_on_throw does NOT credit a fielder error even with error_fielder_position set", () => {
+    // Hardening: payload may accidentally carry error_fielder_position
+    // (the shape is shared with error_advance). The engine must ignore
+    // it for advance_on_throw and never push to error_advance_fielders.
+    const state = replay([
+      startGame({ we_are_home: true }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp1" }],
+      })),
+      evt("advance_on_throw", {
+        advances: [{ from: "first", to: "second", player_id: "opp1" }],
+        error_fielder_position: "LF",
+        error_type: "throwing",
+      }),
+    ]);
+    expect(state.error_advance_fielders).toHaveLength(0);
+  });
+
+  it("advance_on_throw moving multiple runners moves them all and credits all runs", () => {
+    // Recurring real-game pattern: 1B + 2 RBI + batter advances on the
+    // throw with no error charged. Engine accepts a multi-runner payload.
+    const state = replay([
+      startGame({ we_are_home: true }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B",
+        runner_advances: [
+          { from: "batter", to: "first", player_id: "opp1" },
+        ],
+        // Manually pre-load runners by chaining ABs would be cleaner,
+        // but for this isolated test we just emit a multi-advance event
+        // starting from a state where opp2 is on 3rd and opp3 on 2nd.
+      })),
+      evt("at_bat", atBat({
+        half: "top", result: "1B",
+        runner_advances: [
+          { from: "first", to: "second", player_id: "opp1" },
+          { from: "batter", to: "first", player_id: "opp2" },
+        ],
+      })),
+      evt("at_bat", atBat({
+        half: "top", result: "1B",
+        runner_advances: [
+          { from: "second", to: "third", player_id: "opp1" },
+          { from: "first", to: "second", player_id: "opp2" },
+          { from: "batter", to: "first", player_id: "opp3" },
+        ],
+      })),
+      // Now 1B-opp3, 2B-opp2, 3B-opp1. RF throws home trying to nab opp1,
+      // both trail runners advance on the throw.
+      evt("advance_on_throw", {
+        advances: [
+          { from: "third", to: "home", player_id: "opp1" },
+          { from: "second", to: "third", player_id: "opp2" },
+          { from: "first", to: "second", player_id: "opp3" },
+        ],
+      }),
+    ]);
+    expect(state.bases.third?.player_id).toBe("opp2");
+    expect(state.bases.second?.player_id).toBe("opp3");
+    expect(state.bases.first).toBeNull();
+    expect(state.opponent_score).toBe(1);
+    expect(state.non_pa_runs).toHaveLength(1);
+    expect(state.non_pa_runs[0].runs).toBe(1);
+  });
+
+  it("advance_on_throw while we're batting does not append to non_pa_runs", () => {
+    // We are home → bottom = we are batting. Run scores against opposing
+    // pitcher, which we don't track in non_pa_runs (same as PB/WP).
+    const state = replay([
+      startGame({ we_are_home: true }),
+      evt("inning_end", { inning: 1, half: "top" }),
+      evt("at_bat", atBat({
+        half: "bottom", result: "3B",
+        runner_advances: [{ from: "batter", to: "third", player_id: "p1" }],
+      })),
+      evt("advance_on_throw", {
+        advances: [{ from: "third", to: "home", player_id: "p1" }],
+      }),
+    ]);
+    expect(state.team_score).toBe(1);
+    expect(state.non_pa_runs).toHaveLength(0);
+  });
+
   // ---- Opposing-lineup tracking ------------------------------------------
 
   const oppLineup = (): OpposingLineupSlot[] =>

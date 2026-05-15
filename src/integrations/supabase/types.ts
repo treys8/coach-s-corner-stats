@@ -31,6 +31,7 @@ export type GameEventType =
   | "passed_ball"
   | "balk"
   | "error_advance"
+  | "advance_on_throw"
   | "substitution"
   | "pitching_change"
   | "position_change"

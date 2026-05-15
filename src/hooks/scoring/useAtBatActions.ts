@@ -51,22 +51,10 @@ export interface UseAtBatActionsArgs {
 
 /** Additive fields the In Play sheet can attach to an armed result. Threaded
  *  from `onOutcomePicked` through `armedExtras` to the final `submitAtBat`
- *  call so the drag-to-fielder flow preserves them. Stage 3 added the
- *  fielder-chain triplet (chain, batted_ball_type, error_step_index) but
- *  those live in dedicated state, not here, since they're built up across
- *  multiple taps. `foul_out` stays as a simple notation hint. */
+ *  call so the drag-to-fielder flow preserves them. `foul_out` is a notation
+ *  hint (renders F2(f) / F7(f) on the chain). */
 export interface AtBatExtras {
   foul_out?: boolean;
-}
-
-/** First-drag spray + fielder, captured separately from the chain so the
- *  spray chart point stays anchored to where the ball was first touched
- *  even if subsequent drag steps move the focus to other parts of the
- *  field. */
-interface SprayCapture {
-  x: number;
-  y: number;
-  fielder: FielderPosition;
 }
 
 export interface UseAtBatActionsResult {
@@ -82,41 +70,23 @@ export interface UseAtBatActionsResult {
     advancesOverride?: RunnerAdvance[],
   ) => Promise<void>;
   submitPitch: (pitchType: PitchType) => Promise<void>;
-  /** Drag-and-drop callback from the diamond. First call captures the
-   *  spray + first-touch fielder; subsequent calls extend the chain. The
-   *  hook converts each drop into a `FielderTouch`, inferring the `target`
-   *  base from drop coordinates (when within `BASE_DROP_THRESHOLD`). */
+  /** Drag-and-drop callback from the diamond. v2 auto-commit: one drop
+   *  = one play. The drop position is captured as spray (where the ball
+   *  was hit/caught), the fielder is the first-touch fielder, and the
+   *  at-bat is submitted immediately with a single-step chain. Corrections
+   *  go through the top-bar Undo or Edit last play. */
   onFielderDrop: (x: number, y: number, fielder: FielderPosition) => void;
-  /** Legacy v1 path: a fielder drop is treated as drop-and-commit (single
-   *  chain step, no rail-side Commit button). v2 uses `onFielderDrop` +
-   *  `commitArmed` instead so the chain can grow across multiple drops. */
+  /** Legacy v1 path: same drop-and-commit semantics but without the
+   *  fielder_chain extras. Still used by v1's LiveScoring shell. */
   legacyDirectDrop: (x: number, y: number, fielder: FielderPosition) => void;
   /** Commit the armed result with no spray and no chain. Used by v1's
-   *  "Skip location" footer button and v2's rail "Skip location" link
-   *  (when the coach armed an outcome but doesn't want to chart the
-   *  fielders). No-op if no live arm. */
+   *  "Skip location" footer button. v2 never exposes this — every in-play
+   *  outcome requires a fielder drag. No-op if no live arm. */
   skipLocation: () => void;
-  /** Stage 3 chain state — read by the rail to render notation, the
-   *  batted-ball-type chip, and the Add-error affordance. */
-  chain: FielderTouch[];
+  /** Smart-default batted-ball-type. Set by `onOutcomePicked` and consumed
+   *  by `onFielderDrop` when building the auto-commit chain. */
   battedBallType: BattedBallType | null;
-  errorStepIndex: number | null;
   setBattedBallType: (t: BattedBallType | null) => void;
-  setErrorStepIndex: (idx: number | null) => void;
-  /** Pop the last chain step. Coach uses this when they dropped on the
-   *  wrong base; cheaper than cancel + re-arm. */
-  undoChainStep: () => void;
-  /** Commit the armed at_bat. Threads chain + chip + error_step_index
-   *  into the payload. The hook drives this from the rail's Commit
-   *  button; works whether or not the coach captured a chain (empty
-   *  chain = same as legacy Skip location). */
-  commitArmed: () => void;
-  /** Hit-vs-error prompt state. Non-null when the coach committed a
-   *  drag chain that ends WITHOUT a base on a safe outcome (1B/2B/3B) —
-   *  no default per v2 spec. Resolve via `resolveHitOrError`. */
-  pendingHitOrError: { armedResult: AtBatResult; terminalFielder: string } | null;
-  resolveHitOrError: (choice: "hit" | "error") => void;
-  cancelHitOrError: () => void;
 }
 
 /** Internal chain-extras bundle threaded into submitAtBat. */
@@ -148,42 +118,6 @@ function shouldOptimisticPitch(pitchType: PitchType, state: ReplayState): boolea
   return true;
 }
 
-// Distance (in 0..100 SVG units) within which a fielder drop snaps to a
-// base — the drop counts as a throw to that base for chain notation.
-// Tuned to match BASE_XY anchors in diamond-geometry: ~6 units = roughly
-// the radius of a base diamond, enough to forgive a sloppy finger but
-// tight enough that a drop near the mound doesn't read as "to second".
-const BASE_DROP_THRESHOLD = 7;
-
-// 0..100 SVG-coord base centers, mirrored from diamond-geometry so the
-// hook can run the proximity check without importing the SVG geometry
-// module directly (keeps the hook layer framework-agnostic).
-const BASE_COORDS: Record<"first" | "second" | "third" | "home", [number, number]> = {
-  first:  [66, 70],
-  second: [50, 54],
-  third:  [34, 70],
-  home:   [50, 92],
-};
-
-// Pick the nearest base within BASE_DROP_THRESHOLD of (xPct, yPct) — both
-// passed in 0..1. Returns null when no base is close enough (mid-relay
-// drop, generic catch in the outfield, etc).
-function nearestBase(xPct: number, yPct: number): "first" | "second" | "third" | "home" | null {
-  const x = xPct * 100;
-  const y = yPct * 100;
-  let best: { base: "first" | "second" | "third" | "home"; d: number } | null = null;
-  for (const [base, [bx, by]] of Object.entries(BASE_COORDS) as [
-    "first" | "second" | "third" | "home",
-    [number, number],
-  ][]) {
-    const d = Math.hypot(x - bx, y - by);
-    if (d <= BASE_DROP_THRESHOLD && (!best || d < best.d)) {
-      best = { base, d };
-    }
-  }
-  return best?.base ?? null;
-}
-
 // Outfield positions don't field "fielded" grounders — they catch fly/line
 // balls. The chain's first step infers action from the position so the
 // notation comes out right (F8 vs 8-2).
@@ -205,26 +139,17 @@ export function useAtBatActions({
   opposingProfileCache,
 }: UseAtBatActionsArgs): UseAtBatActionsResult {
   const [armedResult, setArmedResult] = useState<ArmedState | null>(null);
-  const [pendingHitOrError, setPendingHitOrError] = useState<
-    { armedResult: AtBatResult; terminalFielder: string } | null
-  >(null);
   // Extras (foul_out, etc) stashed when the in-play outcome is picked, so
   // they ride through the drag-to-fielder gap and land on the AtBatPayload
   // at commit time. Cleared on submit, cancel, or set to null.
   const [armedExtras, setArmedExtras] = useState<AtBatExtras | null>(null);
-  // Stage 3 chain state. Built up across multiple drag drops on the
-  // diamond; committed via `commitArmed` from the rail. All four reset
-  // on submit / cancel / re-arm.
-  const [chain, setChain] = useState<FielderTouch[]>([]);
-  const [spray, setSpray] = useState<SprayCapture | null>(null);
+  // Smart-default batted-ball-type set from the picked outcome. The
+  // auto-commit `onFielderDrop` consumes this when building the chain;
+  // corrections happen via Edit last play. Reset on submit / cancel / re-arm.
   const [battedBallType, setBattedBallType] = useState<BattedBallType | null>(null);
-  const [errorStepIndex, setErrorStepIndex] = useState<number | null>(null);
 
   const resetChain = () => {
-    setChain([]);
-    setSpray(null);
     setBattedBallType(null);
-    setErrorStepIndex(null);
   };
 
   const setArmedResultClearing = (v: ArmedState | null) => {
@@ -265,9 +190,8 @@ export function useAtBatActions({
     // K3-reach: pitcher gets the K, batter goes to first instead of being out.
     // Override defaultAdvances with an explicit batter→first plan; downstream
     // RBI logic excludes runs from the tainted batter (E/PB) automatically.
-    // advancesOverride takes precedence over k3 and defaults — the hit-vs-
-    // error path uses it to preserve the batter's destination when the
-    // outcome is rewritten to E (defaultAdvances for E returns []).
+    // advancesOverride takes precedence over k3 and defaults — used when
+    // the caller has a non-default plan (e.g., correction flows).
     const advances: RunnerAdvance[] = advancesOverride
       ? advancesOverride.map((a) => ({
           // Re-stamp the batter-source player_id so opposing-PA paths get
@@ -288,10 +212,9 @@ export function useAtBatActions({
       ? finalCount(result, state.current_balls, state.current_strikes)
       : { balls: state.current_balls, strikes: state.current_strikes };
 
-    // Stage 3: when a fielder_chain was captured, the first-touch position
-    // is the canonical `fielder_position` for legacy back-compat. The
-    // spray (x, y) still comes from the first-drop coords, which the
-    // diamond passes through `onFielderDrop`.
+    // When a fielder_chain was captured, the first-touch position is the
+    // canonical `fielder_position` for legacy back-compat. The spray (x, y)
+    // comes from the drop coords on the diamond.
     const chainFromExtras = chainExtras?.fielder_chain;
     const fielderPosition =
       chainFromExtras && chainFromExtras.length > 0
@@ -453,142 +376,40 @@ export function useAtBatActions({
     setSubmitting(false);
   };
 
+  // v2 auto-commit: one drop = one play. The drop coords become the spray
+  // location, the fielder is the first-touch fielder, and submission fires
+  // immediately with a single-step chain so notation (F8 / 6 / SF8) renders.
+  // Corrections go through the top-bar Undo (voids the at_bat) or Edit
+  // last play (lets the coach add a multi-step chain or flip hit↔error).
   const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
     if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
-    // First drop: stash spray + first-touch fielder, append a "fielded" or
-    // "caught" touch depending on whether it was an outfielder. Subsequent
-    // drops append a "received" touch and infer `target` from drop coords.
-    setChain((prev) => {
-      if (prev.length === 0) {
-        setSpray({ x, y, fielder });
-        // First-touch action depends on batted-ball type and fielder type.
-        // - Fly/pop to an outfielder → "caught"
-        // - Outfielder otherwise (line-drive grounder through) → "fielded"
-        // - Infielder → "fielded"
-        // When the chip hasn't been set yet (coach picked the outcome but
-        // didn't reach the chip), pick caught for OF on outright fly-out
-        // results and fielded everywhere else — refines after the chip
-        // lands if needed.
-        const isOf = OUTFIELD.has(fielder);
-        const looksFly =
-          battedBallType === "fly" ||
-          battedBallType === "pop" ||
-          armedResult === "FO" ||
-          armedResult === "PO" ||
-          armedResult === "SF" ||
-          armedResult === "IF";
-        const action: FielderTouch["action"] = isOf && looksFly ? "caught" : "fielded";
-        return [{ position: fielder, action }];
-      }
-      const base = nearestBase(x, y);
-      const touch: FielderTouch = base
-        ? { position: fielder, action: "received", target: base === "home" ? "home" : base }
-        : { position: fielder, action: "received" };
-      return [...prev, touch];
-    });
-  };
-
-  const undoChainStep = () => {
-    setChain((prev) => {
-      if (prev.length === 0) return prev;
-      const next = prev.slice(0, -1);
-      if (next.length === 0) setSpray(null);
-      // Clamp errorStepIndex inside the same updater so the check uses the
-      // freshly-computed next.length, not a closure-captured chain.length
-      // (which would silently drift if undo were tapped rapidly).
-      setErrorStepIndex((cur) => (cur !== null && cur >= next.length ? null : cur));
-      return next;
-    });
-  };
-
-  // Outcomes where the batter reaches safely AND the play could have been
-  // a hit or an error depending on judgment — v2 spec calls for an
-  // always-prompt when the drag chain ends without a base target.
-  const isSafeHitResult = (r: AtBatResult): boolean =>
-    r === "1B" || r === "2B" || r === "3B";
-
-  const commitArmed = () => {
-    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
-    // Hit-vs-Error ambiguity check: safe outcome + drag chain with at
-    // least one step + terminal step has no base target = no default per
-    // play-catalog §10.7. Prompt the coach before committing. If the
-    // coach already explicitly set an error step or picked "Error"
-    // (armed E), no prompt — they've already declared judgment.
-    if (
-      isSafeHitResult(armedResult) &&
-      chain.length > 0 &&
-      errorStepIndex === null &&
-      chain[chain.length - 1].target === undefined
-    ) {
-      setPendingHitOrError({
-        armedResult,
-        terminalFielder: chain[chain.length - 1].position,
-      });
-      return;
-    }
-    commitArmedNow(errorStepIndex);
-  };
-
-  // The actual commit, separated so resolveHitOrError can drive it with a
-  // possibly-overridden error_step_index.
-  const commitArmedNow = (effectiveErrorStepIndex: number | null) => {
-    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
-    const chainExtras: ChainExtras | undefined =
-      chain.length > 0 || battedBallType !== null
-        ? {
-            fielder_chain: chain.length > 0 ? chain : undefined,
-            batted_ball_type: battedBallType ?? undefined,
-            error_step_index: effectiveErrorStepIndex,
-          }
-        : undefined;
+    if (submitting) return;
+    const isOf = OUTFIELD.has(fielder);
+    const looksFly =
+      battedBallType === "fly" ||
+      battedBallType === "pop" ||
+      armedResult === "FO" ||
+      armedResult === "PO" ||
+      armedResult === "SF" ||
+      armedResult === "IF";
+    const action: FielderTouch["action"] = isOf && looksFly ? "caught" : "fielded";
+    const chainStep: FielderTouch = { position: fielder, action };
+    const bbt = battedBallType ?? defaultBattedBallType(armedResult);
     void submitAtBat(
       armedResult,
-      spray,
-      undefined,
-      armedExtras ?? undefined,
-      chainExtras,
-    );
-  };
-
-  const resolveHitOrError = (choice: "hit" | "error") => {
-    if (!pendingHitOrError) return;
-    const armed = pendingHitOrError.armedResult;
-    setPendingHitOrError(null);
-    if (choice === "hit") {
-      commitArmedNow(errorStepIndex);
-      return;
-    }
-    // Error: rewrite to result=E, attribute the terminal step as the
-    // error, BUT keep the batter AND existing-runner pushes that the
-    // original armed outcome would have produced. `defaultAdvances("E")`
-    // returns [] (E is the coach-override case), so we synthesize the
-    // plan from the armed outcome and pass it via advancesOverride. The
-    // engine's batterReachedOnError flag taints reached_on_error
-    // correctly because result===E; auto-RBI returns 0 for E regardless.
-    const terminalIdx = chain.length - 1;
-    // player_id=null on the batter row — submitAtBat re-stamps it to
-    // the correct reachId (ours or opposing) before posting.
-    const synthesizedAdvances = defaultAdvances(state.bases, null, armed);
-    void submitAtBat(
-      "E",
-      spray,
+      { x, y, fielder },
       undefined,
       armedExtras ?? undefined,
       {
-        fielder_chain: chain.length > 0 ? chain : undefined,
-        batted_ball_type: battedBallType ?? undefined,
-        error_step_index: terminalIdx,
+        fielder_chain: [chainStep],
+        batted_ball_type: bbt ?? undefined,
+        error_step_index: null,
       },
-      synthesizedAdvances,
     );
   };
 
-  const cancelHitOrError = () => setPendingHitOrError(null);
-
-  // Legacy single-tap commit path used by v1 — one drop = immediate
-  // submit with spray + fielder_position only (no chain capture). Keeps
-  // pre-Stage-3 events shaped exactly like before so the legacy rollup
-  // path keeps crediting them.
+  // Legacy v1 path — drop-and-commit without the chain extras. Pre-Stage-3
+  // event shape preserved for the legacy rollup.
   const legacyDirectDrop = (x: number, y: number, fielder: FielderPosition) => {
     if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
     void submitAtBat(armedResult, { x, y, fielder }, undefined, armedExtras ?? undefined);
@@ -608,15 +429,7 @@ export function useAtBatActions({
     onFielderDrop,
     legacyDirectDrop,
     skipLocation,
-    chain,
     battedBallType,
-    errorStepIndex,
     setBattedBallType,
-    setErrorStepIndex,
-    undoChainStep,
-    commitArmed,
-    pendingHitOrError,
-    resolveHitOrError,
-    cancelHitOrError,
   };
 }

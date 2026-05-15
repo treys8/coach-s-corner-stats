@@ -24,11 +24,21 @@ export const NON_CONTACT: AtBatResult[] = ["K_swinging", "K_looking", "BB", "HBP
 export const RARE_OUTCOMES: AtBatResult[] = ["IBB", "CI"];
 export const HITS: AtBatResult[] = ["1B", "2B", "3B", "HR"];
 export const OUTS_IN_PLAY: AtBatResult[] = ["FO", "GO", "LO", "PO"];
-// FC and E are in-play with a fielder location; the rest are productive outs
-// or multi-out plays that don't need spray.
+// FC and E are in-play with a fielder location.
 export const OTHER_IN_PLAY: AtBatResult[] = ["FC", "E"];
+// Productive outs and multi-out plays — bat-on-ball, so they ALSO need a
+// fielder drag. SAC bunt, sac fly, double play, triple play.
 export const PRODUCTIVE: AtBatResult[] = ["SAC", "SF", "DP", "TP"];
-export const IN_PLAY: AtBatResult[] = [...HITS, ...OUTS_IN_PLAY, ...OTHER_IN_PLAY];
+// Every batted-ball outcome — the coach must drag the fielder to the ball
+// location to record spray + first-touch. IF (infield fly rule) included
+// because the umpire's call lands on a high fly the fielder still catches.
+export const IN_PLAY: AtBatResult[] = [
+  ...HITS,
+  ...OUTS_IN_PLAY,
+  ...OTHER_IN_PLAY,
+  ...PRODUCTIVE,
+  "IF",
+];
 
 export const isInPlay = (r: AtBatResult): boolean => IN_PLAY.includes(r);
 
@@ -279,6 +289,7 @@ export function describeEvent(event: GameEventRecord, names: Map<string, string>
     case "passed_ball": return "passed ball";
     case "balk": return "balk";
     case "error_advance": return "error advance";
+    case "advance_on_throw": return "advanced on the throw";
     case "inning_end": return "end of ½ inning";
     case "substitution": {
       const p = event.payload as SubstitutionPayload;
