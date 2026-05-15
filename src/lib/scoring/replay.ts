@@ -214,9 +214,24 @@ export function applyEvent(state: ReplayState, event: GameEventRecord): ReplaySt
         payload: p.corrected_payload,
       });
     }
-    default:
-      // Phase 3 events fall through as no-ops until their handlers land.
+    case "position_change":
+      // Reserved event_type. Listed in GameEventType (DB allows it) and in
+      // the API route's allowed list, but no payload shape and no UI
+      // emitter today. Explicit no-op case so the exhaustiveness check
+      // below stays honest as the union grows. When the position_change
+      // payload + reducer are added, replace this with a real handler.
       return next;
+    default: {
+      // Exhaustiveness check: if a new event_type lands in GameEventType
+      // without a case above, this assignment fails to compile because
+      // event.event_type narrows to that literal type instead of `never`.
+      // Catches the next position_change-shaped silent no-op at build
+      // time. Still returns `next` so runtime is forgiving if a corrupt
+      // row somehow slips through.
+      const _exhaustive: never = event.event_type;
+      void _exhaustive;
+      return next;
+    }
   }
 }
 
