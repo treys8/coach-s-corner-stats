@@ -17,6 +17,7 @@ import type { GameStatus, GameLocation, Json } from "@/integrations/supabase/typ
 import type { GameStartedPayload, LineupSlot, OpposingLineupSlot } from "@/lib/scoring/types";
 import { LiveScoring } from "@/components/scoring/LiveScoring";
 import { LiveScoringV2 } from "@/components/scoring/LiveScoringV2";
+import { ServiceWorkerRegistrar } from "@/components/ServiceWorkerRegistrar";
 import { useIsV2LiveScoringViewport } from "@/hooks/use-mobile";
 import { OpposingLineupPicker } from "@/components/score/OpposingLineupPicker";
 import { buildEmpty, slotHasIdentity, toLineupSlot, type OpposingSlotDraft } from "@/lib/opponents/lineup-sources";
@@ -157,9 +158,14 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
           finalized_at: game.finalized_at ?? new Date().toISOString(),
         }),
     };
-    return isV2Viewport
-      ? <LiveScoringV2 {...liveScoringProps} />
-      : <LiveScoring {...liveScoringProps} />;
+    return (
+      <>
+        <ServiceWorkerRegistrar />
+        {isV2Viewport
+          ? <LiveScoringV2 {...liveScoringProps} />
+          : <LiveScoring {...liveScoringProps} />}
+      </>
+    );
   }
 
   return (

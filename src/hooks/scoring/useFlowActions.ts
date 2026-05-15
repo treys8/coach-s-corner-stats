@@ -2,6 +2,7 @@
 
 import { toast } from "sonner";
 import { postEvent, type PostResult } from "@/lib/scoring/events-client";
+import { countByGame } from "@/lib/outbox/store";
 import { describeEvent } from "@/lib/scoring/at-bat-helpers";
 import type {
   AtBatPayload,
@@ -239,6 +240,13 @@ export function useFlowActions({
     correctedAtBat: AtBatPayload,
   ): Promise<boolean> => {
     if (submitting) return false;
+    // Phase 5: same gate as submitUndo — a pending entry's id is a fake
+    // `pending-…` string, not a UUID, so a correction targeting it would
+    // 400 at the route's zod check.
+    if (supersededEventId.startsWith("pending-")) {
+      toast.message("Sync queue not empty — wait for the play to sync, then edit.");
+      return false;
+    }
     setSubmitting(true);
     const correction: CorrectionPayload = {
       superseded_event_id: supersededEventId,
@@ -303,6 +311,16 @@ export function useFlowActions({
   // correction from replay.
   const submitUndo = async () => {
     if (submitting || !lastUndoableEvent) return;
+    // Phase 5: undo targets the most recent server-acked event. While the
+    // outbox still has queued entries, lastUndoableEvent points BEHIND
+    // them — so undoing would void an older event from the user's POV.
+    // Gate the action and surface why; the user can resolve via the
+    // sync queue sheet (Discard) once they reach the offline pill.
+    const counts = await countByGame(gameId).catch(() => ({ pending: 0, failed: 0 }));
+    if (counts.pending > 0 || counts.failed > 0) {
+      toast.message("Sync queue not empty — undo unavailable until events sync.");
+      return;
+    }
     setSubmitting(true);
     const target = lastUndoableEvent;
     const label = describeEvent(target, names);
