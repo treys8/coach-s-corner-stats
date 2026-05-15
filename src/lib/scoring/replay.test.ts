@@ -175,6 +175,42 @@ describe("replay()", () => {
     expect(state.bases.first).toBeNull();
   });
 
+  it("implicit batter-out does NOT fire when enumerated outs already meet default", () => {
+    // DP where the encoder enumerated BOTH runner outs (batter safe at first).
+    // Without the cap, the engine used to charge 2 + 1 = 3 outs.
+    const state = replay([
+      startGame({ we_are_home: false }),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        batter_id: "p2",
+        runner_advances: [
+          { from: "first",  to: "second", player_id: "p1" },
+          { from: "batter", to: "first",  player_id: "p2" },
+        ],
+      })),
+      // Weird DP shape: both runners out, batter safe at first (encoder
+      // didn't enumerate the batter). Engine must cap at DEFAULT_OUTS_FOR[DP]
+      // = 2 rather than over-charge with an implicit batter-out.
+      evt("at_bat", atBat({
+        half: "top",
+        result: "DP",
+        batter_id: "p3",
+        runner_advances: [
+          { from: "first",  to: "out", player_id: "p2" },
+          { from: "second", to: "out", player_id: "p1" },
+        ],
+      })),
+    ]);
+    expect(state.outs).toBe(2);
+  });
+
   it("solo HR with explicit batter→home advance scores 1 for batting team", () => {
     // We are home; opponent batting in top of 1st means runs go to opponent_score.
     // To verify our scoring, run a bottom-of-1 at_bat with us batting.
