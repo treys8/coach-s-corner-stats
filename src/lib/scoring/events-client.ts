@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { timeAsync } from "@/lib/perf/client";
 import type { GameEventRecord, ReplayState } from "@/lib/scoring/types";
 
 // The server trigger assigns sequence_number — clients don't send it.
@@ -20,24 +21,30 @@ export interface PostResult {
 }
 
 export async function postEvent(gameId: string, body: PostBody): Promise<PostResult> {
-  const res = await fetch(`/api/games/${gameId}/events`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => ({}));
-    const reason = detail.detail ?? detail.error ?? res.statusText;
-    toast.error(`Couldn't save event: ${reason}`);
-    return { ok: false, state: null, events: [] };
-  }
-  const data = (await res.json().catch(() => ({}))) as {
-    events?: GameEventRecord[];
-    state?: ReplayState;
-  };
-  return {
-    ok: true,
-    state: data.state ?? null,
-    events: data.events ?? [],
-  };
+  return timeAsync(
+    "postEvent",
+    { game_id: gameId, event_type: body.event_type, client_event_id: body.client_event_id },
+    async () => {
+      const res = await fetch(`/api/games/${gameId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        const reason = detail.detail ?? detail.error ?? res.statusText;
+        toast.error(`Couldn't save event: ${reason}`);
+        return { ok: false, state: null, events: [] };
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        events?: GameEventRecord[];
+        state?: ReplayState;
+      };
+      return {
+        ok: true,
+        state: data.state ?? null,
+        events: data.events ?? [],
+      };
+    },
+  );
 }

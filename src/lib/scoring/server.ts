@@ -24,6 +24,7 @@
 // the single primary event the tablet sent; we derive the rest.
 
 import { adminClient } from "@/lib/supabase/admin";
+import { startSpan } from "@/lib/perf/log";
 import { defaultAdvances } from "./advances";
 import { autoRBI, describePlay, finalCount } from "./at-bat-helpers";
 import { applyEvent as foldEvent, replay } from "./replay";
@@ -224,108 +225,132 @@ export async function applyEvent(
   incoming: IncomingEvent,
 ): Promise<ApplyEventResult> {
   const admin = adminClient();
-
-  // 1. Compute state before the new event so chain derivation matches the
-  //    pre-pitch view.
-  const eventsRes = await admin
-    .from("game_events")
-    .select("*")
-    .eq("game_id", gameId)
-    .order("sequence_number", { ascending: true });
-  if (eventsRes.error) {
-    throw new Error(`game_events fetch failed: ${eventsRes.error.message}`);
-  }
-  const existing = (eventsRes.data ?? []) as unknown as GameEventRecord[];
-  const stateBefore = replay(existing);
-  const baseSeq = existing.reduce((m, e) => Math.max(m, e.sequence_number), 0);
-
-  // 2. Build the chain. Start with the primary event; append the closing
-  //    at_bat if the pitch closes the PA; append auto inning_end if the
-  //    projected outs hit 3 and we're still in_progress.
-  const chain: IncomingEvent[] = [incoming];
-  let projectedSeq = baseSeq + 1;
-  let projected: ReplayState = foldEvent(
-    stateBefore,
-    syntheticRecord(incoming, projectedSeq, gameId),
-  );
-
-  if (incoming.event_type === "pitch") {
-    const pitchPayload = incoming.payload as PitchPayload;
-    const closing = closingResultForPitch(pitchPayload.pitch_type, stateBefore);
-    if (closing) {
-      projectedSeq += 1;
-      const abEvent = await buildClosingAtBat(admin, stateBefore, closing, projectedSeq);
-      chain.push(abEvent);
-      projected = foldEvent(projected, syntheticRecord(abEvent, projectedSeq, gameId));
-    }
-  }
-
-  const lastInChain = chain[chain.length - 1];
-  // Skip auto-end-half for corrections: the reducer re-applies a non-void
-  // correction's payload on top of state that already includes the
-  // original event (replay()'s supersession filter doesn't run in the
-  // single-event fold), so projected.outs can be wrong. Matches the
-  // pre-Phase-2 client behavior — editLastPlay/submitUndo never triggered
-  // maybeAutoEndHalf. Coach can tap End ½ manually after an edit if needed.
-  if (
-    incoming.event_type !== "correction" &&
-    stateBefore.outs < 3 &&
-    projected.outs >= 3 &&
-    projected.status === "in_progress" &&
-    lastInChain.event_type !== "inning_end"
-  ) {
-    projectedSeq += 1;
-    const ieEvent = buildInningEnd(projected, projectedSeq);
-    chain.push(ieEvent);
-  }
-
-  // 3. Atomic batched insert via SECURITY DEFINER RPC. The function
-  //    re-enforces team-membership using auth.uid() and runs all inserts
-  //    in one transaction — partial failure rolls back the whole chain.
-  const rpcRes = await userClient.rpc("apply_game_events", {
-    p_game_id: gameId,
-    p_events: chain.map((e) => ({
-      client_event_id: e.client_event_id,
-      event_type: e.event_type,
-      payload: e.payload,
-      supersedes_event_id: e.supersedes_event_id ?? null,
-    })),
+  const perf = startSpan("scoring.applyEvent", {
+    game_id: gameId,
+    event_type: incoming.event_type,
   });
 
-  if (rpcRes.error) {
-    const code = (rpcRes.error as { code?: string }).code;
-    const msg = rpcRes.error.message ?? "unknown";
-    // SECURITY DEFINER RAISE with 42501 surfaces here on auth failure.
-    // The API route maps this to a 403.
-    if (code === "42501" || /forbidden|permission denied|row-level security/i.test(msg)) {
-      throw new Error(`forbidden: ${msg}`);
+  try {
+    // 1. Compute state before the new event so chain derivation matches the
+    //    pre-pitch view.
+    const eventsRes = await admin
+      .from("game_events")
+      .select("*")
+      .eq("game_id", gameId)
+      .order("sequence_number", { ascending: true });
+    if (eventsRes.error) {
+      throw new Error(`game_events fetch failed: ${eventsRes.error.message}`);
     }
-    throw new Error(`apply_game_events RPC failed: ${msg}`);
+    perf.mark("events_fetch");
+    const existing = (eventsRes.data ?? []) as unknown as GameEventRecord[];
+    const stateBefore = replay(existing);
+    perf.mark("replay_pre");
+    const baseSeq = existing.reduce((m, e) => Math.max(m, e.sequence_number), 0);
+
+    // 2. Build the chain. Start with the primary event; append the closing
+    //    at_bat if the pitch closes the PA; append auto inning_end if the
+    //    projected outs hit 3 and we're still in_progress.
+    const chain: IncomingEvent[] = [incoming];
+    let projectedSeq = baseSeq + 1;
+    let projected: ReplayState = foldEvent(
+      stateBefore,
+      syntheticRecord(incoming, projectedSeq, gameId),
+    );
+
+    if (incoming.event_type === "pitch") {
+      const pitchPayload = incoming.payload as PitchPayload;
+      const closing = closingResultForPitch(pitchPayload.pitch_type, stateBefore);
+      if (closing) {
+        projectedSeq += 1;
+        const abEvent = await buildClosingAtBat(admin, stateBefore, closing, projectedSeq);
+        chain.push(abEvent);
+        projected = foldEvent(projected, syntheticRecord(abEvent, projectedSeq, gameId));
+      }
+    }
+
+    const lastInChain = chain[chain.length - 1];
+    // Skip auto-end-half for corrections: the reducer re-applies a non-void
+    // correction's payload on top of state that already includes the
+    // original event (replay()'s supersession filter doesn't run in the
+    // single-event fold), so projected.outs can be wrong. Matches the
+    // pre-Phase-2 client behavior — editLastPlay/submitUndo never triggered
+    // maybeAutoEndHalf. Coach can tap End ½ manually after an edit if needed.
+    if (
+      incoming.event_type !== "correction" &&
+      stateBefore.outs < 3 &&
+      projected.outs >= 3 &&
+      projected.status === "in_progress" &&
+      lastInChain.event_type !== "inning_end"
+    ) {
+      projectedSeq += 1;
+      const ieEvent = buildInningEnd(projected, projectedSeq);
+      chain.push(ieEvent);
+    }
+
+    // 3. Atomic batched insert via SECURITY DEFINER RPC. The function
+    //    re-enforces team-membership using auth.uid() and runs all inserts
+    //    in one transaction — partial failure rolls back the whole chain.
+    const rpcRes = await userClient.rpc("apply_game_events", {
+      p_game_id: gameId,
+      p_events: chain.map((e) => ({
+        client_event_id: e.client_event_id,
+        event_type: e.event_type,
+        payload: e.payload,
+        supersedes_event_id: e.supersedes_event_id ?? null,
+      })),
+    });
+    perf.mark("rpc_apply");
+
+    if (rpcRes.error) {
+      const code = (rpcRes.error as { code?: string }).code;
+      const msg = rpcRes.error.message ?? "unknown";
+      // SECURITY DEFINER RAISE with 42501 surfaces here on auth failure.
+      // The API route maps this to a 403.
+      if (code === "42501" || /forbidden|permission denied|row-level security/i.test(msg)) {
+        throw new Error(`forbidden: ${msg}`);
+      }
+      throw new Error(`apply_game_events RPC failed: ${msg}`);
+    }
+
+    const rows = (rpcRes.data ?? []) as AppliedRow[];
+    if (rows.length === 0) {
+      throw new Error("apply_game_events returned no rows");
+    }
+
+    const events: GameEventRecord[] = rows.map((r) => ({
+      id: r.id,
+      game_id: r.game_id,
+      client_event_id: r.client_event_id,
+      sequence_number: r.sequence_number,
+      event_type: r.event_type,
+      payload: r.payload,
+      supersedes_event_id: r.supersedes_event_id,
+      created_by: r.created_by,
+      created_at: r.created_at,
+    })) as unknown as GameEventRecord[];
+    const duplicate = rows.some((r) => r.was_duplicate);
+
+    // 4. Single rederive pass over the now-canonical event log.
+    const chainTypes = chain.map((e) => e.event_type);
+    const state = await rederive(gameId, { chainTypes });
+    perf.mark("rederive");
+
+    perf.finish({
+      event_count: existing.length,
+      chain_len: chain.length,
+      duplicate,
+      status: state.status,
+    });
+    return { events, state, duplicate };
+  } catch (err) {
+    // finish() is idempotent, so the success path's call (above) wins when
+    // we don't reach this branch. On any thrown error, emit a final span
+    // so failed taps still show up in Vercel logs with the partial timing.
+    perf.finish({
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   }
-
-  const rows = (rpcRes.data ?? []) as AppliedRow[];
-  if (rows.length === 0) {
-    throw new Error("apply_game_events returned no rows");
-  }
-
-  const events: GameEventRecord[] = rows.map((r) => ({
-    id: r.id,
-    game_id: r.game_id,
-    client_event_id: r.client_event_id,
-    sequence_number: r.sequence_number,
-    event_type: r.event_type,
-    payload: r.payload,
-    supersedes_event_id: r.supersedes_event_id,
-    created_by: r.created_by,
-    created_at: r.created_at,
-  })) as unknown as GameEventRecord[];
-  const duplicate = rows.some((r) => r.was_duplicate);
-
-  // 4. Single rederive pass over the now-canonical event log.
-  const chainTypes = chain.map((e) => e.event_type);
-  const state = await rederive(gameId, { chainTypes });
-
-  return { events, state, duplicate };
 }
 
 interface RederiveOptions {
