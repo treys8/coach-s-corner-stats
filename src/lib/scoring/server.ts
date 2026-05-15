@@ -46,6 +46,14 @@ import type { GameEventType } from "@/integrations/supabase/types";
 // @supabase/ssr and @supabase/supabase-js.
 type AnyClient = any;
 
+// Columns the replay reducer + at_bats upsert actually read. Used by both
+// the applyEvent pre-state fetch and the rederive fallback path so neither
+// pulls `created_by` (and any future ancillary columns) that aren't on the
+// hot path. The persisted rows returned by `apply_game_events` still carry
+// `created_by` since the RPC selects it for downstream API responses.
+const EVENT_COLUMNS =
+  "id, game_id, client_event_id, sequence_number, event_type, payload, supersedes_event_id, created_at";
+
 export interface IncomingEvent {
   client_event_id: string;
   event_type: GameEventType;
@@ -235,7 +243,7 @@ export async function applyEvent(
     //    pre-pitch view.
     const eventsRes = await admin
       .from("game_events")
-      .select("*")
+      .select(EVENT_COLUMNS)
       .eq("game_id", gameId)
       .order("sequence_number", { ascending: true });
     if (eventsRes.error) {
@@ -330,9 +338,31 @@ export async function applyEvent(
     })) as unknown as GameEventRecord[];
     const duplicate = rows.some((r) => r.was_duplicate);
 
-    // 4. Single rederive pass over the now-canonical event log.
+    // 4. Fast path: fold the persisted rows onto stateBefore to get the
+    //    canonical post-chain state without re-fetching every event and
+    //    running replay() a second time. The persisted rows carry their
+    //    real ids / sequence_numbers / created_at from the RPC, so the
+    //    resulting at_bats reference correct event_ids for upsert.
+    //
+    //    Slow path is required when supersession matters:
+    //    - Correction events re-apply a non-void payload that already exists
+    //      in the prior state; replay()'s supersession filter compensates.
+    //    - Any event with supersedes_event_id set (defensive — corrections
+    //      are the only producer today, but the column allows it elsewhere).
+    //    - Idempotent retries: when the RPC reports a duplicate, the
+    //      "new" event was already counted in stateBefore, so folding it
+    //      again would double-apply.
+    const canSkipReplay =
+      !duplicate &&
+      incoming.event_type !== "correction" &&
+      (incoming.supersedes_event_id ?? null) === null;
+
+    const projectedState = canSkipReplay
+      ? events.reduce<ReplayState>(foldEvent, stateBefore)
+      : undefined;
+
     const chainTypes = chain.map((e) => e.event_type);
-    const state = await rederive(gameId, { chainTypes });
+    const state = await rederive(gameId, { chainTypes, state: projectedState });
     perf.mark("rederive");
 
     perf.finish({
@@ -340,6 +370,7 @@ export async function applyEvent(
       chain_len: chain.length,
       duplicate,
       status: state.status,
+      fast_path: canSkipReplay,
     });
     return { events, state, duplicate };
   } catch (err) {
@@ -357,6 +388,13 @@ interface RederiveOptions {
   /** Event types persisted in this request — used to decide whether to
    *  touch stat_snapshots when the game isn't final (un-finalize case). */
   chainTypes?: GameEventType[];
+  /** Pre-computed canonical post-chain state. When provided, rederive
+   *  skips the second game_events fetch + replay and writes derived state
+   *  directly from this snapshot — saves a full table scan + a full
+   *  reducer fold on the hot tap path. Callers must guarantee this state
+   *  reflects every persisted event with correct event_ids; corrections
+   *  and duplicate-replay retries must omit it and take the slow path. */
+  state?: ReplayState;
 }
 
 /**
@@ -370,17 +408,22 @@ export async function rederive(
 ): Promise<ReplayState> {
   const admin = adminClient();
 
-  const eventsRes = await admin
-    .from("game_events")
-    .select("*")
-    .eq("game_id", gameId)
-    .order("sequence_number", { ascending: true });
+  let state: ReplayState;
+  if (opts.state) {
+    state = opts.state;
+  } else {
+    const eventsRes = await admin
+      .from("game_events")
+      .select(EVENT_COLUMNS)
+      .eq("game_id", gameId)
+      .order("sequence_number", { ascending: true });
 
-  if (eventsRes.error) {
-    throw new Error(`game_events fetch failed: ${eventsRes.error.message}`);
+    if (eventsRes.error) {
+      throw new Error(`game_events fetch failed: ${eventsRes.error.message}`);
+    }
+    const events = (eventsRes.data ?? []) as unknown as GameEventRecord[];
+    state = replay(events);
   }
-  const events = (eventsRes.data ?? []) as unknown as GameEventRecord[];
-  const state = replay(events);
 
   // Upsert live state (one row per game; PK is game_id).
   // runner_first/second/third are FK'd to players(id), so only emit them when
