@@ -82,6 +82,38 @@ const ZONE_OFFSET: Record<Base | "home", {
 // Pixel radius around a zone center that counts as a drop. Larger than
 // the base diamond's half-width so finger drops are forgiving.
 const ZONE_HIT_RADIUS = 5.5;
+const ZONE_HIT_RADIUS_SQ = ZONE_HIT_RADIUS * ZONE_HIT_RADIUS;
+
+// Pre-computed flat list of every drop zone (base + verdict + center).
+// Built once at module load so the per-pointer-move loop walks an array
+// of plain numbers instead of re-deriving zone centers from BASE_XY +
+// ZONE_OFFSET on each frame.
+type ZoneEntry = { base: Base | "home"; verdict: "safe" | "out"; cx: number; cy: number };
+const ZONE_ENTRIES: ZoneEntry[] = (() => {
+  const entries: ZoneEntry[] = [];
+  for (const base of DROP_BASES) {
+    const [bx, by] = base === "home" ? HOME_XY : BASE_XY[base];
+    const offsets = ZONE_OFFSET[base];
+    entries.push({ base, verdict: "safe", cx: bx + offsets.safe[0], cy: by + offsets.safe[1] });
+    entries.push({ base, verdict: "out", cx: bx + offsets.out[0], cy: by + offsets.out[1] });
+  }
+  return entries;
+})();
+
+// AABB enclosing every zone's hit circle. Pointer moves outside this box
+// cannot snap to any zone, so hoverTargetAt can short-circuit before the
+// per-zone distance loop. Cheap defensive bound for taps that wander off
+// the diamond mid-drag.
+const ZONE_BOUNDS = (() => {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const z of ZONE_ENTRIES) {
+    if (z.cx - ZONE_HIT_RADIUS < minX) minX = z.cx - ZONE_HIT_RADIUS;
+    if (z.cx + ZONE_HIT_RADIUS > maxX) maxX = z.cx + ZONE_HIT_RADIUS;
+    if (z.cy - ZONE_HIT_RADIUS < minY) minY = z.cy - ZONE_HIT_RADIUS;
+    if (z.cy + ZONE_HIT_RADIUS > maxY) maxY = z.cy + ZONE_HIT_RADIUS;
+  }
+  return { minX, maxX, minY, maxY };
+})();
 
 // Pixel distance (in SVG coords) that a runner pointer must move before
 // the drag activates — keeps short taps routed through the tap handler
@@ -247,24 +279,27 @@ export function DefensiveDiamond({
   };
 
   // Compute hover target by snapping pointer to nearest SAFE/OUT zone
-  // within ZONE_HIT_RADIUS. Returns null when no zone is close.
+  // within ZONE_HIT_RADIUS. Returns null when no zone is close. Called on
+  // every pointer-move during a runner drag (~60 Hz), so the body is shaped
+  // for that hot path: AABB short-circuit first, then a single flat-array
+  // pass using squared distances (no Math.hypot / sqrt).
   const hoverTargetAt = (x: number, y: number): RunnerDropTarget | null => {
-    let best: { tgt: RunnerDropTarget; d: number } | null = null;
-    for (const base of DROP_BASES) {
-      const [bx, by] = base === "home" ? HOME_XY : BASE_XY[base];
-      const offsets = ZONE_OFFSET[base];
-      const safe: [number, number] = [bx + offsets.safe[0], by + offsets.safe[1]];
-      const out: [number, number]  = [bx + offsets.out[0],  by + offsets.out[1]];
-      const dSafe = Math.hypot(x - safe[0], y - safe[1]);
-      if (dSafe <= ZONE_HIT_RADIUS && (!best || dSafe < best.d)) {
-        best = { tgt: { base, verdict: "safe" }, d: dSafe };
-      }
-      const dOut = Math.hypot(x - out[0], y - out[1]);
-      if (dOut <= ZONE_HIT_RADIUS && (!best || dOut < best.d)) {
-        best = { tgt: { base, verdict: "out" }, d: dOut };
+    if (x < ZONE_BOUNDS.minX || x > ZONE_BOUNDS.maxX ||
+        y < ZONE_BOUNDS.minY || y > ZONE_BOUNDS.maxY) {
+      return null;
+    }
+    let bestZone: ZoneEntry | null = null;
+    let bestDistSq = ZONE_HIT_RADIUS_SQ;
+    for (const z of ZONE_ENTRIES) {
+      const dx = x - z.cx;
+      const dy = y - z.cy;
+      const distSq = dx * dx + dy * dy;
+      if (distSq <= bestDistSq) {
+        bestZone = z;
+        bestDistSq = distSq;
       }
     }
-    return best?.tgt ?? null;
+    return bestZone ? { base: bestZone.base, verdict: bestZone.verdict } : null;
   };
 
   const beginRunnerDrag = (

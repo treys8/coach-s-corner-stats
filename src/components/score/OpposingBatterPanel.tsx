@@ -4,7 +4,7 @@
 // current opposing batter's career line + spray chart against your school.
 // Fetched on each batter change from /api/opponents/[id]/profile.
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SprayField, type SprayMarker } from "@/components/spray/SprayField";
@@ -22,7 +22,15 @@ interface Props {
   cache?: Map<string, OpposingBatterProfile>;
 }
 
-export function OpposingBatterPanel({ opponentPlayerId, slotLabel, cache }: Props) {
+// Memoized: opponentPlayerId / slotLabel / cache are stable across the
+// in-PA re-renders driven by pitches and runner moves. Default shallow
+// comparison is correct here — slotLabel is a string, cache is a stable
+// Map ref from the parent's useRef.
+export const OpposingBatterPanel = memo(function OpposingBatterPanel({
+  opponentPlayerId,
+  slotLabel,
+  cache,
+}: Props) {
   const [profile, setProfile] = useState<OpposingBatterProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +71,23 @@ export function OpposingBatterPanel({ opponentPlayerId, slotLabel, cache }: Prop
     return () => { cancelled = true; };
   }, [opponentPlayerId, cache]);
 
+  // sprayPoints reference comes from the cached profile and only changes
+  // when the opposing batter changes (or their cached profile is refreshed).
+  // Keying on `profile` skips the marker rebuild on every parent re-render
+  // — there's a parent re-render per pitch / runner move while this panel
+  // is mounted. Declared before the early return below so hooks run in a
+  // stable order across mount/unmount of the placeholder branch.
+  const markers: SprayMarker[] = useMemo(() => {
+    if (!profile) return [];
+    return profile.sprayPoints.map((p, i) => ({
+      id: `${p.game_id}-${i}`,
+      result: p.result,
+      spray_x: p.x,
+      spray_y: p.y,
+      description: null,
+    }));
+  }, [profile]);
+
   if (!opponentPlayerId) {
     return (
       <Card className="p-4 space-y-2">
@@ -79,16 +104,6 @@ export function OpposingBatterPanel({ opponentPlayerId, slotLabel, cache }: Prop
   const identityLabel = profile
     ? formatIdentity(profile)
     : slotLabel ?? "Opposing batter";
-
-  const markers: SprayMarker[] = profile
-    ? profile.sprayPoints.map((p, i) => ({
-        id: `${p.game_id}-${i}`,
-        result: p.result,
-        spray_x: p.x,
-        spray_y: p.y,
-        description: null,
-      }))
-    : [];
 
   return (
     <Card className="p-4 space-y-3">
@@ -137,7 +152,7 @@ export function OpposingBatterPanel({ opponentPlayerId, slotLabel, cache }: Prop
       )}
     </Card>
   );
-}
+});
 
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (

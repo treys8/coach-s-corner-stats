@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { SprayField, type SprayMarker } from "@/components/spray/SprayField";
 import type { ReplayState } from "@/lib/scoring/types";
 
@@ -19,21 +20,28 @@ export function LiveSprayChart({
   currentBatterId,
   currentBatterIsOurs,
 }: LiveSprayChartProps) {
-  const filtered = currentBatterId
-    ? state.at_bats.filter((ab) =>
-        currentBatterIsOurs
-          ? ab.batter_id === currentBatterId
-          : ab.opponent_batter_id === currentBatterId,
-      )
-    : [];
-
-  const markers: SprayMarker[] = filtered.map((ab) => ({
-    id: ab.event_id,
-    result: ab.result,
-    spray_x: ab.spray_x,
-    spray_y: ab.spray_y,
-    description: ab.description,
-  }));
+  // state.at_bats is the only field this chart reads, but the parent passes
+  // the full ReplayState — so we depend on the array identity, not the
+  // whole state, to skip the filter+map on irrelevant re-renders (pitch
+  // counts, runner moves between PAs, etc., that don't change at_bats).
+  const markers: SprayMarker[] = useMemo(() => {
+    if (!currentBatterId) return [];
+    const out: SprayMarker[] = [];
+    for (const ab of state.at_bats) {
+      const match = currentBatterIsOurs
+        ? ab.batter_id === currentBatterId
+        : ab.opponent_batter_id === currentBatterId;
+      if (!match) continue;
+      out.push({
+        id: ab.event_id,
+        result: ab.result,
+        spray_x: ab.spray_x,
+        spray_y: ab.spray_y,
+        description: ab.description,
+      });
+    }
+    return out;
+  }, [state.at_bats, currentBatterId, currentBatterIsOurs]);
 
   const emptyMessage = currentBatterId
     ? "No batted balls yet for this hitter."
