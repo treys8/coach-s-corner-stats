@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+import { timeSync, recordPerf } from "@/lib/perf/client";
 import { applyEvent, replay } from "@/lib/scoring/replay";
 import { INITIAL_STATE } from "@/lib/scoring/types";
 import type { PostResult } from "@/lib/scoring/events-client";
@@ -60,11 +61,13 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   useEffect(() => {
     let active = true;
     (async () => {
+      const fetchStart = performance.now();
       const { data, error } = await supabase
         .from("game_events")
         .select("*")
         .eq("game_id", gameId)
         .order("sequence_number", { ascending: true });
+      const fetchMs = performance.now() - fetchStart;
       if (!active) return;
       if (error) {
         toast.error(`Couldn't load events: ${error.message}`);
@@ -72,10 +75,20 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
         return;
       }
       const loaded = (data ?? []) as unknown as GameEventRecord[];
-      setState(replay(loaded));
+      const replayStart = performance.now();
+      const initial = replay(loaded);
+      const replayMs = performance.now() - replayStart;
+      setState(initial);
       setEvents(loaded);
       setLastSeq(loaded.reduce((m, e) => Math.max(m, e.sequence_number), 0));
       setLoading(false);
+      recordPerf({
+        label: "coldStart",
+        fetch_ms: Math.round(fetchMs * 100) / 100,
+        replay_ms: Math.round(replayMs * 100) / 100,
+        event_count: loaded.length,
+        game_id: gameId,
+      });
     })();
     return () => { active = false; };
   }, [gameId]);
@@ -123,7 +136,11 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   const applyOptimistic = (synth: GameEventRecord) => {
     setState((prev) => {
       preOptimisticRef.current = prev;
-      return applyEvent(prev, synth);
+      return timeSync(
+        "applyOptimistic",
+        { event_type: synth.event_type, event_count: events.length },
+        () => applyEvent(prev, synth),
+      );
     });
   };
 
