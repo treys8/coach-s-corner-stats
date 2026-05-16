@@ -21,10 +21,13 @@ import type {
   CaughtStealingPayload,
   CorrectionPayload,
   DefensiveConferencePayload,
+  DefensivePosition,
+  DefensiveSlot,
   DerivedAtBat,
   GameEventRecord,
   GameStartedPayload,
   InningEndPayload,
+  LineupSlot,
   NonPaRunSource,
   PickoffPayload,
   PitchPayload,
@@ -36,6 +39,72 @@ import type {
   SubstitutionPayload,
 } from "./types";
 import { EMPTY_BASES, INITIAL_STATE } from "./types";
+
+// Canonical defensive positions in slot order. DH is intentionally omitted
+// (the DH doesn't field). Position strings coming off the field-position
+// payloads can be loose ("1", "P", "1b") so we normalize them through
+// `normalizeDefensivePosition` before keying into the lineup.
+const DEFENSIVE_POSITIONS: readonly DefensivePosition[] = [
+  "P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF",
+];
+
+function normalizeDefensivePosition(raw: string | null | undefined): DefensivePosition | null {
+  if (!raw) return null;
+  const upper = raw.trim().toUpperCase();
+  // Numeric scorebook shorthand: 1=P, 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF.
+  switch (upper) {
+    case "1": case "P": return "P";
+    case "2": case "C": return "C";
+    case "3": case "1B": return "1B";
+    case "4": case "2B": return "2B";
+    case "5": case "3B": return "3B";
+    case "6": case "SS": return "SS";
+    case "7": case "LF": return "LF";
+    case "8": case "CF": return "CF";
+    case "9": case "RF": return "RF";
+    default: return null;
+  }
+}
+
+function buildDefensiveLineup(lineup: LineupSlot[]): DefensiveSlot[] {
+  // Initialize a slot for every position so the lineup is exhaustive even
+  // when the input lineup omits a position (e.g., DH games where a player
+  // doesn't field). Missing positions stay player_id: null and the rollup
+  // will simply credit nobody for plays at that position.
+  const byPos = new Map<DefensivePosition, string | null>();
+  for (const pos of DEFENSIVE_POSITIONS) byPos.set(pos, null);
+  for (const slot of lineup) {
+    const norm = normalizeDefensivePosition(slot.position);
+    if (!norm) continue;
+    byPos.set(norm, slot.player_id);
+  }
+  return DEFENSIVE_POSITIONS.map((position) => ({
+    position,
+    player_id: byPos.get(position) ?? null,
+  }));
+}
+
+function setDefensiveSlot(
+  lineup: DefensiveSlot[],
+  position: DefensivePosition,
+  playerId: string | null,
+): DefensiveSlot[] {
+  // If the player is taking a new position, clear them from any other
+  // position they were occupying (a single player can't field two spots).
+  return lineup.map((slot) => {
+    if (slot.position === position) {
+      return { ...slot, player_id: playerId };
+    }
+    if (playerId !== null && slot.player_id === playerId) {
+      return { ...slot, player_id: null };
+    }
+    return slot;
+  });
+}
+
+function countRunners(bases: Bases): number {
+  return (bases.first ? 1 : 0) + (bases.second ? 1 : 0) + (bases.third ? 1 : 0);
+}
 
 // Default outs charged to the at-bat when the payload doesn't enumerate
 // runner_advances. DP/TP land here too — UIs may opt to enumerate explicitly.
@@ -66,6 +135,7 @@ export function replay(events: GameEventRecord[]): ReplayState {
     ...INITIAL_STATE,
     bases: { ...EMPTY_BASES },
     our_lineup: [],
+    our_defensive_lineup: [],
     at_bats: [],
     current_pa_pitches: [],
     non_pa_runs: [],
@@ -86,6 +156,7 @@ function applyEvent(state: ReplayState, event: GameEventRecord): ReplayState {
     ...state,
     bases: { ...state.bases },
     our_lineup: state.our_lineup.map((s) => ({ ...s })),
+    our_defensive_lineup: state.our_defensive_lineup.map((s) => ({ ...s })),
     at_bats: state.at_bats,
     current_pa_pitches: state.current_pa_pitches,
     non_pa_runs: state.non_pa_runs,
@@ -154,6 +225,13 @@ function applyGameStarted(state: ReplayState, p: GameStartedPayload): ReplayStat
   // Stamps each starting slot with is_starter=true and pins
   // original_player_id so re-entry validation (NFHS 3-1-3) can verify
   // a returning starter goes back to their own slot.
+  // Seed the defensive lineup from the starting batting order's positions.
+  // In a DH game the starting_pitcher_id may not appear in the batting
+  // lineup, so layer the pitcher onto the "P" slot after to be safe.
+  let defensiveLineup = buildDefensiveLineup(p.starting_lineup);
+  if (p.starting_pitcher_id) {
+    defensiveLineup = setDefensiveSlot(defensiveLineup, "P", p.starting_pitcher_id);
+  }
   return {
     ...state,
     status: "in_progress",
@@ -167,6 +245,7 @@ function applyGameStarted(state: ReplayState, p: GameStartedPayload): ReplayStat
       re_entered: false,
       original_player_id: s.player_id,
     })),
+    our_defensive_lineup: defensiveLineup,
     current_pitcher_id: p.starting_pitcher_id,
     current_opponent_pitcher_id: p.opponent_starting_pitcher_id,
     current_batter_slot: 1,
@@ -202,6 +281,15 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
   const trail = state.current_pa_pitches;
   const trailCount = countFromPitches(trail);
   const usingTrail = trail.length > 0;
+  // LOB credit goes to the batter who made the third out. This play ends
+  // the half when outs cross from <3 to ≥3; the stranded runners are those
+  // still on `bases` (post-play) — runners who scored or were put out are
+  // already off. Only credit when our pitcher is on the mound? No — LOB
+  // is a batting stat for the batter who made the out, regardless of
+  // which team is batting. The rollup filters by batter_id presence.
+  const endsHalf = state.outs < 3 && state.outs + outsAdded >= 3;
+  const lobOnPlay = endsHalf ? countRunners(bases) : 0;
+
   const derived: DerivedAtBat = {
     event_id: eventId,
     inning: p.inning,
@@ -226,6 +314,8 @@ function applyAtBat(state: ReplayState, eventId: string, p: AtBatPayload): Repla
     description: p.description,
     pitches: trail.slice(),
     batter_reached_on_k3: p.batter_reached_on_k3,
+    defensive_lineup_snapshot: state.our_defensive_lineup.map((s) => ({ ...s })),
+    lob_on_play: lobOnPlay,
   };
 
   return {
@@ -264,6 +354,19 @@ function countFromPitches(trail: PitchPayload[]): { balls: number; strikes: numb
 }
 
 function applySubstitution(state: ReplayState, p: SubstitutionPayload): ReplayState {
+  // Defensive substitutions: any sub that carries a position string moves
+  // the incoming player into that field slot (and clears them from any
+  // previous one). Offensive-only subs (pinch_run, courtesy_run) skip this
+  // step. pinch_hit usually has position=null; if a position IS provided
+  // the PH is taking the field after batting, so honor it.
+  const defensiveSubTypes: SubstitutionPayload["sub_type"][] = ["regular", "pinch_hit", "re_entry"];
+  const normPos = defensiveSubTypes.includes(p.sub_type)
+    ? normalizeDefensivePosition(p.position)
+    : null;
+  const updatedDefense = normPos
+    ? setDefensiveSlot(state.our_defensive_lineup, normPos, p.in_player_id)
+    : state.our_defensive_lineup;
+
   switch (p.sub_type) {
     case "regular":
     case "pinch_hit": {
@@ -279,7 +382,7 @@ function applySubstitution(state: ReplayState, p: SubstitutionPayload): ReplaySt
             }
           : slot,
       );
-      return { ...state, our_lineup };
+      return { ...state, our_lineup, our_defensive_lineup: updatedDefense };
     }
     case "pinch_run": {
       // Replace the baserunner in place AND swap the lineup slot. Preserves
@@ -341,7 +444,7 @@ function applySubstitution(state: ReplayState, p: SubstitutionPayload): ReplaySt
             }
           : slot,
       );
-      return { ...state, our_lineup };
+      return { ...state, our_lineup, our_defensive_lineup: updatedDefense };
     }
     default:
       return state;
@@ -349,7 +452,14 @@ function applySubstitution(state: ReplayState, p: SubstitutionPayload): ReplaySt
 }
 
 function applyPitchingChange(state: ReplayState, p: PitchingChangePayload): ReplayState {
-  return { ...state, current_pitcher_id: p.in_pitcher_id };
+  // Mirror the change on the defensive lineup so fielding stats credit
+  // the right pitcher for plays at the mound after this point.
+  const our_defensive_lineup = setDefensiveSlot(
+    state.our_defensive_lineup,
+    "P",
+    p.in_pitcher_id,
+  );
+  return { ...state, current_pitcher_id: p.in_pitcher_id, our_defensive_lineup };
 }
 
 function applyInningEnd(state: ReplayState, p: InningEndPayload): ReplayState {

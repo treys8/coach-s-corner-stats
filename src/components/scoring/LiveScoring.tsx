@@ -41,6 +41,7 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
     state,
     loading,
     submitting,
+    retrying,
     names,
     weAreBatting,
     currentSlot,
@@ -96,6 +97,8 @@ export function LiveScoring({ gameId, roster, teamShortLabel, opponentName }: Li
         onUndo={() => void submitUndo()}
         onOpenManage={() => setManageOpen(true)}
         lastPlayText={state.last_play_text}
+        submitting={submitting}
+        retrying={retrying}
       />
 
       <BoxScoreToggle open={boxScoreOpen} onToggle={() => setBoxScoreOpen((v) => !v)} />

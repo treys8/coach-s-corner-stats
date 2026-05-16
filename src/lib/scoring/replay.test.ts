@@ -820,3 +820,117 @@ describe("replay()", () => {
     expect(balkState.bases.second?.reached_on_error).toBe(false);
   });
 });
+
+describe("defensive lineup tracking", () => {
+  beforeEach(() => { seq = 0; });
+
+  const startWithDefense = () =>
+    startGame({
+      starting_lineup: [
+        { batting_order: 1, player_id: "p1", position: "C" },
+        { batting_order: 2, player_id: "p2", position: "1B" },
+        { batting_order: 3, player_id: "p3", position: "2B" },
+        { batting_order: 4, player_id: "p4", position: "SS" },
+        { batting_order: 5, player_id: "p5", position: "3B" },
+        { batting_order: 6, player_id: "p6", position: "LF" },
+        { batting_order: 7, player_id: "p7", position: "CF" },
+        { batting_order: 8, player_id: "p8", position: "RF" },
+        { batting_order: 9, player_id: "p9", position: "DH" },
+      ],
+      starting_pitcher_id: "pitcher_us",
+    });
+
+  it("game_started builds our_defensive_lineup from the starting positions", () => {
+    const state = replay([startWithDefense()]);
+    const lineup = Object.fromEntries(
+      state.our_defensive_lineup.map((s) => [s.position, s.player_id]),
+    );
+    expect(lineup.P).toBe("pitcher_us");
+    expect(lineup.C).toBe("p1");
+    expect(lineup["1B"]).toBe("p2");
+    expect(lineup.SS).toBe("p4");
+    expect(lineup.CF).toBe("p7");
+  });
+
+  it("at_bat snapshots the defensive lineup at the time of the PA", () => {
+    const state = replay([
+      startWithDefense(),
+      evt("at_bat", atBat({
+        half: "top",
+        pitcher_id: "pitcher_us",
+        result: "GO",
+        fielder_position: "SS",
+      })),
+    ]);
+    const snap = state.at_bats[0].defensive_lineup_snapshot;
+    const ss = snap.find((s) => s.position === "SS");
+    expect(ss?.player_id).toBe("p4");
+  });
+
+  it("substitution with a position updates the defensive lineup", () => {
+    const state = replay([
+      startWithDefense(),
+      evt("substitution", {
+        out_player_id: "p4",
+        in_player_id: "subSS",
+        batting_order: 4,
+        position: "SS",
+        sub_type: "regular",
+      }),
+    ]);
+    const ss = state.our_defensive_lineup.find((s) => s.position === "SS");
+    expect(ss?.player_id).toBe("subSS");
+  });
+
+  it("pitching_change updates the P slot", () => {
+    const state = replay([
+      startWithDefense(),
+      evt("pitching_change", { out_pitcher_id: "pitcher_us", in_pitcher_id: "reliever" }),
+    ]);
+    const p = state.our_defensive_lineup.find((s) => s.position === "P");
+    expect(p?.player_id).toBe("reliever");
+  });
+});
+
+describe("lob_on_play", () => {
+  beforeEach(() => { seq = 0; });
+
+  it("credits LOB to the batter who made the third out with runners stranded", () => {
+    // We're home (bottom = us). Visitors batting in top: 2 outs already,
+    // runners on 1st and 3rd. Next batter grounds out — 2 stranded.
+    const state = replay([
+      startGame({ we_are_home: true }),
+      // Build 2 outs and put runners on first and third for the third PA.
+      evt("at_bat", atBat({ half: "top", result: "GO" })), // 1 out
+      evt("at_bat", atBat({ half: "top", result: "GO" })), // 2 outs
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        runner_advances: [{ from: "batter", to: "first", player_id: "r1" }],
+      })),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "1B",
+        runner_advances: [
+          { from: "first", to: "third", player_id: "r1" },
+          { from: "batter", to: "first", player_id: "r2" },
+        ],
+      })),
+      evt("at_bat", atBat({
+        half: "top",
+        result: "GO",  // third out
+        batter_id: "stranderBatter",
+      })),
+    ]);
+    const last = state.at_bats[state.at_bats.length - 1];
+    expect(last.lob_on_play).toBe(2);
+  });
+
+  it("lob_on_play is 0 when the play did not end the half", () => {
+    const state = replay([
+      startGame({ we_are_home: true }),
+      evt("at_bat", atBat({ half: "top", result: "GO" })),
+    ]);
+    expect(state.at_bats[0].lob_on_play).toBe(0);
+  });
+});

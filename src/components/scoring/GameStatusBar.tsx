@@ -16,6 +16,11 @@ interface GameStatusBarProps {
   onUndo: () => void;
   onOpenManage: () => void;
   lastPlayText: string | null;
+  /** Network status of the most recent event submission. `submitting` is
+   *  true while any post is in-flight; `retrying` is true only when the
+   *  current attempt is in a backoff window after a transient failure. */
+  submitting?: boolean;
+  retrying?: boolean;
 }
 
 export function GameStatusBar({
@@ -29,6 +34,8 @@ export function GameStatusBar({
   onUndo,
   onOpenManage,
   lastPlayText,
+  submitting,
+  retrying,
 }: GameStatusBarProps) {
   const halfLabel = state.half === "top" ? "Top" : "Bot";
   const batterLine = weAreBatting
@@ -84,7 +91,10 @@ export function GameStatusBar({
       </div>
 
       <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <span className="truncate">{batterLine}</span>
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="truncate">{batterLine}</span>
+          <SaveStatus submitting={!!submitting} retrying={!!retrying} />
+        </span>
         {lastPlayText && (
           <span className="truncate text-right">
             <span className="uppercase tracking-wider">Last: </span>
@@ -93,6 +103,24 @@ export function GameStatusBar({
         )}
       </div>
     </div>
+  );
+}
+
+function SaveStatus({ submitting, retrying }: { submitting: boolean; retrying: boolean }) {
+  if (!submitting && !retrying) return null;
+  // Retrying takes precedence over the generic submitting label so the
+  // coach knows a save is being re-attempted, not just slow.
+  const label = retrying ? "Retrying…" : "Saving…";
+  const dotClass = retrying ? "bg-amber-500" : "bg-sa-blue-deep/60";
+  return (
+    <span
+      className="inline-flex items-center gap-1 shrink-0 text-[11px] uppercase tracking-wider"
+      role="status"
+      aria-live="polite"
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${dotClass} animate-pulse`} />
+      {label}
+    </span>
   );
 }
 

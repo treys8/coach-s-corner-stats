@@ -37,6 +37,17 @@ export interface RunnerAdvance {
 
 // ---- Event payloads --------------------------------------------------------
 
+// Defensive positions match diamond-geometry's FielderPosition. DH is
+// omitted because the DH never fields; the fielding rollup keys off these
+// nine slots only.
+export type DefensivePosition =
+  | "P" | "C" | "1B" | "2B" | "3B" | "SS" | "LF" | "CF" | "RF";
+
+export interface DefensiveSlot {
+  position: DefensivePosition;
+  player_id: string | null;
+}
+
 export interface LineupSlot {
   batting_order: number; // 1..9 (or null for the pitcher in non-DH? see design)
   player_id: string | null;
@@ -267,6 +278,15 @@ export interface DerivedAtBat {
   pitches: PitchPayload[];
   /** Set when batter reached on uncaught K3 (mirrors AtBatPayload). */
   batter_reached_on_k3?: K3ReachSource;
+  /** Snapshot of who's playing each defensive position at the moment
+   *  this PA started. The fielding rollup resolves `fielder_position`
+   *  against this snapshot to credit the right player even when subs
+   *  shifted the defense between innings. In-memory only. */
+  defensive_lineup_snapshot: DefensiveSlot[];
+  /** Runners stranded if this PA ended the half-inning (outs crossed
+   *  from <3 to 3 on this play). Credited to the batter as LOB by the
+   *  rollup. 0 when this play didn't end the half. */
+  lob_on_play: number;
 }
 
 export interface ReplayState {
@@ -285,6 +305,11 @@ export interface ReplayState {
   opponent_score: number;    // theirs
 
   our_lineup: LineupSlot[];
+  /** Who's playing each defensive position right now. Set on
+   *  game_started from the starting lineup; mutated on substitution
+   *  events that carry a position and on pitching_change. Used by the
+   *  fielding rollup to map `fielder_position` → player_id. */
+  our_defensive_lineup: DefensiveSlot[];
   current_pitcher_id: string | null;
   current_opponent_pitcher_id: string | null;
   /** 1-based slot in our_lineup that's up next when we're batting. Null
@@ -357,6 +382,7 @@ export const INITIAL_STATE: ReplayState = {
   team_score: 0,
   opponent_score: 0,
   our_lineup: [],
+  our_defensive_lineup: [],
   current_pitcher_id: null,
   current_opponent_pitcher_id: null,
   current_batter_slot: null,

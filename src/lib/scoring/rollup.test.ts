@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { computeWLS, rollupBatting, rollupPitching, verifyBoxScore } from "./rollup";
+import { computeWLS, rollupBatting, rollupFielding, rollupPitching, verifyBoxScore } from "./rollup";
 import { EMPTY_BASES } from "./types";
-import type { BaseRunner, Bases, DerivedAtBat } from "./types";
+import type { BaseRunner, Bases, DefensivePosition, DefensiveSlot, DerivedAtBat } from "./types";
+
+const ALL_POSITIONS: DefensivePosition[] = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"];
+
+// Build a defensive-lineup snapshot from a sparse map. Positions not in
+// the map default to player_id: null.
+function defense(map: Partial<Record<DefensivePosition, string>>): DefensiveSlot[] {
+  return ALL_POSITIONS.map((position) => ({
+    position,
+    player_id: map[position] ?? null,
+  }));
+}
 
 let nextId = 0;
 function ab(overrides: Partial<DerivedAtBat>): DerivedAtBat {
@@ -29,6 +40,8 @@ function ab(overrides: Partial<DerivedAtBat>): DerivedAtBat {
     bases_before: { ...EMPTY_BASES },
     description: null,
     pitches: [],
+    defensive_lineup_snapshot: [],
+    lob_on_play: 0,
     ...overrides,
   };
 }
@@ -448,6 +461,202 @@ describe("computeWLS", () => {
     const wls = computeWLS(atBats, [], true, 2, 1);
     expect(wls.W).toBe("starter");
     expect(wls.SV).toBe("closer");
+  });
+});
+
+describe("rollupFielding", () => {
+  // Standard defense for the half-innings we're fielding.
+  const ours = defense({
+    P: "pitcher1",
+    C: "catcher1",
+    "1B": "first1",
+    "2B": "second1",
+    "3B": "third1",
+    SS: "ss1",
+    LF: "lf1",
+    CF: "cf1",
+    RF: "rf1",
+  });
+
+  it("credits a routine 6-3 ground out as A→SS, PO→1B", () => {
+    const atBats = [
+      ab({
+        batter_id: null,
+        pitcher_id: "pitcher1",
+        result: "GO",
+        outs_recorded: 1,
+        fielder_position: "SS",
+        defensive_lineup_snapshot: ours,
+      }),
+    ];
+    const lines = rollupFielding(atBats);
+    expect(lines.get("ss1")!.A).toBe(1);
+    expect(lines.get("ss1")!.PO).toBe(0);
+    expect(lines.get("first1")!.PO).toBe(1);
+    expect(lines.get("first1")!.A).toBe(0);
+  });
+
+  it("credits a fly out to the listed outfielder only", () => {
+    const atBats = [
+      ab({
+        batter_id: null,
+        pitcher_id: "pitcher1",
+        result: "FO",
+        outs_recorded: 1,
+        fielder_position: "CF",
+        defensive_lineup_snapshot: ours,
+      }),
+    ];
+    const lines = rollupFielding(atBats);
+    expect(lines.get("cf1")!.PO).toBe(1);
+    expect(lines.has("first1")).toBe(false);
+  });
+
+  it("credits a strikeout as a putout to the catcher", () => {
+    const atBats = [
+      ab({
+        batter_id: null,
+        pitcher_id: "pitcher1",
+        result: "K_swinging",
+        outs_recorded: 1,
+        defensive_lineup_snapshot: ours,
+      }),
+    ];
+    const lines = rollupFielding(atBats);
+    expect(lines.get("catcher1")!.PO).toBe(1);
+  });
+
+  it("does not credit a catcher PO when the batter reached on dropped K3", () => {
+    const atBats = [
+      ab({
+        batter_id: null,
+        pitcher_id: "pitcher1",
+        result: "K_swinging",
+        batter_reached_on_k3: "PB",
+        outs_recorded: 0,
+        defensive_lineup_snapshot: ours,
+      }),
+    ];
+    const lines = rollupFielding(atBats);
+    expect(lines.size).toBe(0);
+  });
+
+  it("credits an error to the listed fielder", () => {
+    const atBats = [
+      ab({
+        batter_id: null,
+        pitcher_id: "pitcher1",
+        result: "E",
+        outs_recorded: 0,
+        fielder_position: "3B",
+        defensive_lineup_snapshot: ours,
+      }),
+    ];
+    const lines = rollupFielding(atBats);
+    expect(lines.get("third1")!.E).toBe(1);
+    expect(lines.get("third1")!.PO).toBe(0);
+    expect(lines.get("third1")!.A).toBe(0);
+  });
+
+  it("computes FLD% from total chances", () => {
+    const atBats = [
+      // SS makes 3 assists on grounders, then commits 1 error.
+      ab({ batter_id: null, result: "GO", outs_recorded: 1, fielder_position: "SS", defensive_lineup_snapshot: ours }),
+      ab({ batter_id: null, result: "GO", outs_recorded: 1, fielder_position: "SS", defensive_lineup_snapshot: ours }),
+      ab({ batter_id: null, result: "GO", outs_recorded: 1, fielder_position: "SS", defensive_lineup_snapshot: ours }),
+      ab({ batter_id: null, result: "E", fielder_position: "SS", defensive_lineup_snapshot: ours }),
+    ];
+    const ss = rollupFielding(atBats).get("ss1")!;
+    expect(ss.A).toBe(3);
+    expect(ss.E).toBe(1);
+    expect(ss.TC).toBe(4);
+    expect(ss.FLD).toBeCloseTo(0.75, 3);
+  });
+
+  it("shifts attribution to the new SS after a defensive substitution", () => {
+    // First grounder fielded by ss1; mid-game sub puts ss2 at shortstop;
+    // second grounder must credit ss2, not ss1.
+    const before = defense({ "1B": "first1", SS: "ss1" });
+    const after = defense({ "1B": "first1", SS: "ss2" });
+    const atBats = [
+      ab({ batter_id: null, result: "GO", outs_recorded: 1, fielder_position: "SS", defensive_lineup_snapshot: before }),
+      ab({ batter_id: null, result: "GO", outs_recorded: 1, fielder_position: "SS", defensive_lineup_snapshot: after }),
+    ];
+    const lines = rollupFielding(atBats);
+    expect(lines.get("ss1")!.A).toBe(1);
+    expect(lines.get("ss2")!.A).toBe(1);
+  });
+
+  it("ignores at-bats we were batting (no fielding chance for our players)", () => {
+    const atBats = [
+      ab({
+        batter_id: "ourBatter",
+        pitcher_id: null,
+        opponent_pitcher_id: "opp",
+        result: "GO",
+        outs_recorded: 1,
+        fielder_position: "SS",
+        defensive_lineup_snapshot: ours,
+      }),
+    ];
+    expect(rollupFielding(atBats).size).toBe(0);
+  });
+
+  it("accepts numeric scorebook positions (1-9) in fielder_position", () => {
+    const atBats = [
+      // "6" = SS, "3" = 1B in standard scorebook notation.
+      ab({ batter_id: null, result: "GO", outs_recorded: 1, fielder_position: "6", defensive_lineup_snapshot: ours }),
+    ];
+    const lines = rollupFielding(atBats);
+    expect(lines.get("ss1")!.A).toBe(1);
+    expect(lines.get("first1")!.PO).toBe(1);
+  });
+});
+
+describe("rollupBatting GIDP and LOB", () => {
+  it("credits GIDP on a DP at-bat with 2 outs", () => {
+    const atBats = [
+      ab({
+        batter_id: "p1",
+        result: "DP",
+        outs_recorded: 2,
+        runner_advances: [
+          { from: "first", to: "out", player_id: "p0" },
+          { from: "batter", to: "out", player_id: "p1" },
+        ],
+      }),
+    ];
+    const line = rollupBatting(atBats).get("p1")!;
+    expect(line.GIDP).toBe(1);
+    expect(line.PA).toBe(1);
+    expect(line.AB).toBe(1);
+  });
+
+  it("does not credit GIDP when the result is DP but only one out was recorded", () => {
+    const atBats = [
+      ab({ batter_id: "p1", result: "DP", outs_recorded: 1 }),
+    ];
+    expect(rollupBatting(atBats).get("p1")!.GIDP).toBe(0);
+  });
+
+  it("credits LOB to the batter who made the third out with runners on", () => {
+    // Batter grounds out to end the inning; 2 runners stranded.
+    const atBats = [
+      ab({
+        batter_id: "p1",
+        result: "GO",
+        outs_recorded: 1,
+        lob_on_play: 2,
+      }),
+    ];
+    expect(rollupBatting(atBats).get("p1")!.LOB).toBe(2);
+  });
+
+  it("does not credit LOB on a play that did not end the half", () => {
+    const atBats = [
+      ab({ batter_id: "p1", result: "GO", outs_recorded: 1, lob_on_play: 0 }),
+    ];
+    expect(rollupBatting(atBats).get("p1")!.LOB).toBe(0);
   });
 });
 

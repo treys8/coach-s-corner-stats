@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { replay } from "@/lib/scoring/replay";
 import { defaultAdvances } from "@/lib/scoring/advances";
 import { INITIAL_STATE } from "@/lib/scoring/types";
-import { postEvent } from "@/lib/scoring/events-client";
+import { postEvent, type PostBody } from "@/lib/scoring/events-client";
 import {
   autoRBI,
   describeEvent,
@@ -69,8 +69,34 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Distinct from `submitting`: true only while postEvent is mid-backoff
+  // after at least one failed attempt. Used by the status bar to show
+  // "Retrying…" vs. the usual "Saving…" indicator.
+  const [retrying, setRetrying] = useState(false);
+  // Track concurrent in-flight posts so a slow retry from an earlier call
+  // doesn't drop the indicator while a later post is still going.
+  const retryDepth = useRef(0);
   const [armedResult, setArmedResult] = useState<AtBatResult | null>(null);
   const [runnerAction, setRunnerAction] = useState<RunnerActionTarget | null>(null);
+
+  // Wrap postEvent to thread the hook's retrying flag through every call
+  // site automatically. All in-hook submitters use this instead of the raw
+  // module function.
+  const post = useCallback(
+    (body: PostBody): Promise<boolean> =>
+      postEvent(gameId, body, {
+        onRetryingChange: (active) => {
+          if (active) {
+            retryDepth.current += 1;
+            if (retryDepth.current === 1) setRetrying(true);
+          } else {
+            retryDepth.current = Math.max(0, retryDepth.current - 1);
+            if (retryDepth.current === 0) setRetrying(false);
+          }
+        },
+      }),
+    [gameId],
+  );
 
   const names = useMemo(() => nameById(roster), [roster]);
 
@@ -157,7 +183,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     const nextSeq = snap.events.reduce((m, e) => Math.max(m, e.sequence_number), 0) + 1;
     const halfLabel = snap.state.half === "top" ? "Top" : "Bot";
     const inning = snap.state.inning;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `ie-auto-${inning}-${snap.state.half}-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: "inning_end",
@@ -215,7 +241,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
 
     const nextSeq = lastSeq + 1;
     const clientEventId = `ab-${state.inning}-${state.half}-${nextSeq}`;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: clientEventId,
       sequence_number: nextSeq,
       event_type: "at_bat",
@@ -260,7 +286,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     setSubmitting(true);
     const prevOuts = state.outs;
     const baseSeq = lastSeq + 1;
-    const okPitch = await postEvent(gameId, {
+    const okPitch = await post({
       client_event_id: `pitch-${baseSeq}`,
       sequence_number: baseSeq,
       event_type: "pitch",
@@ -296,7 +322,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
         runner_advances: advances,
         description: describePlay(closing, runs, batterId, names),
       };
-      const okAB = await postEvent(gameId, {
+      const okAB = await post({
         client_event_id: `ab-auto-${state.inning}-${state.half}-${baseSeq + 1}`,
         sequence_number: baseSeq + 1,
         event_type: "at_bat",
@@ -330,7 +356,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     setSubmitting(true);
     const prevOuts = state.outs;
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `${clientPrefix}-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: eventType,
@@ -350,7 +376,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     if (submitting) return;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `ie-${state.inning}-${state.half}-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: "inning_end",
@@ -399,7 +425,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
 
     let nextSeq = lastSeq + 1;
     if (leadingSub) {
-      const okSub = await postEvent(gameId, {
+      const okSub = await post({
         client_event_id: `sub-pc-${nextSeq}`,
         sequence_number: nextSeq,
         event_type: "substitution",
@@ -416,7 +442,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
       out_pitcher_id: state.current_pitcher_id,
       in_pitcher_id: newPitcherId,
     };
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `pc-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: "pitching_change",
@@ -433,7 +459,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     if (submitting || !state.current_pitcher_id) return { forcedRemoval: false };
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `dc-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: "defensive_conference",
@@ -464,7 +490,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     if (submitting) return false;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `sub-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: "substitution",
@@ -492,7 +518,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
       corrected_payload: correctedAtBat,
     };
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `corr-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: "correction",
@@ -509,7 +535,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     if (submitting) return false;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `gf-${gameId}`,
       sequence_number: nextSeq,
       event_type: "game_finalized",
@@ -531,7 +557,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     const target = lastUndoableEvent;
     const label = describeEvent(target, names);
     const nextSeq = lastSeq + 1;
-    const ok = await postEvent(gameId, {
+    const ok = await post({
       client_event_id: `undo-${nextSeq}`,
       sequence_number: nextSeq,
       event_type: "correction",
@@ -556,6 +582,7 @@ export function useLiveScoring({ gameId, roster }: UseLiveScoringArgs) {
     state,
     loading,
     submitting,
+    retrying,
     names,
     weAreBatting,
     currentSlot,

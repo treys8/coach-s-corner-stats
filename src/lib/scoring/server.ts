@@ -9,7 +9,7 @@
 
 import { adminClient } from "@/lib/supabase/admin";
 import { replay } from "./replay";
-import { computeWLS, rollupBatting, rollupPitching } from "./rollup";
+import { computeWLS, rollupBatting, rollupFielding, rollupPitching } from "./rollup";
 import type { GameEventPayload, GameEventRecord, ReplayState } from "./types";
 import type { GameEventType } from "@/integrations/supabase/types";
 
@@ -188,16 +188,24 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     }
   }
 
-  // Tablet stat rollup. Idempotent: clear any prior tablet rows for this game,
-  // then write fresh rows iff the game is final. Handles re-replay, late
-  // corrections, and (eventually) un-finalize without duplicates.
-  const del = await admin
-    .from("stat_snapshots")
-    .delete()
-    .eq("game_id", gameId)
-    .eq("source", "tablet");
-  if (del.error) {
-    throw new Error(`stat_snapshots tablet delete failed: ${del.error.message}`);
+  // Tablet stat rollup. When the game is final we upsert atomically on
+  // the unique key (team_id, player_id, upload_date, game_id) — that
+  // replaces prior rows in a single operation, so a mid-flight failure
+  // can't leave the rows wiped with an empty insert behind.
+  //
+  // When the game ISN'T final (draft / in_progress, or un-finalized via
+  // a void correction) we clear any prior tablet rows for this game so
+  // un-finalize doesn't leave a stale snapshot behind. Old behavior did
+  // the delete on every rederive; preserved here.
+  if (state.status !== "final") {
+    const del = await admin
+      .from("stat_snapshots")
+      .delete()
+      .eq("game_id", gameId)
+      .eq("source", "tablet");
+    if (del.error) {
+      throw new Error(`stat_snapshots tablet delete failed: ${del.error.message}`);
+    }
   }
 
   if (state.status === "final") {
@@ -217,6 +225,7 @@ export async function rederive(gameId: string): Promise<ReplayState> {
 
     const batting = rollupBatting(state.at_bats);
     const pitching = rollupPitching(state.at_bats, state.non_pa_runs);
+    const fielding = rollupFielding(state.at_bats);
     const wls = computeWLS(
       state.at_bats,
       state.non_pa_runs,
@@ -228,7 +237,11 @@ export async function rederive(gameId: string): Promise<ReplayState> {
     if (wls.W) { const line = pitching.get(wls.W); if (line) line.W = 1; }
     if (wls.L) { const line = pitching.get(wls.L); if (line) line.L = 1; }
     if (wls.SV) { const line = pitching.get(wls.SV); if (line) line.SV = 1; }
-    const playerIds = new Set<string>([...batting.keys(), ...pitching.keys()]);
+    const playerIds = new Set<string>([
+      ...batting.keys(),
+      ...pitching.keys(),
+      ...fielding.keys(),
+    ]);
 
     if (playerIds.size > 0) {
       const rows = [...playerIds].map((player_id) => ({
@@ -242,12 +255,17 @@ export async function rederive(gameId: string): Promise<ReplayState> {
         stats: {
           batting: batting.get(player_id) ?? {},
           pitching: pitching.get(player_id) ?? {},
-          fielding: {},
+          fielding: fielding.get(player_id) ?? {},
         },
       }));
-      const ins = await admin.from("stat_snapshots").insert(rows as never[]);
+      const ins = await admin
+        .from("stat_snapshots")
+        .upsert(rows as never[], {
+          onConflict: "team_id,player_id,upload_date,game_id",
+          ignoreDuplicates: false,
+        });
       if (ins.error) {
-        throw new Error(`stat_snapshots tablet insert failed: ${ins.error.message}`);
+        throw new Error(`stat_snapshots tablet upsert failed: ${ins.error.message}`);
       }
     }
   }

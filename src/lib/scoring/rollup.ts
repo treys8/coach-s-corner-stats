@@ -12,7 +12,7 @@
 // sourced from passed_ball or error_advance. WP, balk, and SB-home runs
 // stay earned (PDF §14, §23.5).
 
-import type { AtBatResult, DerivedAtBat, NonPaRunSource, ReplayState, RunnerAdvance } from "./types";
+import type { AtBatResult, DefensiveSlot, DerivedAtBat, NonPaRunSource, ReplayState, RunnerAdvance } from "./types";
 
 export interface BattingLine {
   AB: number;
@@ -32,10 +32,33 @@ export interface BattingLine {
   RBI: number;
   R: number;
   PA: number;
+  /** Grounded into double play — counts when the at-bat result is DP and
+   *  ≥2 outs were recorded (PDF §13 / NFHS §10.04). */
+  GIDP: number;
+  /** Left on base — runners stranded when the batter made the third out
+   *  of the half-inning (MLB convention). 0 for any other PA. */
+  LOB: number;
   AVG: number;
   OBP: number;
   SLG: number;
   OPS: number;
+}
+
+export interface FieldingLine {
+  /** Putouts: credited to the fielder who recorded the out (catch, tag,
+   *  or final force-out throw recipient). */
+  PO: number;
+  /** Assists: credited to a fielder who handled the ball before a putout
+   *  on the same play. Auto-attribution this rollup only credits the
+   *  listed `fielder_position` as the assist on ground outs (the relay
+   *  step). Multi-fielder chains (4-6-3 etc.) under-count assists. */
+  A: number;
+  /** Errors: a misplay that allows the batter or a baserunner to advance. */
+  E: number;
+  /** Total chances = PO + A + E. */
+  TC: number;
+  /** Fielding average = (PO + A) / TC, rounded later. 0 when TC=0. */
+  FLD: number;
 }
 
 export interface PitchingLine {
@@ -87,8 +110,13 @@ function emptyBatting(): BattingLine {
   return {
     AB: 0, H: 0, "1B": 0, "2B": 0, "3B": 0, HR: 0,
     BB: 0, SO: 0, HBP: 0, SF: 0, SH: 0, CI: 0, RBI: 0, R: 0, PA: 0,
+    GIDP: 0, LOB: 0,
     AVG: 0, OBP: 0, SLG: 0, OPS: 0,
   };
+}
+
+function emptyFielding(): FieldingLine {
+  return { PO: 0, A: 0, E: 0, TC: 0, FLD: 0 };
 }
 
 function emptyPitching(): PitchingLine {
@@ -146,6 +174,15 @@ export function rollupBatting(atBats: DerivedAtBat[]): Map<string, BattingLine> 
         line.CI += 1;
       }
       line.RBI += ab.rbi ?? 0;
+      // GIDP: batter hit into a double play (DP result with ≥2 outs).
+      if (ab.result === "DP" && (ab.outs_recorded ?? 0) >= 2) {
+        line.GIDP += 1;
+      }
+      // LOB: replay engine flagged this PA as the inning-ender; credit the
+      // runners it stranded to the batter who made the final out.
+      if ((ab.lob_on_play ?? 0) > 0) {
+        line.LOB += ab.lob_on_play ?? 0;
+      }
     }
 
     // R per scoring runner: an advance with to='home' credits the runner
@@ -430,4 +467,108 @@ function classifyScoringRunner(
     pitcher_id: src.pitcher_of_record_id,
     earned: !src.reached_on_error && !k3DroppedTaint,
   };
+}
+
+// ---- Fielding rollup -------------------------------------------------------
+//
+// Auto-attribution from each at-bat's `defensive_lineup_snapshot` plus the
+// listed `fielder_position`. Limits the coach should know about:
+//   - Multi-fielder chains aren't recorded today (the play only carries one
+//     fielder_position). Ground outs default to PO@1B / A@listed-fielder so
+//     the most common case credits the right two players; everything else
+//     credits only the listed position. Cutoffs and relays under-count
+//     assists. DP/TP credit one PO at the listed position (no chain).
+//   - When `fielder_position` is null (e.g., a play recorded before the
+//     coach tagged a fielder), the play contributes nothing to fielding.
+
+const FLY_PO_RESULTS: ReadonlySet<AtBatResult> = new Set(["FO", "LO", "PO", "IF", "SF"]);
+const GROUND_OUT_RESULTS: ReadonlySet<AtBatResult> = new Set(["GO", "SAC"]);
+
+function lookupPosition(
+  lineup: DefensiveSlot[],
+  position: string | null,
+): string | null {
+  if (!position) return null;
+  const upper = position.trim().toUpperCase();
+  const key = (() => {
+    switch (upper) {
+      case "1": case "P": return "P";
+      case "2": case "C": return "C";
+      case "3": case "1B": return "1B";
+      case "4": case "2B": return "2B";
+      case "5": case "3B": return "3B";
+      case "6": case "SS": return "SS";
+      case "7": case "LF": return "LF";
+      case "8": case "CF": return "CF";
+      case "9": case "RF": return "RF";
+      default: return null;
+    }
+  })();
+  if (!key) return null;
+  return lineup.find((s) => s.position === key)?.player_id ?? null;
+}
+
+export function rollupFielding(atBats: DerivedAtBat[]): Map<string, FieldingLine> {
+  const out = new Map<string, FieldingLine>();
+  const ensure = (id: string): FieldingLine => {
+    let line = out.get(id);
+    if (!line) {
+      line = emptyFielding();
+      out.set(id, line);
+    }
+    return line;
+  };
+
+  for (const ab of atBats) {
+    // Only the half-innings we are fielding generate fielding chances for
+    // OUR players. When batter_id is set we were batting, so skip.
+    if (ab.batter_id) continue;
+
+    const lineup = ab.defensive_lineup_snapshot ?? [];
+    const fielderId = lookupPosition(lineup, ab.fielder_position);
+    const catcherId = lookupPosition(lineup, "C");
+    const firstBaseId = lookupPosition(lineup, "1B");
+
+    if (ab.result === "E") {
+      if (fielderId) ensure(fielderId).E += 1;
+      continue;
+    }
+
+    if (STRIKEOUT_RESULTS.has(ab.result) && !ab.batter_reached_on_k3) {
+      // Caught third strike: catcher gets the PO.
+      if (catcherId) ensure(catcherId).PO += 1;
+      continue;
+    }
+
+    if (GROUND_OUT_RESULTS.has(ab.result) && (ab.outs_recorded ?? 0) >= 1) {
+      // Standard ground-out chain: assist to the fielder, putout at 1B.
+      // SAC bunts follow the same chain (out at 1B, assist to fielder).
+      if (fielderId) ensure(fielderId).A += 1;
+      if (firstBaseId) ensure(firstBaseId).PO += 1;
+      continue;
+    }
+
+    if (FLY_PO_RESULTS.has(ab.result) && (ab.outs_recorded ?? 0) >= 1) {
+      // Fly out / line out / pop out / infield fly / sac fly — single PO
+      // to the fielder who caught it.
+      if (fielderId) ensure(fielderId).PO += 1;
+      continue;
+    }
+
+    if (ab.result === "DP" || ab.result === "TP") {
+      // Conservative: one PO at the listed position. Chain participation
+      // (other fielders in the play) isn't captured yet — follow-up PR.
+      if (fielderId) ensure(fielderId).PO += 1;
+      continue;
+    }
+
+    // FC, hits, walks, HBP, CI: no fielding chance to credit here.
+  }
+
+  for (const line of out.values()) {
+    line.TC = line.PO + line.A + line.E;
+    line.FLD = line.TC > 0 ? (line.PO + line.A) / line.TC : 0;
+  }
+
+  return out;
 }
