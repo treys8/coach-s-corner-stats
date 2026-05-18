@@ -16,9 +16,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucide-react";
+import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle, Check } from "lucide-react";
 import { toast } from "sonner";
 import { parseStatsWorkbook, type ParsedPlayer, type StatsCategory } from "@/lib/csvParser";
+import { matchAgainstRoster, type MatchResult, type RosterPlayer } from "@/lib/players/matchRoster";
 import type { Json } from "@/integrations/supabase/types";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
@@ -58,6 +59,27 @@ interface PendingCategory {
   sheetName: string;
 }
 
+// One row in the name-review dialog. `classification` and `originalFirst`/
+// `originalLast` are the immutable display state captured at parse time.
+// When the coach accepts a "similar" suggestion, we mutate `player.first`/
+// `player.last` to the existing player's exact-cased names so the server's
+// normalize_player_name() ON CONFLICT path will hit that row, and flip
+// `acceptedSuggestion` so the row renders as resolved (and can be undone
+// back to the originals).
+interface ReviewItem {
+  player: ParsedPlayer;
+  classification: MatchResult;
+  originalFirst: string;
+  originalLast: string;
+  acceptedSuggestion: boolean;
+}
+
+interface PendingReview {
+  items: ReviewItem[];
+  filename: string;
+  uploadDate: string;
+}
+
 export default function UploadStatsPage() {
   const { school } = useSchool();
   const { team } = useTeam();
@@ -67,6 +89,7 @@ export default function UploadStatsPage() {
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<PendingOverwrite | null>(null);
   const [pendingCategory, setPendingCategory] = useState<PendingCategory | null>(null);
+  const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
   const [overrideChoice, setOverrideChoice] = useState<StatsCategory>("batting");
   const fileRef = useRef<HTMLInputElement>(null);
   // Mirrors `busy` for synchronous reads from Radix's onOpenChange, which fires
@@ -103,11 +126,34 @@ export default function UploadStatsPage() {
     setFile(null);
     setPendingOverwrite(null);
     setPendingCategory(null);
+    setPendingReview(null);
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  // Shared parse-then-ingest core. Called from the initial submit and from the
-  // category-picker confirm (which re-parses with an override).
+  // Run the actual RPC. If the server reports an existing snapshot for the
+  // date, raise the overwrite dialog. Takes snapshotDate explicitly so callers
+  // can pass the date that was current when the review was generated, not
+  // whatever the picker shows now (the user might have nudged it while the
+  // review dialog was open).
+  const proceedToIngest = async (players: ParsedPlayer[], filename: string, snapshotDate: string) => {
+    try {
+      const count = await ingestOnce({ players, filename, uploadDate: snapshotDate, replace: false });
+      finishSuccess(count, snapshotDate);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith(OVERWRITE_PREFIX)) {
+        const existingCount = parseInt(msg.slice(OVERWRITE_PREFIX.length), 10) || 0;
+        setPendingOverwrite({ players, filename, uploadDate: snapshotDate, existingCount });
+        return;
+      }
+      throw e;
+    }
+  };
+
+  // Shared parse-then-classify core. Called from the initial submit and from
+  // the category-picker confirm (which re-parses with an override). On success
+  // either opens the name-review dialog or, when there's no roster to compare
+  // against and nothing to review, proceeds straight to ingest.
   const runIngest = async (currentFile: File, categoryOverride?: StatsCategory) => {
     const buf = await currentFile.arrayBuffer();
     const parsed = parseStatsWorkbook(buf, { categoryOverride });
@@ -133,18 +179,40 @@ export default function UploadStatsPage() {
       toast.info(`Partial upload: ${present} only.`, { duration: 6000 });
     }
 
-    try {
-      const count = await ingestOnce({ players: parsed.players, filename: currentFile.name, uploadDate, replace: false });
-      finishSuccess(count, uploadDate);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.startsWith(OVERWRITE_PREFIX)) {
-        const existingCount = parseInt(msg.slice(OVERWRITE_PREFIX.length), 10) || 0;
-        setPendingOverwrite({ players: parsed.players, filename: currentFile.name, uploadDate, existingCount });
-        return;
-      }
-      throw e;
+    // Fetch the school's current roster so we can flag possible-typo names
+    // before they fork existing players. Players are school-scoped, so this
+    // matches the unique-index scope of normalize_player_name().
+    const { data: rosterRows, error: rosterErr } = await supabase
+      .from("players")
+      .select("id, first_name, last_name")
+      .eq("school_id", school.id);
+    if (rosterErr) throw rosterErr;
+    const roster: RosterPlayer[] = (rosterRows ?? []) as RosterPlayer[];
+
+    // First-upload-for-the-school path: every parsed name is "new", review
+    // would just be friction. Per the plan, skip straight to ingest.
+    if (roster.length === 0) {
+      await proceedToIngest(parsed.players, currentFile.name, uploadDate);
+      return;
     }
+
+    const items: ReviewItem[] = parsed.players.map((p) => ({
+      player: { ...p },
+      classification: matchAgainstRoster({ first: p.first, last: p.last }, roster),
+      originalFirst: p.first,
+      originalLast: p.last,
+      acceptedSuggestion: false,
+    }));
+
+    // If there are no "similar" rows AND no "new" rows, every name matched
+    // existing roster exactly — no decisions to make, skip the dialog.
+    const hasDecision = items.some((it) => it.classification.kind !== "existing");
+    if (!hasDecision) {
+      await proceedToIngest(parsed.players, currentFile.name, uploadDate);
+      return;
+    }
+
+    setPendingReview({ items, filename: currentFile.name, uploadDate });
   };
 
   const handleSubmit = async () => {
@@ -187,6 +255,58 @@ export default function UploadStatsPage() {
     }
   };
 
+  // Accept the suggested existing-roster match for a single review row. We
+  // rewrite the parsed first/last to the roster's exact-cased values; the RPC
+  // then matches that row to the existing player via normalize_player_name()
+  // and merges stats onto the existing snapshot lineage instead of forking.
+  const handleAcceptSuggestion = (idx: number) => {
+    setPendingReview((prev) => {
+      if (!prev) return prev;
+      const item = prev.items[idx];
+      if (item.classification.kind !== "similar") return prev;
+      const suggestion = item.classification.suggestion;
+      const nextItems = prev.items.slice();
+      nextItems[idx] = {
+        ...item,
+        player: { ...item.player, first: suggestion.first_name, last: suggestion.last_name },
+        acceptedSuggestion: true,
+      };
+      return { ...prev, items: nextItems };
+    });
+  };
+
+  // Undo an accepted suggestion (put the row back to "will be added as new").
+  const handleRejectSuggestion = (idx: number) => {
+    setPendingReview((prev) => {
+      if (!prev) return prev;
+      const item = prev.items[idx];
+      const nextItems = prev.items.slice();
+      nextItems[idx] = {
+        ...item,
+        player: { ...item.player, first: item.originalFirst, last: item.originalLast },
+        acceptedSuggestion: false,
+      };
+      return { ...prev, items: nextItems };
+    });
+  };
+
+  const handleConfirmReview = async () => {
+    if (!pendingReview) return;
+    const { items, filename, uploadDate: snapshotDate } = pendingReview;
+    setBusyBoth(true);
+    setPendingReview(null);
+    try {
+      await proceedToIngest(items.map((it) => it.player), filename, snapshotDate);
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : "Upload failed";
+      const msg = friendlyError(raw);
+      setResult({ ok: false, msg });
+      toast.error(msg);
+    } finally {
+      setBusyBoth(false);
+    }
+  };
+
   const handleConfirmOverwrite = async () => {
     if (!pendingOverwrite) return;
     const { players, filename, uploadDate: stagedDate } = pendingOverwrite;
@@ -207,7 +327,17 @@ export default function UploadStatsPage() {
 
   const dialogOpen = pendingOverwrite !== null;
   const categoryDialogOpen = pendingCategory !== null;
-  const submitDisabled = busy || !file || dialogOpen || categoryDialogOpen;
+  const reviewDialogOpen = pendingReview !== null;
+  const submitDisabled = busy || !file || dialogOpen || categoryDialogOpen || reviewDialogOpen;
+
+  // Bucket the review items by classification kind for the dialog sections.
+  const reviewExisting = pendingReview?.items.filter((it) => it.classification.kind === "existing") ?? [];
+  const reviewSimilar = pendingReview
+    ? pendingReview.items
+        .map((it, idx) => ({ it, idx }))
+        .filter(({ it }) => it.classification.kind === "similar")
+    : [];
+  const reviewNew = pendingReview?.items.filter((it) => it.classification.kind === "new") ?? [];
 
   // Derive the categories present in this pending upload from the first
   // player's stats shape. The RPC overwrites stats wholesale (stats =
@@ -362,6 +492,116 @@ export default function UploadStatsPage() {
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleConfirmCategory} disabled={busy}>
               {busy ? "Importing…" : `Import as ${CATEGORY_LABEL[overrideChoice]}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={reviewDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !busyRef.current) setPendingReview(null);
+        }}
+      >
+        <AlertDialogContent className="max-w-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Review names before import</AlertDialogTitle>
+            <AlertDialogDescription>
+              We matched the file's names against your school roster. Confirm any did-you-mean suggestions, then import.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="my-4 max-h-[55vh] overflow-y-auto space-y-5">
+            {reviewSimilar.length > 0 && (
+              <section>
+                <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-sa-orange" />
+                  Possible typos ({reviewSimilar.length})
+                </h3>
+                <ul className="space-y-2">
+                  {reviewSimilar.map(({ it, idx }) => {
+                    if (it.classification.kind !== "similar") return null;
+                    const suggestion = it.classification.suggestion;
+                    return (
+                      <li key={idx} className="rounded-md border border-border bg-background p-3 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">
+                              {it.originalFirst} {it.originalLast}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Did you mean{" "}
+                              <strong className="text-foreground">
+                                {suggestion.first_name} {suggestion.last_name}
+                              </strong>
+                              ? ({it.classification.distance} {it.classification.distance === 1 ? "edit" : "edits"} away)
+                            </p>
+                          </div>
+                          {it.acceptedSuggestion ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRejectSuggestion(idx)}
+                              className="flex-shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-md border-2 border-sa-blue/40 bg-sa-blue/10 text-sa-blue text-xs font-semibold"
+                            >
+                              <Check className="w-3 h-3" /> Using match
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleAcceptSuggestion(idx)}
+                              className="flex-shrink-0 px-3 py-1.5 rounded-md border-2 border-border bg-background text-xs font-semibold hover:border-sa-orange hover:text-sa-orange transition-colors"
+                            >
+                              Use match
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
+
+            {reviewNew.length > 0 && (
+              <section>
+                <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                  <span className="text-base">🆕</span>
+                  New players ({reviewNew.length})
+                </h3>
+                <p className="text-xs text-muted-foreground mb-2">
+                  These names don't match anyone on your roster and will be added as new players.
+                </p>
+                <ul className="text-sm space-y-1 max-h-32 overflow-y-auto">
+                  {reviewNew.map((it, i) => (
+                    <li key={`new-${i}`} className="text-muted-foreground">
+                      • {it.player.first} {it.player.last}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {reviewExisting.length > 0 && (
+              <section>
+                <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-sa-blue" />
+                  Matched existing roster ({reviewExisting.length})
+                </h3>
+                <ul className="text-sm space-y-1 max-h-32 overflow-y-auto">
+                  {reviewExisting.map((it, i) => (
+                    <li key={`existing-${i}`} className="text-muted-foreground">
+                      • {it.player.first} {it.player.last}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmReview} disabled={busy}>
+              {busy ? "Importing…" : "Confirm import"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
