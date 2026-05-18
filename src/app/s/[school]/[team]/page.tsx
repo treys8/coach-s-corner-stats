@@ -170,13 +170,14 @@ export default function RosterPage() {
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {players.map((p) => {
-            // A roster row with no jersey AND no position is the fingerprint
-            // of an auto-create from ingest_stats_workbook (the roster upload
-            // RPC always sets at least one when the columns exist). Flag it so
-            // the coach knows the entry is incomplete and offer a one-tap path
-            // back to the roster upload page — there's no inline jersey edit
-            // today, and the roster upload is the only way to backfill.
-            const addedViaStats = p.jersey_number === null && p.position === null;
+            // A roster row with no jersey AND no position needs attention:
+            // this is what ingest_stats_workbook writes for new players, and
+            // it's also what a roster upload writes when neither cell had a
+            // value (column absent, or column present with a blank cell). In
+            // either case there's nothing useful to display, so surface the
+            // gap and link the coach to the only fix today (re-upload via
+            // /upload/roster — there's no inline jersey edit yet).
+            const needsBackfill = p.jersey_number === null && p.position === null;
             return (
               <div key={p.player_id} className="relative">
                 <Link
@@ -198,10 +199,11 @@ export default function RosterPage() {
                     </div>
                   </div>
                 </Link>
-                {addedViaStats && !closed && (
+                {needsBackfill && !closed && (
                   <Link
                     href={`/s/${school.slug}/${team.slug}/upload/roster`}
-                    title="Jersey + position weren't set when this player was added via a stats upload. Upload a roster file to fill them in."
+                    aria-label={`Set jersey number for ${p.first_name} ${p.last_name} — upload a roster file to fill it in.`}
+                    title="No jersey or position on file — upload a roster to fill them in."
                     className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full bg-sa-orange/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sa-orange border border-sa-orange/30 hover:bg-sa-orange/20 transition-colors"
                   >
                     Set jersey?
