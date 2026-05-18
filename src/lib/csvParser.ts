@@ -1,5 +1,8 @@
-// Stats parser. Despite the file name, this now reads the team's .xlsx workbook
-// with three sheets: "Hitting", "Pitching", "Fielding".
+// Stats parser. Reads the team's .xlsx workbook with up to three sheets named
+// "Hitting", "Pitching", "Fielding" — but each is independently optional. A
+// single-sheet hitting-only file is valid, as is a 2-sheet file. CSV inputs
+// are also accepted (XLSX.read auto-detects) and route through the override
+// path so the coach picks the category.
 //
 // Sheet layouts (per the coach-provided template):
 //   Hitting:  row 1 = column headers, rows 2..N = players, row(Totals) row = "Totals", glossary row last.
@@ -15,6 +18,14 @@ import * as XLSX from "xlsx";
 import { GLOSSARY } from "@/lib/glossary";
 
 const KNOWN_HEADERS = new Set(Object.keys(GLOSSARY));
+
+export type StatsCategory = "batting" | "pitching" | "fielding";
+
+const SHEET_NAME_FOR: Record<StatsCategory, string> = {
+  batting: "Hitting",
+  pitching: "Pitching",
+  fielding: "Fielding",
+};
 
 export interface SectionedStats {
   batting: Record<string, string | number>;
@@ -36,6 +47,27 @@ export interface ParsedWorkbook {
   players: ParsedPlayer[];
   /** Headers found in any sheet that aren't in GLOSSARY. Data still ingested. */
   unknownHeaders: string[];
+  /** Categories that had a parseable sheet in this file. */
+  presentCategories: StatsCategory[];
+  /** Categories not present in this file (will be ingested as empty buckets). */
+  missingCategories: StatsCategory[];
+  /**
+   * True when the file has exactly one sheet and that sheet isn't named
+   * Hitting/Pitching/Fielding — the UI needs to ask the coach which category
+   * the columns represent and re-parse with `categoryOverride`.
+   */
+  needsCategoryOverride: boolean;
+  /** Original sheet name surfaced when needsCategoryOverride is true. */
+  unrecognizedSheetName?: string;
+}
+
+export interface ParseStatsOptions {
+  /**
+   * Force the (first) sheet to be parsed into this category, regardless of
+   * sheet name. Used for CSV inputs (one anonymous sheet) and for the
+   * "Detected: Pitching — change?" override flow.
+   */
+  categoryOverride?: StatsCategory;
 }
 
 type Row = (string | number | null | undefined)[];
@@ -70,12 +102,19 @@ const isPlayerRow = (row: Row): boolean => {
   return true;
 };
 
+type ParsedSheet = {
+  headers: string[];
+  unknown: string[];
+  byKey: Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }>;
+};
+
+const emptyParsedSheet = (): ParsedSheet => ({ headers: [], unknown: [], byKey: new Map() });
+
 /** Parse one sheet into a header list + map of "First|Last" => stat object. */
 const parseSheet = (
-  ws: XLSX.WorkSheet | undefined,
+  ws: XLSX.WorkSheet,
   sheetName: string,
-): { headers: string[]; unknown: string[]; byKey: Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }> } => {
-  if (!ws) throw new Error(`Workbook is missing the "${sheetName}" sheet.`);
+): ParsedSheet => {
   const rows = XLSX.utils.sheet_to_json<Row>(ws, { header: 1, blankrows: false, defval: null });
   if (rows.length === 0) throw new Error(`"${sheetName}" sheet is empty.`);
 
@@ -112,35 +151,84 @@ const parseSheet = (
   return { headers, unknown, byKey };
 };
 
-/** Parse the team workbook (xlsx) buffer. */
-export function parseStatsWorkbook(data: ArrayBuffer): ParsedWorkbook {
+/** Parse the team workbook (xlsx or csv) buffer. */
+export function parseStatsWorkbook(data: ArrayBuffer, options: ParseStatsOptions = {}): ParsedWorkbook {
   const wb = XLSX.read(data, { type: "array" });
+  if (wb.SheetNames.length === 0) throw new Error("File contains no sheets.");
 
-  // Tolerant sheet lookup (case-insensitive).
-  const findSheet = (name: string): XLSX.WorkSheet | undefined => {
+  const { categoryOverride } = options;
+
+  // Case-insensitive sheet lookup.
+  const findSheet = (name: string): { ws: XLSX.WorkSheet; actualName: string } | undefined => {
     const match = wb.SheetNames.find((n) => n.trim().toLowerCase() === name.toLowerCase());
-    return match ? wb.Sheets[match] : undefined;
+    if (!match) return undefined;
+    return { ws: wb.Sheets[match], actualName: match };
   };
 
-  const hit = parseSheet(findSheet("Hitting"), "Hitting");
-  const pit = parseSheet(findSheet("Pitching"), "Pitching");
-  const fld = parseSheet(findSheet("Fielding"), "Fielding");
+  let battingSheet: ParsedSheet = emptyParsedSheet();
+  let pitchingSheet: ParsedSheet = emptyParsedSheet();
+  let fieldingSheet: ParsedSheet = emptyParsedSheet();
+  let needsCategoryOverride = false;
+  let unrecognizedSheetName: string | undefined;
 
-  // Union of all player keys across the three sheets.
-  const allKeys = new Set<string>([...hit.byKey.keys(), ...pit.byKey.keys(), ...fld.byKey.keys()]);
+  if (categoryOverride) {
+    // Override path: parse the first sheet (CSV always has one; xlsx may have
+    // one or more) and force-route it into the chosen category. If the file
+    // has a sheet whose name matches the override category, prefer that
+    // sheet; otherwise fall back to the first sheet.
+    const named = findSheet(SHEET_NAME_FOR[categoryOverride]);
+    const ws = named?.ws ?? wb.Sheets[wb.SheetNames[0]];
+    const sheetLabel = named?.actualName ?? wb.SheetNames[0];
+    const parsed = parseSheet(ws, sheetLabel);
+    if (categoryOverride === "batting") battingSheet = parsed;
+    else if (categoryOverride === "pitching") pitchingSheet = parsed;
+    else fieldingSheet = parsed;
+  } else {
+    // Auto path: look for sheets named Hitting/Pitching/Fielding.
+    const hit = findSheet("Hitting");
+    const pit = findSheet("Pitching");
+    const fld = findSheet("Fielding");
+
+    if (hit) battingSheet = parseSheet(hit.ws, "Hitting");
+    if (pit) pitchingSheet = parseSheet(pit.ws, "Pitching");
+    if (fld) fieldingSheet = parseSheet(fld.ws, "Fielding");
+
+    // If we found nothing by name, the file probably has a generic sheet
+    // (CSV exports → "Sheet1"; coach exports from another tool → arbitrary
+    // names). The caller needs to ask the coach which category this is.
+    if (!hit && !pit && !fld) {
+      needsCategoryOverride = true;
+      unrecognizedSheetName = wb.SheetNames[0];
+    } else {
+      // A typo'd sheet ("Hittiing") would silently fall out here. Surface
+      // dropped sheets so a coach hunting through devtools can spot it.
+      const matched = new Set([hit?.actualName, pit?.actualName, fld?.actualName].filter((n): n is string => !!n));
+      const dropped = wb.SheetNames.filter((n) => !matched.has(n));
+      if (dropped.length > 0) {
+        console.warn(`[csvParser] Ignored unrecognized sheets (no auto-detected category): ${dropped.join(", ")}. Rename to Hitting/Pitching/Fielding, or upload them separately and pick the category.`);
+      }
+    }
+  }
+
+  // Union of all player keys across whichever sheets were populated.
+  const allKeys = new Set<string>([
+    ...battingSheet.byKey.keys(),
+    ...pitchingSheet.byKey.keys(),
+    ...fieldingSheet.byKey.keys(),
+  ]);
 
   const players: ParsedPlayer[] = [];
   for (const key of allKeys) {
-    const meta = hit.byKey.get(key) ?? pit.byKey.get(key) ?? fld.byKey.get(key);
+    const meta = battingSheet.byKey.get(key) ?? pitchingSheet.byKey.get(key) ?? fieldingSheet.byKey.get(key);
     if (!meta) continue;
     players.push({
       number: meta.number,
       first: meta.first,
       last: meta.last,
       stats: {
-        batting: hit.byKey.get(key)?.stats ?? {},
-        pitching: pit.byKey.get(key)?.stats ?? {},
-        fielding: fld.byKey.get(key)?.stats ?? {},
+        batting: battingSheet.byKey.get(key)?.stats ?? {},
+        pitching: pitchingSheet.byKey.get(key)?.stats ?? {},
+        fielding: fieldingSheet.byKey.get(key)?.stats ?? {},
       },
     });
   }
@@ -148,14 +236,33 @@ export function parseStatsWorkbook(data: ArrayBuffer): ParsedWorkbook {
   // Stable sort by last name then first.
   players.sort((a, b) => (a.last + a.first).localeCompare(b.last + b.first));
 
-  const unknownHeaders = Array.from(new Set([...hit.unknown, ...pit.unknown, ...fld.unknown]));
+  const unknownHeaders = Array.from(
+    new Set([...battingSheet.unknown, ...pitchingSheet.unknown, ...fieldingSheet.unknown]),
+  );
+
+  const presentCategories: StatsCategory[] = [];
+  const missingCategories: StatsCategory[] = [];
+  (
+    [
+      ["batting", battingSheet],
+      ["pitching", pitchingSheet],
+      ["fielding", fieldingSheet],
+    ] as const
+  ).forEach(([cat, sheet]) => {
+    if (sheet.byKey.size > 0 || sheet.headers.length > 0) presentCategories.push(cat);
+    else missingCategories.push(cat);
+  });
 
   return {
-    battingHeaders: hit.headers,
-    pitchingHeaders: pit.headers,
-    fieldingHeaders: fld.headers,
+    battingHeaders: battingSheet.headers,
+    pitchingHeaders: pitchingSheet.headers,
+    fieldingHeaders: fieldingSheet.headers,
     players,
     unknownHeaders,
+    presentCategories,
+    missingCategories,
+    needsCategoryOverride,
+    unrecognizedSheetName,
   };
 }
 

@@ -18,10 +18,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import { parseStatsWorkbook, type ParsedPlayer } from "@/lib/csvParser";
+import { parseStatsWorkbook, type ParsedPlayer, type StatsCategory } from "@/lib/csvParser";
 import type { Json } from "@/integrations/supabase/types";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
+
+const CATEGORY_LABEL: Record<StatsCategory, string> = {
+  batting: "Hitting",
+  pitching: "Pitching",
+  fielding: "Fielding",
+};
 
 const supabase = createClient();
 
@@ -48,6 +54,10 @@ interface PendingOverwrite {
   existingCount: number;
 }
 
+interface PendingCategory {
+  sheetName: string;
+}
+
 export default function UploadStatsPage() {
   const { school } = useSchool();
   const { team } = useTeam();
@@ -56,6 +66,8 @@ export default function UploadStatsPage() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<PendingOverwrite | null>(null);
+  const [pendingCategory, setPendingCategory] = useState<PendingCategory | null>(null);
+  const [overrideChoice, setOverrideChoice] = useState<StatsCategory>("batting");
   const fileRef = useRef<HTMLInputElement>(null);
   // Mirrors `busy` for synchronous reads from Radix's onOpenChange, which fires
   // before React re-renders with the latest state.
@@ -90,12 +102,54 @@ export default function UploadStatsPage() {
     toast.success("Stats uploaded");
     setFile(null);
     setPendingOverwrite(null);
+    setPendingCategory(null);
     if (fileRef.current) fileRef.current.value = "";
+  };
+
+  // Shared parse-then-ingest core. Called from the initial submit and from the
+  // category-picker confirm (which re-parses with an override).
+  const runIngest = async (currentFile: File, categoryOverride?: StatsCategory) => {
+    const buf = await currentFile.arrayBuffer();
+    const parsed = parseStatsWorkbook(buf, { categoryOverride });
+
+    if (parsed.needsCategoryOverride) {
+      setPendingCategory({
+        sheetName: parsed.unrecognizedSheetName ?? "Sheet1",
+      });
+      return;
+    }
+
+    if (parsed.players.length === 0) throw new Error("No players found in file");
+
+    if (parsed.unknownHeaders.length > 0) {
+      toast.warning(
+        `Unrecognized stat columns ingested: ${parsed.unknownHeaders.slice(0, 6).join(", ")}${parsed.unknownHeaders.length > 6 ? "…" : ""}. Update the glossary if these are real stats.`,
+        { duration: 8000 },
+      );
+    }
+
+    if (parsed.missingCategories.length > 0) {
+      const present = parsed.presentCategories.map((c) => CATEGORY_LABEL[c]).join(" + ");
+      toast.info(`Partial upload: ${present} only.`, { duration: 6000 });
+    }
+
+    try {
+      const count = await ingestOnce({ players: parsed.players, filename: currentFile.name, uploadDate, replace: false });
+      finishSuccess(count, uploadDate);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith(OVERWRITE_PREFIX)) {
+        const existingCount = parseInt(msg.slice(OVERWRITE_PREFIX.length), 10) || 0;
+        setPendingOverwrite({ players: parsed.players, filename: currentFile.name, uploadDate, existingCount });
+        return;
+      }
+      throw e;
+    }
   };
 
   const handleSubmit = async () => {
     if (!file) {
-      toast.error("Choose an Excel file");
+      toast.error("Choose a file");
       return;
     }
     if (!uploadDate) {
@@ -105,28 +159,24 @@ export default function UploadStatsPage() {
     setBusyBoth(true);
     setResult(null);
     try {
-      const buf = await file.arrayBuffer();
-      const { players, unknownHeaders } = parseStatsWorkbook(buf);
-      if (players.length === 0) throw new Error("No players found in workbook");
-      if (unknownHeaders.length > 0) {
-        toast.warning(
-          `Unrecognized stat columns ingested: ${unknownHeaders.slice(0, 6).join(", ")}${unknownHeaders.length > 6 ? "…" : ""}. Update the glossary if these are real stats.`,
-          { duration: 8000 },
-        );
-      }
+      await runIngest(file);
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : "Upload failed";
+      const msg = friendlyError(raw);
+      setResult({ ok: false, msg });
+      toast.error(msg);
+    } finally {
+      setBusyBoth(false);
+    }
+  };
 
-      try {
-        const count = await ingestOnce({ players, filename: file.name, uploadDate, replace: false });
-        finishSuccess(count, uploadDate);
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg.startsWith(OVERWRITE_PREFIX)) {
-          const existingCount = parseInt(msg.slice(OVERWRITE_PREFIX.length), 10) || 0;
-          setPendingOverwrite({ players, filename: file.name, uploadDate, existingCount });
-          return;
-        }
-        throw e;
-      }
+  const handleConfirmCategory = async () => {
+    if (!pendingCategory || !file) return;
+    setBusyBoth(true);
+    setResult(null);
+    setPendingCategory(null);
+    try {
+      await runIngest(file, overrideChoice);
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : "Upload failed";
       const msg = friendlyError(raw);
@@ -156,14 +206,28 @@ export default function UploadStatsPage() {
   };
 
   const dialogOpen = pendingOverwrite !== null;
-  const submitDisabled = busy || !file || dialogOpen;
+  const categoryDialogOpen = pendingCategory !== null;
+  const submitDisabled = busy || !file || dialogOpen || categoryDialogOpen;
+
+  // Derive the categories present in this pending upload from the first
+  // player's stats shape. The RPC overwrites stats wholesale (stats =
+  // EXCLUDED.stats), so any empty section in the incoming file will wipe
+  // whatever exists on the snapshot — warn the coach before they confirm.
+  const overwriteMissing: StatsCategory[] = pendingOverwrite
+    ? (["batting", "pitching", "fielding"] as const).filter(
+        (c) => Object.keys(pendingOverwrite.players[0]?.stats[c] ?? {}).length === 0,
+      )
+    : [];
+  const overwritePresent: StatsCategory[] = pendingOverwrite
+    ? (["batting", "pitching", "fielding"] as const).filter((c) => !overwriteMissing.includes(c))
+    : [];
 
   return (
     <div className="container mx-auto px-6 py-10 max-w-3xl">
       <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Coach Tools</p>
       <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep mb-2">Upload Weekly Stats</h2>
       <p className="text-sm text-muted-foreground mb-8">
-        Upload the team's cumulative season-to-date Excel workbook (.xlsx). Each upload is saved as a snapshot so trends build week over week.
+        Upload the team's cumulative season-to-date stats — a full 3-sheet workbook, a single-category file (Hitting only, Pitching only, Fielding only), or a CSV. Each upload is saved as a snapshot so trends build week over week.
       </p>
 
       <Card className="p-8 shadow-elevated">
@@ -174,14 +238,14 @@ export default function UploadStatsPage() {
           </div>
 
           <div>
-            <Label htmlFor="csv-file" className="mb-1.5 block">Excel file (.xlsx)</Label>
+            <Label htmlFor="csv-file" className="mb-1.5 block">File (.csv or .xlsx)</Label>
             <div className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-sa-orange transition-colors bg-muted/20">
               <UploadIcon className="w-8 h-8 mx-auto mb-2 text-sa-blue" />
               <Input
                 ref={fileRef}
                 id="csv-file"
                 type="file"
-                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                 className="max-w-sm mx-auto"
               />
@@ -221,7 +285,8 @@ export default function UploadStatsPage() {
       <Card className="p-6 mt-6 bg-sa-grey-soft/40 border-dashed">
         <h3 className="font-display text-xl text-sa-blue-deep mb-2">Expected format</h3>
         <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-          <li>Three sheets named <strong>Hitting</strong>, <strong>Pitching</strong>, and <strong>Fielding</strong></li>
+          <li>Excel workbook with any of: sheets named <strong>Hitting</strong>, <strong>Pitching</strong>, <strong>Fielding</strong> — each independently optional</li>
+          <li>Or a single CSV / single-sheet Excel — you'll be asked which category it is</li>
           <li>Each sheet starts with a header row containing <code>Number, Last, First, …stat columns</code></li>
           <li>Player rows follow; <strong>Totals</strong> and <strong>Glossary</strong> rows are auto-skipped</li>
           <li>Players are matched by first + last name across weekly uploads</li>
@@ -243,10 +308,60 @@ export default function UploadStatsPage() {
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {pendingOverwrite && overwriteMissing.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+              <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+              <p>
+                <strong>Heads up:</strong> this file only contains{" "}
+                {overwritePresent.map((c) => CATEGORY_LABEL[c]).join(" + ")}.{" "}
+                {overwriteMissing.map((c) => CATEGORY_LABEL[c]).join(" and ")} data on the existing snapshot will be cleared.
+              </p>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleConfirmOverwrite} disabled={busy}>
               {busy ? "Replacing…" : "Replace"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={categoryDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !busyRef.current) setPendingCategory(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Which category is this?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingCategory
+                ? `We couldn't auto-detect from the sheet name "${pendingCategory.sheetName}". Pick the category the columns represent — the other categories will be left untouched on existing snapshots.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid grid-cols-3 gap-2 my-4">
+            {(["batting", "pitching", "fielding"] as const).map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setOverrideChoice(cat)}
+                className={`px-4 py-3 rounded-md border-2 text-sm font-semibold uppercase tracking-wider transition-colors ${
+                  overrideChoice === cat
+                    ? "border-sa-orange bg-sa-orange/10 text-sa-orange"
+                    : "border-border bg-background hover:border-sa-orange/40 text-muted-foreground"
+                }`}
+              >
+                {CATEGORY_LABEL[cat]}
+              </button>
+            ))}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmCategory} disabled={busy}>
+              {busy ? "Importing…" : `Import as ${CATEGORY_LABEL[overrideChoice]}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

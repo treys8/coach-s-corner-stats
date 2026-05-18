@@ -103,12 +103,65 @@ describe("parseStatsWorkbook", () => {
     expect(players).toHaveLength(1);
   });
 
-  it("throws when a required sheet is missing", () => {
+  it("accepts a single-sheet (hitting-only) workbook", () => {
     const buf = makeWorkbook({
       Hitting: [HITTING_HEADERS, ["10", "Smith", "John", 0.300, 3, 1]],
       // No Pitching, no Fielding
     });
-    expect(() => parseStatsWorkbook(buf)).toThrow(/Pitching/);
+    const parsed = parseStatsWorkbook(buf);
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.batting.AVG).toBe(0.300);
+    expect(parsed.players[0].stats.pitching).toEqual({});
+    expect(parsed.players[0].stats.fielding).toEqual({});
+    expect(parsed.presentCategories).toEqual(["batting"]);
+    expect(parsed.missingCategories).toEqual(["pitching", "fielding"]);
+    expect(parsed.needsCategoryOverride).toBe(false);
+  });
+
+  it("accepts a pitching-only workbook", () => {
+    const buf = makeWorkbook({
+      Pitching: [PITCHING_HEADERS, ["10", "Smith", "John", 2.50, 8, 4.0]],
+    });
+    const parsed = parseStatsWorkbook(buf);
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.pitching.ERA).toBe(2.50);
+    expect(parsed.presentCategories).toEqual(["pitching"]);
+    expect(parsed.missingCategories).toEqual(["batting", "fielding"]);
+  });
+
+  it("flags single sheet with unrecognized name as needsCategoryOverride", () => {
+    const buf = makeWorkbook({
+      Sheet1: [HITTING_HEADERS, ["10", "Smith", "John", 0.300, 3, 1]],
+    });
+    const parsed = parseStatsWorkbook(buf);
+    expect(parsed.needsCategoryOverride).toBe(true);
+    expect(parsed.unrecognizedSheetName).toBe("Sheet1");
+    expect(parsed.players).toHaveLength(0);
+  });
+
+  it("routes columns into the chosen category when categoryOverride is given", () => {
+    const buf = makeWorkbook({
+      Sheet1: [HITTING_HEADERS, ["10", "Smith", "John", 0.300, 3, 1]],
+    });
+    const parsed = parseStatsWorkbook(buf, { categoryOverride: "batting" });
+    expect(parsed.needsCategoryOverride).toBe(false);
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.batting.AVG).toBe(0.300);
+    expect(parsed.players[0].stats.pitching).toEqual({});
+  });
+
+  it("categoryOverride into pitching routes the first sheet there", () => {
+    const buf = makeWorkbook({
+      WhateverName: [
+        ["Number", "Last", "First", "ERA", "IP", "SO"],
+        ["10", "Smith", "John", 2.50, 4.0, 8],
+      ],
+    });
+    const parsed = parseStatsWorkbook(buf, { categoryOverride: "pitching" });
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.pitching.ERA).toBe(2.50);
+    expect(parsed.players[0].stats.batting).toEqual({});
+    expect(parsed.players[0].stats.fielding).toEqual({});
   });
 
   it("flags unrecognized headers via unknownHeaders without dropping data", () => {

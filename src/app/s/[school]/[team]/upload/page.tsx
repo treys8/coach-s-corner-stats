@@ -22,9 +22,9 @@ export default function UploadHubPage() {
     {
       href: `${base}/stats`,
       label: "Stats Workbook",
-      blurb: "Cumulative season-to-date workbook (Hitting, Pitching, Fielding).",
+      blurb: "Cumulative season-to-date stats. Full 3-sheet workbook or a single category (Hitting only, Pitching only, Fielding only).",
       icon: BarChart3,
-      accept: "Excel (.xlsx)",
+      accept: "CSV or Excel",
     },
     {
       href: `${base}/schedule`,
