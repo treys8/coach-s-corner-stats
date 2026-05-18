@@ -15,6 +15,7 @@ import { useTeam } from "@/lib/contexts/team";
 interface RosterRow {
   player_id: string;
   jersey_number: string | null;
+  position: string | null;
   first_name: string;
   last_name: string;
   season_year: number;
@@ -36,7 +37,7 @@ export default function RosterPage() {
       const [{ data: entries, error: rErr }, { data: uploads, error: uErr }] = await Promise.all([
         supabase
           .from("roster_entries")
-          .select("player_id, jersey_number, season_year, players(first_name, last_name)")
+          .select("player_id, jersey_number, position, season_year, players(first_name, last_name)")
           .eq("team_id", team.id),
         supabase
           .from("csv_uploads")
@@ -49,6 +50,7 @@ export default function RosterPage() {
       const rows: RosterRow[] = ((entries ?? []) as unknown as Array<{
         player_id: string;
         jersey_number: string | null;
+        position: string | null;
         season_year: number;
         players: { first_name: string; last_name: string } | null;
       }>)
@@ -56,6 +58,7 @@ export default function RosterPage() {
         .map((e) => ({
           player_id: e.player_id,
           jersey_number: e.jersey_number,
+          position: e.position,
           season_year: e.season_year,
           first_name: e.players!.first_name,
           last_name: e.players!.last_name,
@@ -166,28 +169,47 @@ export default function RosterPage() {
         </Card>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {players.map((p) => (
-            <Link
-              key={p.player_id}
-              href={`/s/${school.slug}/${team.slug}/player/${p.player_id}`}
-              className="group relative bg-card border border-border rounded-lg overflow-hidden shadow-card hover:shadow-elevated hover:-translate-y-0.5 transition-all"
-            >
-              <div className="bg-gradient-blue h-2" />
-              <div className="p-5 flex items-center gap-4">
-                <div className="font-display text-5xl text-sa-orange leading-none w-16 text-center font-mono-stat">
-                  {p.jersey_number || "—"}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs uppercase tracking-wider text-muted-foreground">
-                    {p.first_name}
-                  </p>
-                  <p className="font-display text-2xl text-sa-blue-deep truncate group-hover:text-sa-orange transition-colors">
-                    {p.last_name}
-                  </p>
-                </div>
+          {players.map((p) => {
+            // A roster row with no jersey AND no position is the fingerprint
+            // of an auto-create from ingest_stats_workbook (the roster upload
+            // RPC always sets at least one when the columns exist). Flag it so
+            // the coach knows the entry is incomplete and offer a one-tap path
+            // back to the roster upload page — there's no inline jersey edit
+            // today, and the roster upload is the only way to backfill.
+            const addedViaStats = p.jersey_number === null && p.position === null;
+            return (
+              <div key={p.player_id} className="relative">
+                <Link
+                  href={`/s/${school.slug}/${team.slug}/player/${p.player_id}`}
+                  className="group block bg-card border border-border rounded-lg overflow-hidden shadow-card hover:shadow-elevated hover:-translate-y-0.5 transition-all"
+                >
+                  <div className="bg-gradient-blue h-2" />
+                  <div className="p-5 flex items-center gap-4">
+                    <div className="font-display text-5xl text-sa-orange leading-none w-16 text-center font-mono-stat">
+                      {p.jersey_number || "—"}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                        {p.first_name}
+                      </p>
+                      <p className="font-display text-2xl text-sa-blue-deep truncate group-hover:text-sa-orange transition-colors">
+                        {p.last_name}
+                      </p>
+                    </div>
+                  </div>
+                </Link>
+                {addedViaStats && !closed && (
+                  <Link
+                    href={`/s/${school.slug}/${team.slug}/upload/roster`}
+                    title="Jersey + position weren't set when this player was added via a stats upload. Upload a roster file to fill them in."
+                    className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full bg-sa-orange/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sa-orange border border-sa-orange/30 hover:bg-sa-orange/20 transition-colors"
+                  >
+                    Set jersey?
+                  </Link>
+                )}
               </div>
-            </Link>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
