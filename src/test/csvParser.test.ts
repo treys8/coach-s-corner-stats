@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as XLSX from "xlsx";
-import { parseStatsWorkbook, formatStat } from "@/lib/csvParser";
+import { parseStatsWorkbook, formatStat, normalizePlayerName } from "@/lib/csvParser";
 
 type Cell = string | number;
 
@@ -199,6 +199,65 @@ describe("parseStatsWorkbook", () => {
     expect(players[0].stats.batting.AVG).toBe("-");
     expect(players[0].stats.batting.H).toBe("-");
     expect(players[0].stats.batting.HR).toBe(1);
+  });
+});
+
+describe("normalizePlayerName", () => {
+  it("lowercases", () => {
+    expect(normalizePlayerName("Smith")).toBe("smith");
+    expect(normalizePlayerName("MCDONALD")).toBe("mcdonald");
+  });
+
+  it("trims leading/trailing whitespace", () => {
+    expect(normalizePlayerName("  Smith  ")).toBe("smith");
+    expect(normalizePlayerName("\tSmith\n")).toBe("smith");
+  });
+
+  it("collapses internal whitespace to single space", () => {
+    expect(normalizePlayerName("Van  Der  Berg")).toBe("van der berg");
+    expect(normalizePlayerName("Van\tDer\nBerg")).toBe("van der berg");
+  });
+
+  it("strips trailing periods and commas (Bobby Jr. case)", () => {
+    expect(normalizePlayerName("Smith.")).toBe("smith");
+    expect(normalizePlayerName("Smith,")).toBe("smith");
+    expect(normalizePlayerName("Bobby Jr.")).toBe("bobby jr");
+  });
+
+  it("strips straight and curly apostrophes / quote marks", () => {
+    expect(normalizePlayerName("O'Brien")).toBe("obrien");
+    expect(normalizePlayerName("O’Brien")).toBe("obrien"); // curly '
+    expect(normalizePlayerName(`"Smith"`)).toBe("smith");
+  });
+
+  it("applies NFKC normalization (fullwidth + ligatures)", () => {
+    // U+FF2A J / U+FF41 a / U+FF4E n / U+FF45 e  → "Jane" → "jane"
+    expect(normalizePlayerName("Ｊａｎｅ")).toBe("jane");
+    // ﬀ ligature (U+FB00) → "ff"
+    expect(normalizePlayerName("Cliﬀ")).toBe("cliff");
+  });
+
+  it("variants normalize to the same key (so parser dedupes)", () => {
+    const variants = ["Smith", " smith ", "SMITH", "Smith.", "Smith’"];
+    const keys = new Set(variants.map(normalizePlayerName));
+    expect(keys.size).toBe(1);
+  });
+});
+
+describe("parseStatsWorkbook name normalization", () => {
+  it("dedupes within a workbook when names differ only by whitespace/case/punctuation", () => {
+    const buf = makeWorkbook({
+      Hitting: [
+        HITTING_HEADERS,
+        ["10", "Smith", "John", 0.300, 3, 1],
+        // Same player, different surface form → should fold into one row.
+        ["10", "Smith.", "JOHN ", 0.275, 2, 0],
+      ],
+      Pitching: [PITCHING_HEADERS],
+      Fielding: [FIELDING_HEADERS],
+    });
+    const { players } = parseStatsWorkbook(buf);
+    expect(players).toHaveLength(1);
   });
 });
 

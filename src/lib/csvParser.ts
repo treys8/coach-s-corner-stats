@@ -19,6 +19,27 @@ import { GLOSSARY } from "@/lib/glossary";
 
 const KNOWN_HEADERS = new Set(Object.keys(GLOSSARY));
 
+/**
+ * Mirror of the Postgres `normalize_player_name()` SQL function (see
+ * migration 20260518120000_normalize_player_name.sql). MUST stay in sync so
+ * the in-parser dedup key collapses identically to the DB identity key — the
+ * server stitches stat rows onto the player it resolves via the same
+ * normalization. Steps:
+ *   1. NFKC unicode fold ("Ｊａｎｅ" → "Jane", "ﬁ" → "fi")
+ *   2. lowercase
+ *   3. strip straight/curly apostrophes + quote marks
+ *   4. collapse runs of whitespace to a single space
+ *   5. trim leading/trailing whitespace and trailing "." / ","
+ */
+export function normalizePlayerName(name: string): string {
+  return name
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[''"`’ʼ‘”“]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s.,]+|[\s.,]+$/g, "");
+}
+
 export type StatsCategory = "batting" | "pitching" | "fielding";
 
 const SHEET_NAME_FOR: Record<StatsCategory, string> = {
@@ -146,7 +167,9 @@ const parseSheet = (
       if (!key) continue;
       stats[key] = parseCell(row[i]);
     }
-    byKey.set(`${first}|${last}`, { number, first, last, stats });
+    // Use the normalized key so "Smith" / "smith " / "Smith." dedupe within
+    // a single workbook the same way the DB will dedupe across uploads.
+    byKey.set(`${normalizePlayerName(first)}|${normalizePlayerName(last)}`, { number, first, last, stats });
   }
   return { headers, unknown, byKey };
 };
