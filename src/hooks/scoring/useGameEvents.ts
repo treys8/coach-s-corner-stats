@@ -6,8 +6,14 @@ import { createClient } from "@/lib/supabase/client";
 import { timeSync, recordPerf } from "@/lib/perf/client";
 import { applyEvent, replay } from "@/lib/scoring/replay";
 import { INITIAL_STATE } from "@/lib/scoring/types";
-import type { PostResult } from "@/lib/scoring/events-client";
-import type { GameEventRecord, ReplayState } from "@/lib/scoring/types";
+import {
+  registerDrainRefresher,
+  type PostResult,
+} from "@/lib/scoring/events-client";
+import { drainGame } from "@/lib/outbox/drain";
+import { listByGame } from "@/lib/outbox/store";
+import type { GameEventPayload, GameEventRecord, ReplayState } from "@/lib/scoring/types";
+import type { GameEventType } from "@/integrations/supabase/types";
 
 const supabase = createClient();
 
@@ -41,6 +47,68 @@ export interface UseGameEventsResult {
   rollbackOptimistic: () => void;
 }
 
+/** Build a synthetic GameEventRecord from a queued outbox row. Used by cold-
+ *  start rehydration / refresh so a reload-while-offline picks up the
+ *  optimistic state the user was scoring against. Synthetic records are
+ *  applied through the engine but never persisted to the local `events`
+ *  array — keeps undo / edit-last-play keyed on real server ids. */
+function rehydrationRecord(
+  game_id: string,
+  client_event_id: string,
+  event_type: GameEventType,
+  payload: unknown,
+  sequence_number: number,
+  queued_at: number,
+): GameEventRecord {
+  return {
+    id: `pending-${client_event_id}`,
+    game_id,
+    client_event_id,
+    sequence_number,
+    event_type,
+    payload: payload as GameEventPayload,
+    supersedes_event_id: null,
+    created_at: new Date(queued_at).toISOString(),
+  };
+}
+
+/** Fold queued outbox entries into a base state so the local view reflects
+ *  what the user has tapped but the server hasn't yet acked. Returns the
+ *  folded state and the bumped lastSeq (so subsequent local nextSeq
+ *  derivations don't collide with already-queued client_event_ids). */
+function foldQueued(
+  game_id: string,
+  base: ReplayState,
+  baseLastSeq: number,
+  queued: Array<{
+    client_event_id: string;
+    event_type: GameEventType;
+    payload: unknown;
+    queued_at: number;
+  }>,
+): { state: ReplayState; lastSeq: number } {
+  let nextState = base;
+  let nextLastSeq = baseLastSeq;
+  for (const q of queued) {
+    nextLastSeq += 1;
+    const synth = rehydrationRecord(
+      game_id,
+      q.client_event_id,
+      q.event_type,
+      q.payload,
+      nextLastSeq,
+      q.queued_at,
+    );
+    try {
+      nextState = applyEvent(nextState, synth);
+    } catch {
+      // A malformed queued payload shouldn't crash cold start / refresh.
+      // The entry stays in the outbox and surfaces via the failed sheet.
+    }
+  }
+  return { state: nextState, lastSeq: nextLastSeq };
+}
+
 /**
  * Owns the event log + replay state for a game. Action hooks call
  * `applyPostResult` after a successful POST to fold server-derived events
@@ -53,10 +121,11 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  // Pre-optimistic snapshot kept in a ref so the rollback path doesn't race
-  // with React render scheduling. Cleared on commit (applyPostResult) or
-  // rollback. `submitting` blocks concurrent taps so depth is always 0 or 1.
-  const preOptimisticRef = useRef<ReplayState | null>(null);
+  // Pre-optimistic snapshot (state + lastSeq) kept in a ref so the rollback
+  // path doesn't race with React render scheduling. Cleared on commit
+  // (applyPostResult) or rollback. `submitting` blocks concurrent taps so
+  // depth is always 0 or 1.
+  const preOptimisticRef = useRef<{ state: ReplayState; lastSeq: number } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -76,11 +145,28 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
       }
       const loaded = (data ?? []) as unknown as GameEventRecord[];
       const replayStart = performance.now();
-      const initial = replay(loaded);
+      const baseState = replay(loaded);
+      const baseLastSeq = loaded.reduce((m, e) => Math.max(m, e.sequence_number), 0);
+
+      // Phase 5: rehydrate any queued outbox entries on top of the server
+      // state so a reload-while-offline picks up where the user left off.
+      // We fold queued payloads into state and bump lastSeq, but DO NOT
+      // add the synthetic records to the events array — undo / edit-last-
+      // play key off real server event ids, and the fake `pending-…` id
+      // would fail the server's UUID validation on superseded_event_id.
+      let queued: Awaited<ReturnType<typeof listByGame>> = [];
+      try {
+        queued = await listByGame(gameId);
+      } catch {
+        queued = [];
+      }
+      const folded = foldQueued(gameId, baseState, baseLastSeq, queued);
+
       const replayMs = performance.now() - replayStart;
-      setState(initial);
+      if (!active) return;
+      setState(folded.state);
       setEvents(loaded);
-      setLastSeq(loaded.reduce((m, e) => Math.max(m, e.sequence_number), 0));
+      setLastSeq(folded.lastSeq);
       setLoading(false);
       recordPerf({
         label: "coldStart",
@@ -93,20 +179,62 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     return () => { active = false; };
   }, [gameId]);
 
+  // eventsRef tracks the latest events array so the offline-refresh fallback
+  // can replay against it without taking `events` as a useCallback dep
+  // (which would churn the registerRefresher useEffect on every change).
+  const eventsRef = useRef<GameEventRecord[]>([]);
+  useEffect(() => { eventsRef.current = events; }, [events]);
+
   const refresh = useCallback(async () => {
     const { data, error } = await supabase
       .from("game_events")
       .select("*")
       .eq("game_id", gameId)
       .order("sequence_number", { ascending: true });
-    if (error) return null;
-    const refreshed = (data ?? []) as unknown as GameEventRecord[];
-    const newState = replay(refreshed);
-    setState(newState);
-    setEvents(refreshed);
-    setLastSeq(refreshed.reduce((m, e) => Math.max(m, e.sequence_number), 0));
-    return { state: newState, events: refreshed };
+    // Offline / supabase failure: fall back to the cached events array so
+    // a discard-while-offline still re-folds the (now smaller) queue and
+    // drops the discarded entry's optimistic effect from local state.
+    const refreshed = error
+      ? eventsRef.current
+      : (data ?? []) as unknown as GameEventRecord[];
+    const baseState = replay(refreshed);
+    const baseLastSeq = refreshed.reduce((m, e) => Math.max(m, e.sequence_number), 0);
+    // After a partial drain some entries may still be in the outbox (failed
+    // 4xx awaiting resolution, or transient err post-drain-stop). Re-fold
+    // them so lastSeq stays ahead of the highest still-queued client id.
+    const stillQueued = await listByGame(gameId).catch(() => []);
+    const folded = foldQueued(gameId, baseState, baseLastSeq, stillQueued);
+    setState(folded.state);
+    if (!error) setEvents(refreshed);
+    setLastSeq(folded.lastSeq);
+    return { state: folded.state, events: refreshed };
   }, [gameId]);
+
+  // Phase 5: register `refresh` as the drain post-success callback so a
+  // successful drain pass pulls canonical state. Listen for connectivity /
+  // visibility transitions to kick a drain. No interval polling.
+  useEffect(() => {
+    const unregister = registerDrainRefresher(gameId, refresh);
+    const drain = () => {
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      void drainGame(gameId, async () => { await refresh(); });
+    };
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        drain();
+      }
+    };
+    window.addEventListener("online", drain);
+    document.addEventListener("visibilitychange", onVisibility);
+    // Kick once on mount in case the cold-start rehydration found queued
+    // entries and we're already online.
+    drain();
+    return () => {
+      window.removeEventListener("online", drain);
+      document.removeEventListener("visibilitychange", onVisibility);
+      unregister();
+    };
+  }, [gameId, refresh]);
 
   // `from` overrides the closure-captured events/lastSeq so chained applies
   // in the same handler don't clobber each other (submitPitchingChange).
@@ -134,21 +262,28 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   };
 
   const applyOptimistic = (synth: GameEventRecord) => {
-    setState((prev) => {
-      preOptimisticRef.current = prev;
-      return timeSync(
+    // Snapshot state + lastSeq for rollback. Phase 5: also bump lastSeq so
+    // consecutive offline submits get distinct nextSeq values even when no
+    // server ack ever arrives. The eventual `applyPostResult` (online path)
+    // overwrites lastSeq with the canonical max; the bump is only load-
+    // bearing on the queued path.
+    preOptimisticRef.current = { state, lastSeq };
+    setState((prev) =>
+      timeSync(
         "applyOptimistic",
         { event_type: synth.event_type, event_count: events.length },
         () => applyEvent(prev, synth),
-      );
-    });
+      ),
+    );
+    setLastSeq((prev) => Math.max(prev, synth.sequence_number));
   };
 
   const rollbackOptimistic = () => {
     const snap = preOptimisticRef.current;
     if (!snap) return;
     preOptimisticRef.current = null;
-    setState(snap);
+    setState(snap.state);
+    setLastSeq(snap.lastSeq);
   };
 
   return {

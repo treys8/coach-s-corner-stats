@@ -5,6 +5,7 @@ import { ChevronLeft, ClipboardList, MoreVertical, Undo2, User } from "lucide-re
 import { Button } from "@/components/ui/button";
 import type { ReplayState } from "@/lib/scoring/types";
 import { MiniBases } from "./MiniBases";
+import { OfflinePill } from "./OfflinePill";
 
 interface GameStatusBarProps {
   state: ReplayState;
@@ -32,6 +33,10 @@ interface GameStatusBarProps {
    *  this so the large count badge in the PitchRail is the only count
    *  display. Defaults to true for back-compat. */
   showCount?: boolean;
+  /** Phase 5: when present, renders the offline/sync pill next to the
+   *  manage button. Hidden when omitted so the legacy draft / final shells
+   *  don't grow a no-op control. */
+  gameId?: string;
 }
 
 export function GameStatusBar({
@@ -50,6 +55,7 @@ export function GameStatusBar({
   onOpenBatter,
   bleed = true,
   showCount = true,
+  gameId,
 }: GameStatusBarProps) {
   const halfLabel = state.half === "top" ? "Top" : "Bot";
   const batterLine = weAreBatting
@@ -133,6 +139,8 @@ export function GameStatusBar({
             <User className="h-5 w-5" />
           </Button>
         )}
+
+        {gameId && <OfflinePill gameId={gameId} />}
 
         <Button
           variant="ghost"

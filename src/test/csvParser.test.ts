@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as XLSX from "xlsx";
-import { parseStatsWorkbook, formatStat } from "@/lib/csvParser";
+import { parseStatsWorkbook, formatStat, normalizePlayerName } from "@/lib/csvParser";
 
 type Cell = string | number;
 
@@ -103,12 +103,65 @@ describe("parseStatsWorkbook", () => {
     expect(players).toHaveLength(1);
   });
 
-  it("throws when a required sheet is missing", () => {
+  it("accepts a single-sheet (hitting-only) workbook", () => {
     const buf = makeWorkbook({
       Hitting: [HITTING_HEADERS, ["10", "Smith", "John", 0.300, 3, 1]],
       // No Pitching, no Fielding
     });
-    expect(() => parseStatsWorkbook(buf)).toThrow(/Pitching/);
+    const parsed = parseStatsWorkbook(buf);
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.batting.AVG).toBe(0.300);
+    expect(parsed.players[0].stats.pitching).toEqual({});
+    expect(parsed.players[0].stats.fielding).toEqual({});
+    expect(parsed.presentCategories).toEqual(["batting"]);
+    expect(parsed.missingCategories).toEqual(["pitching", "fielding"]);
+    expect(parsed.needsCategoryOverride).toBe(false);
+  });
+
+  it("accepts a pitching-only workbook", () => {
+    const buf = makeWorkbook({
+      Pitching: [PITCHING_HEADERS, ["10", "Smith", "John", 2.50, 8, 4.0]],
+    });
+    const parsed = parseStatsWorkbook(buf);
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.pitching.ERA).toBe(2.50);
+    expect(parsed.presentCategories).toEqual(["pitching"]);
+    expect(parsed.missingCategories).toEqual(["batting", "fielding"]);
+  });
+
+  it("flags single sheet with unrecognized name as needsCategoryOverride", () => {
+    const buf = makeWorkbook({
+      Sheet1: [HITTING_HEADERS, ["10", "Smith", "John", 0.300, 3, 1]],
+    });
+    const parsed = parseStatsWorkbook(buf);
+    expect(parsed.needsCategoryOverride).toBe(true);
+    expect(parsed.unrecognizedSheetName).toBe("Sheet1");
+    expect(parsed.players).toHaveLength(0);
+  });
+
+  it("routes columns into the chosen category when categoryOverride is given", () => {
+    const buf = makeWorkbook({
+      Sheet1: [HITTING_HEADERS, ["10", "Smith", "John", 0.300, 3, 1]],
+    });
+    const parsed = parseStatsWorkbook(buf, { categoryOverride: "batting" });
+    expect(parsed.needsCategoryOverride).toBe(false);
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.batting.AVG).toBe(0.300);
+    expect(parsed.players[0].stats.pitching).toEqual({});
+  });
+
+  it("categoryOverride into pitching routes the first sheet there", () => {
+    const buf = makeWorkbook({
+      WhateverName: [
+        ["Number", "Last", "First", "ERA", "IP", "SO"],
+        ["10", "Smith", "John", 2.50, 4.0, 8],
+      ],
+    });
+    const parsed = parseStatsWorkbook(buf, { categoryOverride: "pitching" });
+    expect(parsed.players).toHaveLength(1);
+    expect(parsed.players[0].stats.pitching.ERA).toBe(2.50);
+    expect(parsed.players[0].stats.batting).toEqual({});
+    expect(parsed.players[0].stats.fielding).toEqual({});
   });
 
   it("flags unrecognized headers via unknownHeaders without dropping data", () => {
@@ -146,6 +199,65 @@ describe("parseStatsWorkbook", () => {
     expect(players[0].stats.batting.AVG).toBe("-");
     expect(players[0].stats.batting.H).toBe("-");
     expect(players[0].stats.batting.HR).toBe(1);
+  });
+});
+
+describe("normalizePlayerName", () => {
+  it("lowercases", () => {
+    expect(normalizePlayerName("Smith")).toBe("smith");
+    expect(normalizePlayerName("MCDONALD")).toBe("mcdonald");
+  });
+
+  it("trims leading/trailing whitespace", () => {
+    expect(normalizePlayerName("  Smith  ")).toBe("smith");
+    expect(normalizePlayerName("\tSmith\n")).toBe("smith");
+  });
+
+  it("collapses internal whitespace to single space", () => {
+    expect(normalizePlayerName("Van  Der  Berg")).toBe("van der berg");
+    expect(normalizePlayerName("Van\tDer\nBerg")).toBe("van der berg");
+  });
+
+  it("strips trailing periods and commas (Bobby Jr. case)", () => {
+    expect(normalizePlayerName("Smith.")).toBe("smith");
+    expect(normalizePlayerName("Smith,")).toBe("smith");
+    expect(normalizePlayerName("Bobby Jr.")).toBe("bobby jr");
+  });
+
+  it("strips straight and curly apostrophes / quote marks", () => {
+    expect(normalizePlayerName("O'Brien")).toBe("obrien");
+    expect(normalizePlayerName("O’Brien")).toBe("obrien"); // curly '
+    expect(normalizePlayerName(`"Smith"`)).toBe("smith");
+  });
+
+  it("applies NFKC normalization (fullwidth + ligatures)", () => {
+    // U+FF2A J / U+FF41 a / U+FF4E n / U+FF45 e  → "Jane" → "jane"
+    expect(normalizePlayerName("Ｊａｎｅ")).toBe("jane");
+    // ﬀ ligature (U+FB00) → "ff"
+    expect(normalizePlayerName("Cliﬀ")).toBe("cliff");
+  });
+
+  it("variants normalize to the same key (so parser dedupes)", () => {
+    const variants = ["Smith", " smith ", "SMITH", "Smith.", "Smith’"];
+    const keys = new Set(variants.map(normalizePlayerName));
+    expect(keys.size).toBe(1);
+  });
+});
+
+describe("parseStatsWorkbook name normalization", () => {
+  it("dedupes within a workbook when names differ only by whitespace/case/punctuation", () => {
+    const buf = makeWorkbook({
+      Hitting: [
+        HITTING_HEADERS,
+        ["10", "Smith", "John", 0.300, 3, 1],
+        // Same player, different surface form → should fold into one row.
+        ["10", "Smith.", "JOHN ", 0.275, 2, 0],
+      ],
+      Pitching: [PITCHING_HEADERS],
+      Fielding: [FIELDING_HEADERS],
+    });
+    const { players } = parseStatsWorkbook(buf);
+    expect(players).toHaveLength(1);
   });
 });
 

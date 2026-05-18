@@ -70,6 +70,21 @@ describe("parseRosterFile", () => {
     expect(r.players[0]).toMatchObject({ first: "Jane", last: "Smith" });
   });
 
+  it("dedupes normalize-equivalent names (whitespace, punctuation, curly quotes)", () => {
+    // These all normalize to the same key the upsert_roster RPC uses, so the
+    // parser MUST collapse them — otherwise the RPC's ON CONFLICT DO UPDATE
+    // would error with "cannot affect row a second time".
+    const r = parseRosterFile(
+      makeBook([
+        ["First", "Last"],
+        ["O'Brien", "Smith"],
+        ["O’Brien", "Smith."],
+        ["  o'brien  ", "SMITH"],
+      ]),
+    );
+    expect(r.players).toHaveLength(1);
+  });
+
   it("skips Totals and Glossary rows", () => {
     const r = parseRosterFile(
       makeBook([

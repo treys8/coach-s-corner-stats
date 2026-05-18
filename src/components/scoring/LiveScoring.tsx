@@ -159,6 +159,7 @@ export function LiveScoring({
         lastPlayText={state.last_play_text}
         backHref={backHref}
         bleed={false}
+        gameId={gameId}
       />
 
       {/* Row 2: diamond + (lg+ inline sidebar) */}

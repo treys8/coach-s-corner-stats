@@ -4,6 +4,7 @@
 // the first blank/non-name row. "Totals" rows are skipped.
 
 import * as XLSX from "xlsx";
+import { normalizePlayerName } from "@/lib/csvParser";
 
 export interface ParsedRosterPlayer {
   number: string;
@@ -109,7 +110,11 @@ export function parseRosterFile(data: ArrayBuffer): ParsedRoster {
     const position = map.position >= 0 ? (String(row[map.position] ?? "").trim() || null) : null;
     const grad_year = map.grad_year >= 0 ? parseGradYear(row[map.grad_year]) : null;
 
-    const key = `${first.toLowerCase()}|${last.toLowerCase()}`;
+    // Use the same normalization the upsert_roster RPC's unique key uses, so
+    // we don't ship two rows that the RPC would collapse — ON CONFLICT DO
+    // UPDATE would error with "cannot affect row a second time" if both rows
+    // hit the same player on insert.
+    const key = `${normalizePlayerName(first)}|${normalizePlayerName(last)}`;
     if (seen.has(key)) continue;
     seen.add(key);
 

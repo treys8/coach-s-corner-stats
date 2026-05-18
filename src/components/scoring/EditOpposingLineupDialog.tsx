@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+import { postEvent } from "@/lib/scoring/events-client";
 import { OpposingLineupPicker } from "@/components/score/OpposingLineupPicker";
 import {
   buildEmpty,
@@ -62,6 +63,11 @@ export function EditOpposingLineupDialog({
   const [draft, setDraft] = useState<OpposingSlotDraft[]>(() => seedDraft(currentLineup, opponentTeamId));
   const [opponentIsPublicRoster, setOpponentIsPublicRoster] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Stable per-open idempotency key so retries (offline outbox replay,
+  // double-clicks) collide on the server-side UNIQUE(game_id, client_event_id)
+  // instead of double-recording the lineup change. Reset every time the
+  // dialog opens so a subsequent edit is its own event.
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(() => randomKey());
 
   // DH usage is derived from the draft: a slot tagged "DH" means DH is
   // in play. The seeded draft already encodes the prior opponent_use_dh
@@ -73,6 +79,7 @@ export function EditOpposingLineupDialog({
   useEffect(() => {
     if (!open) return;
     setDraft(seedDraft(currentLineup, opponentTeamId));
+    setIdempotencyKey(randomKey());
   }, [open, currentLineup, opponentTeamId]);
 
   // Detect whether the opposing school has a public roster so Pull-from-Statly
@@ -164,20 +171,23 @@ export function EditOpposingLineupDialog({
       opponent_use_dh: useDh,
     };
 
-    const res = await fetch(`/api/games/${gameId}/events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_event_id: `opplineup-${Date.now()}`,
-        event_type: "opposing_lineup_edit",
-        payload,
-      }),
+    // Route through postEvent so an offline edit lands in the outbox
+    // instead of failing with a network toast. The server is idempotent
+    // on (game_id, client_event_id) — `idempotencyKey` is stable for the
+    // lifetime of this open, so an outbox replay can't double-record.
+    const result = await postEvent(gameId, {
+      client_event_id: `opplineup-${idempotencyKey}`,
+      event_type: "opposing_lineup_edit",
+      payload,
     });
-    if (!res.ok) {
+    if (result.kind === "error") {
       setSubmitting(false);
-      const detail = await res.json().catch(() => ({}));
-      const reason = detail.detail ?? detail.error ?? res.statusText;
-      toast.error(`Couldn't save opposing lineup: ${reason}`);
+      return;
+    }
+    if (result.kind === "queued") {
+      setSubmitting(false);
+      toast.success("Lineup change queued — will sync when online.");
+      onOpenChange(false);
       return;
     }
 
@@ -232,6 +242,16 @@ export function EditOpposingLineupDialog({
       </SheetContent>
     </Sheet>
   );
+}
+
+// Stable per-open idempotency key — uses crypto.randomUUID where available
+// (modern browsers in secure contexts), falls back to a Math.random
+// composite so dev / older environments still produce a non-colliding id.
+function randomKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function seedDraft(

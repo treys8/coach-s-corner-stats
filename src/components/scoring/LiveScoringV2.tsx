@@ -187,6 +187,7 @@ export function LiveScoringV2({
         backHref={backHref}
         bleed={false}
         showCount={false}
+        gameId={gameId}
       />
 
       <div
