@@ -40,6 +40,7 @@ import type {
   ReplayState,
 } from "./types";
 import type { GameEventType } from "@/integrations/supabase/types";
+import { isForbiddenError } from "@/lib/api/errors";
 
 // Accepts any of the project's Supabase clients (server/SSR/admin) without
 // pinning to a specific generic instantiation, which varies between
@@ -224,6 +225,101 @@ function syntheticRecord(e: IncomingEvent, seq: number, gameId: string): GameEve
   } as unknown as GameEventRecord;
 }
 
+// Build the JSONB payload write_derived_state consumes. The at_bats list is
+// keyed by the originating event's client_event_id (rather than event_id)
+// because state may have been computed pre-RPC with synthetic ids; the SQL
+// function resolves to real event_id via game_events. Each at_bat must
+// correspond to exactly one event in `events`.
+function buildDerivedPayload(
+  state: ReplayState,
+  events: GameEventRecord[],
+): Record<string, unknown> {
+  const idToClientId = new Map<string, string>(
+    events.map((e) => [e.id, e.client_event_id]),
+  );
+
+  // runner_first/second/third are FK'd to players(id), so only emit them when
+  // our team is batting. When the opposing team is batting, the player_ids on
+  // base are either opponent_players UUIDs or synthesized per-PA strings —
+  // both would break the FK / UUID column. inning_end clears bases, so the
+  // invariant "runners on base belong to the team batting this half" holds.
+  const weAreBatting =
+    state.we_are_home ? state.half === "bottom" : state.half === "top";
+
+  const live = {
+    inning: state.inning,
+    half: state.half,
+    outs: state.outs,
+    runner_first: weAreBatting ? state.bases.first?.player_id ?? null : null,
+    runner_second: weAreBatting ? state.bases.second?.player_id ?? null : null,
+    runner_third: weAreBatting ? state.bases.third?.player_id ?? null : null,
+    team_score: state.team_score,
+    opponent_score: state.opponent_score,
+    last_play_text: state.last_play_text,
+    last_event_at: state.last_event_at,
+  };
+
+  const at_bats = state.at_bats.map((ab) => {
+    let clientEventId: string | undefined;
+    if (ab.event_id.startsWith("synthetic-")) {
+      clientEventId = ab.event_id.slice("synthetic-".length);
+    } else {
+      clientEventId = idToClientId.get(ab.event_id);
+    }
+    if (!clientEventId) {
+      throw new Error(`buildDerivedPayload: cannot resolve client_event_id for at_bat event_id=${ab.event_id}`);
+    }
+    return {
+      client_event_id: clientEventId,
+      inning: ab.inning,
+      half: ab.half,
+      batting_order: ab.batting_order,
+      batter_id: ab.batter_id,
+      opponent_batter_id: ab.opponent_batter_id,
+      pitcher_id: ab.pitcher_id,
+      opponent_pitcher_id: ab.opponent_pitcher_id,
+      result: ab.result,
+      rbi: ab.rbi,
+      pitch_count: ab.pitch_count,
+      balls: ab.balls,
+      strikes: ab.strikes,
+      spray_x: ab.spray_x,
+      spray_y: ab.spray_y,
+      fielder_position: ab.fielder_position,
+      runs_scored_on_play: ab.runs_scored_on_play,
+      outs_recorded: ab.outs_recorded,
+      description: ab.description,
+    };
+  });
+
+  // Reflect the game lifecycle on `games.status` so the existing /scores
+  // query (and future LIVE-tile filter) sees the right state. When the
+  // game is finalized via tablet, also write the score and result back
+  // so /scores can read everything from the games table (it falls back
+  // to game_live_state only for in-progress tiles). Null while still draft.
+  let game_update:
+    | {
+        status: typeof state.status;
+        team_score?: number;
+        opponent_score?: number;
+        result?: "W" | "L" | "T";
+      }
+    | null = null;
+  if (state.status !== "draft") {
+    game_update = { status: state.status };
+    if (state.status === "final") {
+      game_update.team_score = state.team_score;
+      game_update.opponent_score = state.opponent_score;
+      game_update.result =
+        state.team_score > state.opponent_score ? "W"
+        : state.team_score < state.opponent_score ? "L"
+        : "T";
+    }
+  }
+
+  return { live, at_bats, game_update };
+}
+
 // ---- Public entry point ----------------------------------------------------
 
 /**
@@ -318,11 +414,10 @@ export async function applyEvent(
     perf.mark("rpc_apply");
 
     if (rpcRes.error) {
-      const code = (rpcRes.error as { code?: string }).code;
       const msg = rpcRes.error.message ?? "unknown";
       // SECURITY DEFINER RAISE with 42501 surfaces here on auth failure.
-      // The API route maps this to a 403.
-      if (code === "42501" || /forbidden|permission denied|row-level security/i.test(msg)) {
+      // The API route maps this to a 403 via apiErrorFromException.
+      if (isForbiddenError(rpcRes.error)) {
         throw new Error(`forbidden: ${msg}`);
       }
       throw new Error(`apply_game_events RPC failed: ${msg}`);
@@ -370,7 +465,12 @@ export async function applyEvent(
       : undefined;
 
     const chainTypes = chain.map((e) => e.event_type);
-    const state = await rederive(gameId, { chainTypes, state: projectedState });
+    const state = await rederive(gameId, {
+      chainTypes,
+      state: projectedState,
+      events: projectedState ? [...existing, ...events] : undefined,
+      userClient,
+    });
     perf.mark("rederive");
 
     perf.finish({
@@ -392,6 +492,26 @@ export async function applyEvent(
   }
 }
 
+/**
+ * The gate that decides whether rederive() touches stat_snapshots.
+ *
+ * Rebuild always when the game is currently final — every event in a final
+ * game must rebuild snapshots so corrections to a finalized game stay in
+ * sync. Also delete (but don't rebuild) when a correction or game_finalized
+ * appears in the chain on a non-final game, since either can un-finalize
+ * and we don't want stale tablet rows hanging around in that case.
+ */
+export function shouldTouchTabletSnapshots(
+  status: ReplayState["status"],
+  chainTypes: GameEventType[],
+): boolean {
+  return (
+    status === "final" ||
+    chainTypes.includes("correction") ||
+    chainTypes.includes("game_finalized")
+  );
+}
+
 interface RederiveOptions {
   /** Event types persisted in this request — used to decide whether to
    *  touch stat_snapshots when the game isn't final (un-finalize case). */
@@ -403,22 +523,35 @@ interface RederiveOptions {
    *  reflects every persisted event with correct event_ids; corrections
    *  and duplicate-replay retries must omit it and take the slow path. */
   state?: ReplayState;
+  /** Required when `state` is provided. The persisted events (existing +
+   *  this chain) used to build the state, needed to resolve each at_bat
+   *  row's originating client_event_id for the write_derived_state RPC. */
+  events?: GameEventRecord[];
+  /** Request-scoped supabase client used to call write_derived_state. The
+   *  RPC is SECURITY DEFINER and re-checks team membership via auth.uid(),
+   *  so a user-scoped client is required. */
+  userClient: AnyClient;
 }
 
 /**
  * Re-replay every event for a game and write the canonical at_bats +
- * game_live_state. Exposed so admin "rebuild derived state" tooling can
- * call it directly.
+ * game_live_state via the atomic write_derived_state RPC. Called from
+ * applyEvent on every tap.
  */
 export async function rederive(
   gameId: string,
-  opts: RederiveOptions = {},
+  opts: RederiveOptions,
 ): Promise<ReplayState> {
   const admin = adminClient();
 
   let state: ReplayState;
+  let events: GameEventRecord[];
   if (opts.state) {
+    if (!opts.events) {
+      throw new Error("rederive: events required when state is provided");
+    }
     state = opts.state;
+    events = opts.events;
   } else {
     const eventsRes = await admin
       .from("game_events")
@@ -429,106 +562,26 @@ export async function rederive(
     if (eventsRes.error) {
       throw new Error(`game_events fetch failed: ${eventsRes.error.message}`);
     }
-    const events = (eventsRes.data ?? []) as unknown as GameEventRecord[];
+    events = (eventsRes.data ?? []) as unknown as GameEventRecord[];
     state = replay(events);
   }
 
-  // Three independent writes target different tables with no inter-
-  // dependency, so we fire them concurrently. Saves ~2 round-trips of
-  // sequential await latency per applyEvent call. The Promise.all rejects
-  // on the first error, but every started write completes regardless;
-  // post-await error checks attribute the failure to the right table.
-  //
-  // runner_first/second/third are FK'd to players(id), so only emit them when
-  // our team is batting. When the opposing team is batting, the player_ids on
-  // base are either opponent_players UUIDs or synthesized per-PA strings —
-  // both would break the FK / UUID column. inning_end clears bases, so the
-  // invariant "runners on base belong to the team batting this half" holds.
-  const weAreBatting =
-    state.we_are_home ? state.half === "bottom" : state.half === "top";
+  // Build the derived payload and write all three tables in one Postgres
+  // transaction via write_derived_state. Before this RPC, the three writes
+  // fired concurrently via Promise.all and a CHECK/FK violation on one
+  // table could leave the public scoreboard inconsistent across the other
+  // two. Now: either all three commit or none do.
+  const derived = buildDerivedPayload(state, events);
 
-  // Build the at_bats row set (null when there are no at_bats yet — first
-  // pitch of the game, etc.).
-  const abRows = state.at_bats.length > 0
-    ? state.at_bats.map((ab) => ({
-        game_id: gameId,
-        event_id: ab.event_id,
-        inning: ab.inning,
-        half: ab.half,
-        batting_order: ab.batting_order,
-        batter_id: ab.batter_id,
-        opponent_batter_id: ab.opponent_batter_id,
-        pitcher_id: ab.pitcher_id,
-        opponent_pitcher_id: ab.opponent_pitcher_id,
-        result: ab.result,
-        rbi: ab.rbi,
-        pitch_count: ab.pitch_count,
-        balls: ab.balls,
-        strikes: ab.strikes,
-        spray_x: ab.spray_x,
-        spray_y: ab.spray_y,
-        fielder_position: ab.fielder_position,
-        runs_scored_on_play: ab.runs_scored_on_play,
-        outs_recorded: ab.outs_recorded,
-        description: ab.description,
-      }))
-    : null;
-
-  // Reflect the game lifecycle on `games.status` so the existing /scores
-  // query (and future LIVE-tile filter) sees the right state. When the
-  // game is finalized via tablet, also write the score and result back
-  // so /scores can read everything from the games table (it falls back
-  // to game_live_state only for in-progress tiles). Null while still draft.
-  let gameUpdate:
-    | {
-        status: typeof state.status;
-        team_score?: number;
-        opponent_score?: number;
-        result?: "W" | "L" | "T";
-      }
-    | null = null;
-  if (state.status !== "draft") {
-    gameUpdate = { status: state.status };
-    if (state.status === "final") {
-      gameUpdate.team_score = state.team_score;
-      gameUpdate.opponent_score = state.opponent_score;
-      gameUpdate.result =
-        state.team_score > state.opponent_score ? "W"
-        : state.team_score < state.opponent_score ? "L"
-        : "T";
+  const writeRes = await opts.userClient.rpc("write_derived_state", {
+    p_game_id: gameId,
+    p_derived: derived,
+  });
+  if (writeRes.error) {
+    if (isForbiddenError(writeRes.error)) {
+      throw new Error(`forbidden: ${writeRes.error.message ?? "unknown"}`);
     }
-  }
-
-  const [liveRes, abRes, statusRes] = await Promise.all([
-    admin.from("game_live_state").upsert({
-      game_id: gameId,
-      inning: state.inning,
-      half: state.half,
-      outs: state.outs,
-      runner_first: weAreBatting ? state.bases.first?.player_id ?? null : null,
-      runner_second: weAreBatting ? state.bases.second?.player_id ?? null : null,
-      runner_third: weAreBatting ? state.bases.third?.player_id ?? null : null,
-      team_score: state.team_score,
-      opponent_score: state.opponent_score,
-      last_play_text: state.last_play_text,
-      last_event_at: state.last_event_at,
-    }),
-    abRows
-      ? admin.from("at_bats").upsert(abRows, { onConflict: "event_id", ignoreDuplicates: true })
-      : Promise.resolve(null),
-    gameUpdate
-      ? admin.from("games").update(gameUpdate).eq("id", gameId)
-      : Promise.resolve(null),
-  ]);
-
-  if (liveRes.error) {
-    throw new Error(`game_live_state upsert failed: ${liveRes.error.message}`);
-  }
-  if (abRes && abRes.error) {
-    throw new Error(`at_bats upsert failed: ${abRes.error.message}`);
-  }
-  if (statusRes && statusRes.error) {
-    throw new Error(`games update failed: ${statusRes.error.message}`);
+    throw new Error(`write_derived_state failed: ${writeRes.error.message}`);
   }
 
   // Tablet stat rollup. Gated to final-status writes (and corrections /
@@ -536,10 +589,7 @@ export async function rederive(
   // in-progress pitches/ABs stop churning stat_snapshots — a hot-path win
   // since this table is large and the DELETE was running on every event.
   const chainTypes = opts.chainTypes ?? [];
-  const touchSnapshots =
-    state.status === "final" ||
-    chainTypes.includes("correction") ||
-    chainTypes.includes("game_finalized");
+  const touchSnapshots = shouldTouchTabletSnapshots(state.status, chainTypes);
 
   if (touchSnapshots) {
     const del = await admin

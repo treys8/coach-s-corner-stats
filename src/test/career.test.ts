@@ -77,6 +77,21 @@ describe("aggregateCareer", () => {
     const career = aggregateCareer([], "batting");
     expect(career).toEqual({});
   });
+
+  it("returns an empty object when snapshots have nothing for the section", () => {
+    // Pure pitcher: pitching snapshots exist but batting block is empty.
+    // The player page falls back to "No batting career data yet" only when
+    // the result has no keys, so an all-zero rate block would regress the UI.
+    const snapshots = [
+      snap("2026-04-01", {
+        batting: {},
+        pitching: { IP: 5.0, ER: 1, BB: 1, H: 3, SO: 7 },
+        fielding: {},
+      }),
+    ];
+    expect(aggregateCareer(snapshots, "batting")).toEqual({});
+    expect(aggregateCareer(snapshots, "fielding")).toEqual({});
+  });
 });
 
 describe("aggregateBySeason", () => {

@@ -9,6 +9,7 @@ import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { useSchool } from "@/lib/contexts/school";
+import { formatDatePart } from "@/lib/date-display";
 import { useTeam } from "@/lib/contexts/team";
 import { SprayField, type SprayMarker } from "@/components/spray/SprayField";
 import type { OpposingBatterProfile } from "@/lib/opponents/profile";
@@ -116,7 +117,7 @@ export default function OpponentPlayerPage({
               <ul className="space-y-1 text-sm">
                 {profile.games.map((g) => (
                   <li key={g.game_id} className="flex justify-between border-b border-border last:border-0 py-1.5">
-                    <span>{new Date(g.game_date + "T12:00:00").toLocaleDateString()}</span>
+                    <span>{formatDatePart(g.game_date, "short", school.timezone)}</span>
                     <Link
                       href={`/s/${school.slug}/${team.slug}/score/${g.game_id}`}
                       className="text-sa-orange hover:underline"

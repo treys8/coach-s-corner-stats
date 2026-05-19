@@ -14,6 +14,8 @@ import { formatStat } from "@/lib/csvParser";
 import { KEY_BATTING, KEY_PITCHING, KEY_FIELDING } from "@/lib/glossary";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
 import { aggregateBySeason, aggregateCareer } from "@/lib/career";
+import { seasonYearFor } from "@/lib/season";
+import { formatDatePart } from "@/lib/date-display";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
@@ -79,7 +81,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
         (snaps ?? []).map((s) => ({
           upload_date: s.upload_date as string,
           stats: parseSnapshotStats(s.stats),
-          season_year: (s.season_year as number | null) ?? new Date(s.upload_date as string).getFullYear(),
+          season_year: (s.season_year as number | null) ?? seasonYearFor(s.upload_date as string),
         })),
       );
       setSprayMarkers(
@@ -171,7 +173,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
     const data = snapshots.map((s) => {
       const block = sectionOf(s.stats, section);
       const row: Record<string, string | number> = {
-        date: new Date(s.upload_date).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+        date: formatDatePart(s.upload_date, "month-day", school.timezone),
       };
       keys.forEach((k) => {
         const v = block[k];
@@ -212,7 +214,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
           <h2 className="font-display text-6xl md:text-7xl">{player.first_name} {player.last_name}</h2>
           <p className="text-white/70 mt-2 text-sm">
             {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} · latest{" "}
-            {latestSnap ? new Date(latestSnap.upload_date).toLocaleDateString() : "—"}
+            {latestSnap ? formatDatePart(latestSnap.upload_date, "short", school.timezone) : "—"}
           </p>
         </div>
       </div>

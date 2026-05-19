@@ -13,6 +13,8 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
+import { localToday } from "@/lib/date-display";
+import { normalizeOpponentName } from "@/lib/opponents/normalize";
 
 interface OpponentGroup {
   /** Opaque key for routing — opponent_team_id if Statly-linked, otherwise
@@ -25,7 +27,6 @@ interface OpponentGroup {
 }
 
 const supabase = createClient();
-const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export default function OpponentsPage() {
   const { school } = useSchool();
@@ -59,9 +60,9 @@ export default function OpponentsPage() {
 
   const groups = useMemo<OpponentGroup[]>(() => {
     const byKey = new Map<string, OpponentGroup>();
-    const today = todayIso();
+    const today = localToday(school.timezone);
     for (const g of games) {
-      const key = g.opponent_team_id ?? `name:${g.opponent.trim().toLowerCase()}`;
+      const key = g.opponent_team_id ?? `name:${normalizeOpponentName(g.opponent)}`;
       const existing = byKey.get(key) ?? {
         routeKey: g.opponent_team_id ?? `name:${encodeURIComponent(g.opponent.trim())}`,
         display: g.opponent,

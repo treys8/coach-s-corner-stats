@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { currentSeasonYear } from "@/lib/season";
-import { formatGameTime } from "@/lib/date-display";
+import { formatDatePart, formatGameTime } from "@/lib/date-display";
 import type { GameStatus, GameLocation, Json } from "@/integrations/supabase/types";
 import type { GameStartedPayload, LineupSlot, OpposingLineupSlot } from "@/lib/scoring/types";
 import { LiveScoring } from "@/components/scoring/LiveScoring";
@@ -170,7 +170,7 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
 
   return (
     <main className="container mx-auto px-6 py-8 space-y-6">
-      <GameHeader game={game} backHref={base} />
+      <GameHeader game={game} backHref={base} timezone={school.timezone} />
       {game.status === "draft" && (
         <PreGameForm
           game={game}
@@ -188,7 +188,7 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
   );
 }
 
-function GameHeader({ game, backHref }: { game: GameRow; backHref: string }) {
+function GameHeader({ game, backHref, timezone }: { game: GameRow; backHref: string; timezone: string }) {
   return (
     <header className="flex items-start justify-between gap-4 flex-wrap">
       <div>
@@ -196,9 +196,7 @@ function GameHeader({ game, backHref }: { game: GameRow; backHref: string }) {
           ← Score picker
         </Link>
         <p className="text-sm text-muted-foreground mt-1">
-          {new Date(game.game_date + "T12:00:00").toLocaleDateString(undefined, {
-            weekday: "long", month: "short", day: "numeric",
-          })}
+          {formatDatePart(game.game_date, "long", timezone)}
           {game.game_time ? ` · ${formatGameTime(game.game_time)}` : ""}
         </p>
         <h2 className="font-display text-3xl text-sa-blue-deep">

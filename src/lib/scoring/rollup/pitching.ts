@@ -7,7 +7,14 @@
 // sourced from passed_ball or error_advance. WP, balk, and SB-home runs
 // stay earned (PDF §14, §23.5).
 
-import type { AtBatResult, DerivedAtBat, NonPaRunSource, ReplayState, RunnerAdvance } from "../types";
+import type { DerivedAtBat, NonPaRunSource, ReplayState, RunnerAdvance } from "../types";
+import { eraFromOuts, outsToIp, whipFromOuts } from "@/lib/stats/innings-pitched";
+import { safeDiv } from "@/lib/stats/derived";
+import {
+  HIT_RESULTS,
+  STRIKEOUT_RESULTS,
+  WALK_RESULTS,
+} from "../at-bat-classifications";
 
 export interface PitchingLine {
   BF: number;
@@ -31,10 +38,6 @@ export interface PitchingLine {
   SV: number;
 }
 
-const HIT_RESULTS: ReadonlySet<AtBatResult> = new Set(["1B", "2B", "3B", "HR"]);
-const WALK_RESULTS: ReadonlySet<AtBatResult> = new Set(["BB", "IBB"]);
-const STRIKEOUT_RESULTS: ReadonlySet<AtBatResult> = new Set(["K_swinging", "K_looking"]);
-
 // Non-PA event sources whose runs are EARNED (charged to pitcher's ER).
 // Per PDF §14 (WP=earned, PB=unearned), §17 (errors=unearned), §23.5
 // (balks=earned), §8 (SB-home=earned). advance_on_throw is a judgment-
@@ -53,12 +56,6 @@ function emptyPitching(): PitchingLine {
     pitches: 0, strikes_thrown: 0, balls_thrown: 0, strike_pct: 0,
     W: 0, L: 0, SV: 0,
   };
-}
-
-function outsToIP(outs: number): number {
-  // Baseball innings-pitched convention: integer + tenths-as-thirds.
-  // 7 outs => 2.1, 9 outs => 3.0, 10 outs => 3.1.
-  return Math.floor(outs / 3) + (outs % 3) / 10;
 }
 
 export function rollupPitching(
@@ -131,12 +128,10 @@ export function rollupPitching(
     }
   }
   for (const line of out.values()) {
-    line.IP = outsToIP(line.outs);
-    // ERA is per 9 innings; WHIP is walks+hits per inning.
-    const innings = line.outs / 3;
-    line.ERA = innings > 0 ? (line.ER * 9) / innings : 0;
-    line.WHIP = innings > 0 ? (line.BB + line.H) / innings : 0;
-    line.strike_pct = line.pitches > 0 ? line.strikes_thrown / line.pitches : 0;
+    line.IP = outsToIp(line.outs);
+    line.ERA = eraFromOuts(line.ER, line.outs);
+    line.WHIP = whipFromOuts(line.BB + line.H, line.outs);
+    line.strike_pct = safeDiv(line.strikes_thrown, line.pitches);
   }
   return out;
 }

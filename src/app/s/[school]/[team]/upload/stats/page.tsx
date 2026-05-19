@@ -19,6 +19,7 @@ import {
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle, Check } from "lucide-react";
 import { toast } from "sonner";
 import { parseStatsWorkbook, type ParsedPlayer, type StatsCategory } from "@/lib/csvParser";
+import { hashFileBuffer } from "@/lib/csv/hash";
 import { matchAgainstRoster, type MatchResult, type RosterPlayer } from "@/lib/players/matchRoster";
 import type { Json } from "@/integrations/supabase/types";
 import { useSchool } from "@/lib/contexts/school";
@@ -53,6 +54,7 @@ interface PendingOverwrite {
   filename: string;
   uploadDate: string;
   existingCount: number;
+  contentHash: string;
 }
 
 interface PendingCategory {
@@ -78,6 +80,7 @@ interface PendingReview {
   items: ReviewItem[];
   filename: string;
   uploadDate: string;
+  contentHash: string;
 }
 
 export default function UploadStatsPage() {
@@ -105,6 +108,7 @@ export default function UploadStatsPage() {
     filename: string;
     uploadDate: string;
     replace: boolean;
+    contentHash: string;
   }): Promise<number> => {
     const payload = params.players.map((p) => ({ first: p.first, last: p.last, stats: p.stats }));
     const { data, error } = await supabase.rpc("ingest_stats_workbook", {
@@ -114,6 +118,7 @@ export default function UploadStatsPage() {
       p_filename: params.filename,
       p_players: payload as unknown as Json,
       p_replace: params.replace,
+      p_content_hash: params.contentHash,
     });
     if (error) throw error;
     const rows = data ?? [];
@@ -135,15 +140,20 @@ export default function UploadStatsPage() {
   // can pass the date that was current when the review was generated, not
   // whatever the picker shows now (the user might have nudged it while the
   // review dialog was open).
-  const proceedToIngest = async (players: ParsedPlayer[], filename: string, snapshotDate: string) => {
+  const proceedToIngest = async (
+    players: ParsedPlayer[],
+    filename: string,
+    snapshotDate: string,
+    contentHash: string,
+  ) => {
     try {
-      const count = await ingestOnce({ players, filename, uploadDate: snapshotDate, replace: false });
+      const count = await ingestOnce({ players, filename, uploadDate: snapshotDate, replace: false, contentHash });
       finishSuccess(count, snapshotDate);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.startsWith(OVERWRITE_PREFIX)) {
         const existingCount = parseInt(msg.slice(OVERWRITE_PREFIX.length), 10) || 0;
-        setPendingOverwrite({ players, filename, uploadDate: snapshotDate, existingCount });
+        setPendingOverwrite({ players, filename, uploadDate: snapshotDate, existingCount, contentHash });
         return;
       }
       throw e;
@@ -157,6 +167,7 @@ export default function UploadStatsPage() {
   const runIngest = async (currentFile: File, categoryOverride?: StatsCategory) => {
     const buf = await currentFile.arrayBuffer();
     const parsed = parseStatsWorkbook(buf, { categoryOverride });
+    const contentHash = await hashFileBuffer(buf);
 
     if (parsed.needsCategoryOverride) {
       setPendingCategory({
@@ -171,6 +182,15 @@ export default function UploadStatsPage() {
       toast.warning(
         `Unrecognized stat columns ingested: ${parsed.unknownHeaders.slice(0, 6).join(", ")}${parsed.unknownHeaders.length > 6 ? "…" : ""}. Update the glossary if these are real stats.`,
         { duration: 8000 },
+      );
+    }
+
+    if (parsed.duplicateNames.length > 0) {
+      const sample = parsed.duplicateNames.slice(0, 3).map((d) => `${d.first} ${d.last}`).join(", ");
+      const more = parsed.duplicateNames.length > 3 ? `, +${parsed.duplicateNames.length - 3} more` : "";
+      toast.warning(
+        `Duplicate player rows in file merged (last row wins): ${sample}${more}. Fix the source file if these should be separate players.`,
+        { duration: 10000 },
       );
     }
 
@@ -192,7 +212,7 @@ export default function UploadStatsPage() {
     // First-upload-for-the-school path: every parsed name is "new", review
     // would just be friction. Per the plan, skip straight to ingest.
     if (roster.length === 0) {
-      await proceedToIngest(parsed.players, currentFile.name, uploadDate);
+      await proceedToIngest(parsed.players, currentFile.name, uploadDate, contentHash);
       return;
     }
 
@@ -208,11 +228,11 @@ export default function UploadStatsPage() {
     // existing roster exactly — no decisions to make, skip the dialog.
     const hasDecision = items.some((it) => it.classification.kind !== "existing");
     if (!hasDecision) {
-      await proceedToIngest(parsed.players, currentFile.name, uploadDate);
+      await proceedToIngest(parsed.players, currentFile.name, uploadDate, contentHash);
       return;
     }
 
-    setPendingReview({ items, filename: currentFile.name, uploadDate });
+    setPendingReview({ items, filename: currentFile.name, uploadDate, contentHash });
   };
 
   const handleSubmit = async () => {
@@ -292,11 +312,11 @@ export default function UploadStatsPage() {
 
   const handleConfirmReview = async () => {
     if (!pendingReview) return;
-    const { items, filename, uploadDate: snapshotDate } = pendingReview;
+    const { items, filename, uploadDate: snapshotDate, contentHash } = pendingReview;
     setBusyBoth(true);
     setPendingReview(null);
     try {
-      await proceedToIngest(items.map((it) => it.player), filename, snapshotDate);
+      await proceedToIngest(items.map((it) => it.player), filename, snapshotDate, contentHash);
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : "Upload failed";
       const msg = friendlyError(raw);
@@ -309,10 +329,10 @@ export default function UploadStatsPage() {
 
   const handleConfirmOverwrite = async () => {
     if (!pendingOverwrite) return;
-    const { players, filename, uploadDate: stagedDate } = pendingOverwrite;
+    const { players, filename, uploadDate: stagedDate, contentHash } = pendingOverwrite;
     setBusyBoth(true);
     try {
-      const count = await ingestOnce({ players, filename, uploadDate: stagedDate, replace: true });
+      const count = await ingestOnce({ players, filename, uploadDate: stagedDate, replace: true, contentHash });
       finishSuccess(count, stagedDate);
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : "Upload failed";

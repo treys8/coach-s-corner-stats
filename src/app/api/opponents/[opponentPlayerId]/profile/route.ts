@@ -15,6 +15,7 @@ import {
   deriveOpposingBatterProfile,
   type RawOpposingAtBat,
 } from "@/lib/opponents/profile";
+import { apiError, apiErrorFromException } from "@/lib/api/errors";
 
 export async function GET(
   _req: Request,
@@ -25,7 +26,7 @@ export async function GET(
   const client = await createClient();
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    return apiError(401, "unauthenticated");
   }
 
   // Identity row — RLS ensures the caller has school access.
@@ -35,7 +36,7 @@ export async function GET(
     .eq("id", opponentPlayerId)
     .maybeSingle();
   if (idRes.error || !idRes.data) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return apiError(404, "not_found");
   }
   const id = idRes.data as unknown as {
     id: string;
@@ -52,7 +53,7 @@ export async function GET(
     .select("result, rbi, spray_x, spray_y, game_id, games!inner(game_date)")
     .eq("opponent_batter_id", opponentPlayerId);
   if (abRes.error) {
-    return NextResponse.json({ error: abRes.error.message }, { status: 500 });
+    return apiErrorFromException(abRes.error);
   }
 
   const rows = (abRes.data ?? []) as unknown as Array<{

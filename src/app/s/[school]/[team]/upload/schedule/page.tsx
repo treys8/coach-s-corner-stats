@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Upload as UploadIcon, FileText, CheckCircle2, AlertCircle, Download } from "lucide-react";
 import { toast } from "sonner";
 import { parseScheduleSheet, type ParsedScheduleRow } from "@/lib/csvParser";
+import { hashFileBuffer } from "@/lib/csv/hash";
 import type { Json } from "@/integrations/supabase/types";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
@@ -54,6 +55,7 @@ interface ParseState {
   filename: string;
   rows: ParsedScheduleRow[];
   warnings: string[];
+  contentHash: string;
 }
 
 interface CommitResult {
@@ -82,7 +84,8 @@ export default function UploadSchedulePage() {
     try {
       const buf = await file.arrayBuffer();
       const { rows, warnings } = parseScheduleSheet(buf);
-      setParseState({ filename: file.name, rows, warnings });
+      const contentHash = await hashFileBuffer(buf);
+      setParseState({ filename: file.name, rows, warnings, contentHash });
       if (warnings.length > 0) {
         toast.warning(`Parsed ${rows.length} rows with ${warnings.length} warning${warnings.length === 1 ? "" : "s"}.`);
       } else {
@@ -116,6 +119,7 @@ export default function UploadSchedulePage() {
         p_team: team.id,
         p_games: payload as unknown as Json,
         p_on_conflict: conflictMode,
+        p_content_hash: parseState?.contentHash ?? null,
       });
       if (error) throw error;
       const out = ((data ?? [])[0] ?? {}) as CommitResult;

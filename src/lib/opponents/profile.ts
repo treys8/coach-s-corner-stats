@@ -8,6 +8,14 @@
 // derivable from our perspective without their full base-runner context,
 // so the line surfaces just the core box-score numbers.
 
+import { deriveBattingRates } from "@/lib/stats/derived";
+import {
+  HIT_RESULTS,
+  NON_AB_RESULTS,
+  STRIKEOUT_RESULTS,
+  WALK_RESULTS,
+} from "@/lib/scoring/at-bat-classifications";
+
 export interface OpposingBatterProfile {
   player_id: string;
   identity: {
@@ -52,12 +60,6 @@ export interface RawOpposingAtBat {
   spray_y: number | null;
 }
 
-const HIT_RESULTS = new Set(["1B", "2B", "3B", "HR"]);
-const WALK_RESULTS = new Set(["BB", "IBB"]);
-const STRIKEOUT_RESULTS = new Set(["K_swinging", "K_looking"]);
-// Non-AB PA results (don't count toward AB but do count toward PA).
-const NON_AB_RESULTS = new Set(["BB", "IBB", "HBP", "SAC", "SF", "CI"]);
-
 export function deriveOpposingBatterProfile(
   rows: RawOpposingAtBat[],
   identity: OpposingBatterProfile["identity"],
@@ -100,10 +102,19 @@ export function deriveOpposingBatterProfile(
     }
   }
 
-  line.AVG = line.AB > 0 ? line.H / line.AB : 0;
-  const obpDenom = line.AB + line.BB + line.HBP + sf;
-  line.OBP = obpDenom > 0 ? (line.H + line.BB + line.HBP) / obpDenom : 0;
-  line.SLG = line.AB > 0 ? totalBases / line.AB : 0;
+  const rates = deriveBattingRates({
+    AB: line.AB,
+    H: line.H,
+    HR: line.HR,
+    SO: line.SO,
+    BB: line.BB,
+    HBP: line.HBP,
+    SF: sf,
+    TB: totalBases,
+  });
+  line.AVG = rates.AVG;
+  line.OBP = rates.OBP;
+  line.SLG = rates.SLG;
 
   const gameList = Array.from(games.entries())
     .map(([game_id, game_date]) => ({ game_id, game_date }))

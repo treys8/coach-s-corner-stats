@@ -2,6 +2,7 @@
 // Anything not in either list is ignored when aggregating (still shown raw on
 // player pages, just not rolled up).
 import { sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
+import { deriveBattingRates } from "@/lib/stats/derived";
 
 /** Counting stats — summed across the roster on a given upload date. */
 export const SUM_STATS: Record<Section, Set<string>> = {
@@ -73,48 +74,46 @@ export const aggregateByDate = (snapshots: AggregateInput[]): DateAggregation[] 
       }
     }
 
-    // Recompute the canonical batting rates from summed counts when the
-    // underlying counts are present. This gives a true team rate
-    // (team AVG = team H / team AB) instead of "average of per-player rates",
-    // which is mathematically meaningless across players with different ABs.
-    // Critical for tablet per-game rows; also strictly an improvement for
-    // xlsx cumulative rows. Falls back silently when counts aren't there
-    // (e.g., snapshots carrying only pre-baked rate stats).
+    // Recompute the canonical batting rates from summed counts when AB is
+    // present. This gives a true team rate (team AVG = team H / team AB)
+    // instead of "average of per-player rates", which is mathematically
+    // meaningless across players with different ABs. Critical for tablet
+    // per-game rows; also strictly an improvement for xlsx cumulative rows.
+    // When AB is missing entirely, the per-player averages computed above
+    // stay in place.
     const b = agg.batting;
     if (typeof b.AB === "number" && b.AB > 0) {
-      if (typeof b.H === "number") b.AVG = b.H / b.AB;
-      const obpDen = b.AB + (b.BB ?? 0) + (b.HBP ?? 0) + (b.SF ?? 0);
-      if (obpDen > 0 && typeof b.H === "number") {
-        b.OBP = (b.H + (b.BB ?? 0) + (b.HBP ?? 0)) / obpDen;
-      }
-      const tb = typeof b.TB === "number"
-        ? b.TB
-        : ((b["1B"] ?? 0) + 2 * (b["2B"] ?? 0) + 3 * (b["3B"] ?? 0) + 4 * (b.HR ?? 0));
-      if (tb > 0) b.SLG = tb / b.AB;
-      if (typeof b.OBP === "number" && typeof b.SLG === "number") {
-        b.OPS = b.OBP + b.SLG;
-      }
-      // BABIP, C%, AB/HR depend only on AB-side counts.
-      if (typeof b.H === "number" && typeof b.HR === "number" && typeof b.SO === "number") {
-        const babipDen = b.AB - b.SO - b.HR + (b.SF ?? 0);
-        if (babipDen > 0) b.BABIP = (b.H - b.HR) / babipDen;
-      }
-      if (typeof b.SO === "number") b["C%"] = (b.AB - b.SO) / b.AB;
-      if (typeof b.HR === "number" && b.HR > 0) b["AB/HR"] = b.AB / b.HR;
-    }
-    // BB/K depends only on BB and SO.
-    if (typeof b.BB === "number" && typeof b.SO === "number" && b.SO > 0) {
-      b["BB/K"] = b.BB / b.SO;
-    }
-    // Pitch-count discipline rates per PA.
-    if (typeof b.PA === "number" && b.PA > 0) {
-      if (typeof b.PS === "number") b["PS/PA"] = b.PS / b.PA;
-      if (typeof b["2S+3"] === "number") b["2S+3%"] = b["2S+3"] / b.PA;
-      if (typeof b["6+"] === "number") b["6+%"] = b["6+"] / b.PA;
-    }
-    // SB% from SB and CS counts.
-    if (typeof b.SB === "number" && typeof b.CS === "number" && b.SB + b.CS > 0) {
-      b["SB%"] = b.SB / (b.SB + b.CS);
+      const rates = deriveBattingRates({
+        AB: b.AB,
+        H: b.H ?? 0,
+        HR: b.HR ?? 0,
+        SO: b.SO ?? 0,
+        BB: b.BB ?? 0,
+        HBP: b.HBP ?? 0,
+        SF: b.SF ?? 0,
+        TB: b.TB,
+        "1B": b["1B"],
+        "2B": b["2B"],
+        "3B": b["3B"],
+        PA: b.PA,
+        PS: b.PS,
+        "2S+3": b["2S+3"],
+        "6+": b["6+"],
+        SB: b.SB,
+        CS: b.CS,
+      });
+      b.AVG = rates.AVG;
+      b.OBP = rates.OBP;
+      b.SLG = rates.SLG;
+      b.OPS = rates.OPS;
+      b.BABIP = rates.BABIP;
+      b["C%"] = rates["C%"];
+      b["BB/K"] = rates["BB/K"];
+      b["AB/HR"] = rates["AB/HR"];
+      b["PS/PA"] = rates["PS/PA"];
+      b["2S+3%"] = rates["2S+3%"];
+      b["6+%"] = rates["6+%"];
+      b["SB%"] = rates["SB%"];
     }
 
     result.push({ date, agg });

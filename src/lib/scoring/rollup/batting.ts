@@ -5,8 +5,14 @@
 // player/[id]/page.tsx for the read side) so existing readers light up
 // without changes.
 
-import type { AtBatResult, Base, Bases, DerivedAtBat, PitchPayload, RunnerAdvance } from "../types";
-import { safeDiv } from "./shared";
+import type { Base, Bases, DerivedAtBat, PitchPayload, RunnerAdvance } from "../types";
+import { deriveBattingRates, safeDiv } from "@/lib/stats/derived";
+import {
+  HIT_RESULTS,
+  NON_AB_RESULTS,
+  STRIKEOUT_RESULTS,
+  WALK_RESULTS,
+} from "../at-bat-classifications";
 
 export interface BattingLine {
   AB: number;
@@ -69,20 +75,6 @@ const EMPTY_RUNNER_EVENTS: RunnerEventLog = {
   caught_stealing: [],
   pickoffs: [],
 };
-
-const HIT_RESULTS: ReadonlySet<AtBatResult> = new Set(["1B", "2B", "3B", "HR"]);
-const WALK_RESULTS: ReadonlySet<AtBatResult> = new Set(["BB", "IBB"]);
-const STRIKEOUT_RESULTS: ReadonlySet<AtBatResult> = new Set(["K_swinging", "K_looking"]);
-// Results that don't count toward AB. PA-but-not-AB plus DP/TP which DO count
-// as AB (PG-style). PDF §3: BB/IBB/HBP/SAC/SF/CI all count as PA, not AB.
-const NON_AB_RESULTS: ReadonlySet<AtBatResult> = new Set([
-  "BB",
-  "IBB",
-  "HBP",
-  "SAC",
-  "SF",
-  "CI",
-]);
 
 function emptyBatting(): BattingLine {
   return {
@@ -255,20 +247,20 @@ export function rollupBatting(
   for (const [id, line] of out.entries()) {
     line.TB = line["1B"] + 2 * line["2B"] + 3 * line["3B"] + 4 * line.HR;
     line.XBH = line["2B"] + line["3B"] + line.HR;
-    line.AVG = safeDiv(line.H, line.AB);
-    const obpDen = line.AB + line.BB + line.HBP + line.SF;
-    line.OBP = safeDiv(line.H + line.BB + line.HBP, obpDen);
-    line.SLG = safeDiv(line.TB, line.AB);
-    line.OPS = line.OBP + line.SLG;
-    line.BABIP = safeDiv(line.H - line.HR, line.AB - line.SO - line.HR + line.SF);
+    const rates = deriveBattingRates(line);
+    line.AVG = rates.AVG;
+    line.OBP = rates.OBP;
+    line.SLG = rates.SLG;
+    line.OPS = rates.OPS;
+    line.BABIP = rates.BABIP;
+    line["C%"] = rates["C%"];
+    line["BB/K"] = rates["BB/K"];
+    line["AB/HR"] = rates["AB/HR"];
+    line["PS/PA"] = rates["PS/PA"];
+    line["2S+3%"] = rates["2S+3%"];
+    line["6+%"] = rates["6+%"];
+    line["SB%"] = rates["SB%"];
     line["BA/RISP"] = safeDiv(rispH.get(id) ?? 0, rispAB.get(id) ?? 0);
-    line["BB/K"] = safeDiv(line.BB, line.SO);
-    line["C%"] = safeDiv(line.AB - line.SO, line.AB);
-    line["PS/PA"] = safeDiv(line.PS, line.PA);
-    line["2S+3%"] = safeDiv(line["2S+3"], line.PA);
-    line["6+%"] = safeDiv(line["6+"], line.PA);
-    line["SB%"] = safeDiv(line.SB, line.SB + line.CS);
-    line["AB/HR"] = safeDiv(line.AB, line.HR);
   }
   return out;
 }
