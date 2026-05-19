@@ -16,29 +16,18 @@
 
 import * as XLSX from "xlsx";
 import { GLOSSARY } from "@/lib/glossary";
+import { normalizePlayerName } from "@/lib/players/normalize";
 
 const KNOWN_HEADERS = new Set(Object.keys(GLOSSARY));
 
 /**
  * Mirror of the Postgres `normalize_player_name()` SQL function (see
- * migration 20260518120000_normalize_player_name.sql). MUST stay in sync so
- * the in-parser dedup key collapses identically to the DB identity key — the
- * server stitches stat rows onto the player it resolves via the same
- * normalization. Steps:
- *   1. NFKC unicode fold ("Ｊａｎｅ" → "Jane", "ﬁ" → "fi")
- *   2. lowercase
- *   3. strip straight/curly apostrophes + quote marks
- *   4. collapse runs of whitespace to a single space
- *   5. trim leading/trailing whitespace and trailing "." / ","
+ * migration 20260518120000_normalize_player_name.sql). The canonical
+ * implementation lives in `@/lib/players/normalize`; this re-export keeps
+ * existing csvParser consumers working while internal csvParser code uses
+ * the import above.
  */
-export function normalizePlayerName(name: string): string {
-  return name
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[''"`’ʼ‘”“]/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/^[\s.,]+|[\s.,]+$/g, "");
-}
+export { normalizePlayerName };
 
 export type StatsCategory = "batting" | "pitching" | "fielding";
 
@@ -80,6 +69,13 @@ export interface ParsedWorkbook {
   needsCategoryOverride: boolean;
   /** Original sheet name surfaced when needsCategoryOverride is true. */
   unrecognizedSheetName?: string;
+  /**
+   * Rows in any sheet whose normalized (first, last) collided with another
+   * row in the SAME sheet. Last row wins on the merge; the UI surfaces this
+   * so coaches can correct the source file rather than silently losing one
+   * row's stats.
+   */
+  duplicateNames: Array<{ first: string; last: string; sheet: StatsCategory }>;
 }
 
 export interface ParseStatsOptions {
@@ -127,9 +123,13 @@ type ParsedSheet = {
   headers: string[];
   unknown: string[];
   byKey: Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }>;
+  /** First+last pairs that appeared more than once in this sheet (later
+   *  rows overwrote earlier rows in byKey). Surfaced as a warning by the
+   *  upload UI so coaches see the merge before commit. */
+  duplicateNames: Array<{ first: string; last: string }>;
 };
 
-const emptyParsedSheet = (): ParsedSheet => ({ headers: [], unknown: [], byKey: new Map() });
+const emptyParsedSheet = (): ParsedSheet => ({ headers: [], unknown: [], byKey: new Map(), duplicateNames: [] });
 
 /** Parse one sheet into a header list + map of "First|Last" => stat object. */
 const parseSheet = (
@@ -155,6 +155,7 @@ const parseSheet = (
   }
 
   const byKey = new Map<string, { number: string; first: string; last: string; stats: Record<string, string | number> }>();
+  const duplicateNames: Array<{ first: string; last: string }> = [];
   for (let r = headerIdx + 1; r < rows.length; r++) {
     const row = rows[r];
     if (!row || !isPlayerRow(row)) continue;
@@ -169,9 +170,13 @@ const parseSheet = (
     }
     // Use the normalized key so "Smith" / "smith " / "Smith." dedupe within
     // a single workbook the same way the DB will dedupe across uploads.
-    byKey.set(`${normalizePlayerName(first)}|${normalizePlayerName(last)}`, { number, first, last, stats });
+    const key = `${normalizePlayerName(first)}|${normalizePlayerName(last)}`;
+    if (byKey.has(key)) {
+      duplicateNames.push({ first, last });
+    }
+    byKey.set(key, { number, first, last, stats });
   }
-  return { headers, unknown, byKey };
+  return { headers, unknown, byKey, duplicateNames };
 };
 
 /** Parse the team workbook (xlsx or csv) buffer. */
@@ -276,6 +281,12 @@ export function parseStatsWorkbook(data: ArrayBuffer, options: ParseStatsOptions
     else missingCategories.push(cat);
   });
 
+  const duplicateNames: Array<{ first: string; last: string; sheet: StatsCategory }> = [
+    ...battingSheet.duplicateNames.map((d) => ({ ...d, sheet: "batting" as const })),
+    ...pitchingSheet.duplicateNames.map((d) => ({ ...d, sheet: "pitching" as const })),
+    ...fieldingSheet.duplicateNames.map((d) => ({ ...d, sheet: "fielding" as const })),
+  ];
+
   return {
     battingHeaders: battingSheet.headers,
     pitchingHeaders: pitchingSheet.headers,
@@ -286,6 +297,7 @@ export function parseStatsWorkbook(data: ArrayBuffer, options: ParseStatsOptions
     missingCategories,
     needsCategoryOverride,
     unrecognizedSheetName,
+    duplicateNames,
   };
 }
 

@@ -18,6 +18,7 @@ import { createClient } from "@/lib/supabase/server";
 import { applyEvent } from "@/lib/scoring/server";
 import type { GameEventPayload } from "@/lib/scoring/types";
 import type { GameEventType } from "@/integrations/supabase/types";
+import { apiError, apiErrorFromException } from "@/lib/api/errors";
 
 const EVENT_TYPES: GameEventType[] = [
   "at_bat", "stolen_base", "caught_stealing", "pickoff",
@@ -47,15 +48,12 @@ export async function POST(
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+    return apiError(400, "invalid_json");
   }
 
   const parsed = eventSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: "invalid_payload", issues: parsed.error.issues },
-      { status: 400 },
-    );
+    return apiError(400, "invalid_payload", { issues: parsed.error.issues });
   }
 
   // Defense in depth: every at_bat must identify a batter on at least one
@@ -67,17 +65,16 @@ export async function POST(
     const noBatter = (p.batter_id ?? null) === null;
     const noOppBatter = (p.opponent_batter_id ?? null) === null;
     if (noBatter && noOppBatter) {
-      return NextResponse.json(
-        { error: "at_bat requires either batter_id or opponent_batter_id" },
-        { status: 400 },
-      );
+      return apiError(400, "invalid_payload", {
+        detail: "at_bat requires either batter_id or opponent_batter_id",
+      });
     }
   }
 
   const userClient = await createClient();
   const { data: auth } = await userClient.auth.getUser();
   if (!auth.user) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    return apiError(401, "unauthenticated");
   }
 
   try {
@@ -89,13 +86,6 @@ export async function POST(
     });
     return NextResponse.json(result, { status: result.duplicate ? 200 : 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "unknown";
-    // RLS denials surface as a missing row + a generic insert error from
-    // PostgREST; treat the obvious permission shapes as 403, everything
-    // else as 500 with the message for debuggability.
-    if (/^forbidden|permission denied|row-level security|42501/i.test(message)) {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
-    }
-    return NextResponse.json({ error: "internal", detail: message }, { status: 500 });
+    return apiErrorFromException(err);
   }
 }

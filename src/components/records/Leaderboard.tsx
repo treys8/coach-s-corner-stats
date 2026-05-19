@@ -4,50 +4,19 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
-import type { Section } from "@/lib/snapshots";
 import type { PlayerSeasonAgg } from "@/lib/career";
+import {
+  BOARDS,
+  MIN_AB,
+  MIN_IP,
+  MIN_TC,
+  TOP_N,
+  rankLeaderboard,
+  type BoardConfig,
+} from "@/lib/stats/leaderboard";
 
-export const TOP_N = 5;
-export const MIN_AB = 50;
-export const MIN_IP = 20;
-export const MIN_TC = 20;
-
-export interface BoardConfig {
-  stat: string;
-  /** Human label override; defaults to stat with StatLabel tooltip. */
-  label?: string;
-  /** Sort order: desc = high to low (default), asc = low to high. */
-  dir?: "desc" | "asc";
-  /** Qualifier: row's counter must be ≥ min for this stat to count. */
-  qualifier?: { stat: string; min: number; note: string };
-}
-
-export const BOARDS: Record<Section, BoardConfig[]> = {
-  batting: [
-    { stat: "AVG", qualifier: { stat: "AB", min: MIN_AB, note: `Min ${MIN_AB} AB` } },
-    { stat: "OPS", qualifier: { stat: "AB", min: MIN_AB, note: `Min ${MIN_AB} AB` } },
-    { stat: "OBP", qualifier: { stat: "AB", min: MIN_AB, note: `Min ${MIN_AB} AB` } },
-    { stat: "HR" },
-    { stat: "RBI" },
-    { stat: "H" },
-    { stat: "SB" },
-  ],
-  pitching: [
-    { stat: "ERA", dir: "asc", qualifier: { stat: "IP", min: MIN_IP, note: `Min ${MIN_IP} IP` } },
-    { stat: "WHIP", dir: "asc", qualifier: { stat: "IP", min: MIN_IP, note: `Min ${MIN_IP} IP` } },
-    { stat: "SO" },
-    { stat: "W" },
-    { stat: "IP" },
-    { stat: "SV" },
-  ],
-  fielding: [
-    { stat: "FPCT", qualifier: { stat: "TC", min: MIN_TC, note: `Min ${MIN_TC} TC` } },
-    { stat: "TC" },
-    { stat: "A" },
-    { stat: "PO" },
-    { stat: "E", dir: "asc", label: "Fewest E" },
-  ],
-};
+export { BOARDS, MIN_AB, MIN_IP, MIN_TC, TOP_N };
+export type { BoardConfig };
 
 export interface PlayerInfo {
   id: string;
@@ -75,20 +44,7 @@ export function Leaderboard({
   teamSlugFor,
   teamLabelFor,
 }: LeaderboardProps) {
-  const dir = cfg.dir ?? "desc";
-  const filtered = rows.filter((r) => {
-    const v = r.agg[cfg.stat];
-    if (typeof v !== "number" || !Number.isFinite(v)) return false;
-    if (cfg.qualifier) {
-      const q = r.agg[cfg.qualifier.stat];
-      if (typeof q !== "number" || q < cfg.qualifier.min) return false;
-    }
-    return true;
-  });
-  filtered.sort((a, b) =>
-    dir === "desc" ? b.agg[cfg.stat] - a.agg[cfg.stat] : a.agg[cfg.stat] - b.agg[cfg.stat],
-  );
-  const top = filtered.slice(0, TOP_N);
+  const top = rankLeaderboard(rows, cfg).slice(0, TOP_N);
 
   return (
     <Card className="p-5">

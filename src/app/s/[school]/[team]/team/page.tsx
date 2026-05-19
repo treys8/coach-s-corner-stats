@@ -20,6 +20,7 @@ import { buildLeaderboard, qualifierNote } from "@/lib/team-stats";
 import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
+import { formatDatePart } from "@/lib/date-display";
 
 interface Snapshot {
   player_id: string;
@@ -147,7 +148,7 @@ export default function TeamTotalsPage() {
       return <p className="text-sm text-muted-foreground italic">Trends appear after the second weekly upload.</p>;
     }
     const data = byDate.map((d) => {
-      const row: Record<string, string | number> = { date: new Date(d.date).toLocaleDateString(undefined, { month: "short", day: "numeric" }) };
+      const row: Record<string, string | number> = { date: formatDatePart(d.date, "month-day", school.timezone) };
       keys.forEach((k) => { row[k] = d.agg[section][k] ?? 0; });
       return row;
     });
@@ -197,7 +198,7 @@ export default function TeamTotalsPage() {
       <p className="text-sm text-muted-foreground mb-8">
         {byDate.length === 0
           ? `No stats uploaded for the ${season} season yet.`
-          : `Aggregated across ${snapshots.filter((s) => s.upload_date === byDate[byDate.length - 1].date).length} players · latest ${new Date(byDate[byDate.length - 1].date).toLocaleDateString()}`}
+          : `Aggregated across ${snapshots.filter((s) => s.upload_date === byDate[byDate.length - 1].date).length} players · latest ${formatDatePart(byDate[byDate.length - 1].date, "short", school.timezone)}`}
       </p>
 
       {byDate.length === 0 ? (
@@ -294,7 +295,7 @@ export default function TeamTotalsPage() {
                 {(latestDate || qualifierNote(sec, activeStat)) && (
                   <p className="text-[11px] text-muted-foreground mt-3">
                     {qualifierNote(sec, activeStat) && <span className="font-semibold text-sa-orange">{qualifierNote(sec, activeStat)} · </span>}
-                    {latestDate && <>Based on each player's latest snapshot · most recent {new Date(latestDate).toLocaleDateString()}</>}
+                    {latestDate && <>Based on each player's latest snapshot · most recent {formatDatePart(latestDate, "short", school.timezone)}</>}
                   </p>
                 )}
               </Card>

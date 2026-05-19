@@ -6,7 +6,13 @@
 // with an explicit `timeZone` avoids the rollover regardless of where the
 // viewer is.
 
-export type DatePart = "day" | "month-short" | "weekday-long" | "long";
+export type DatePart =
+  | "day"
+  | "month-short"
+  | "weekday-long"
+  | "long"
+  | "short"
+  | "month-day";
 
 const partOptions = (part: DatePart): Intl.DateTimeFormatOptions => {
   switch (part) {
@@ -18,6 +24,10 @@ const partOptions = (part: DatePart): Intl.DateTimeFormatOptions => {
       return { weekday: "long" };
     case "long":
       return { weekday: "long", month: "short", day: "numeric" };
+    case "short":
+      return { weekday: "short", month: "short", day: "numeric" };
+    case "month-day":
+      return { month: "short", day: "numeric" };
   }
 };
 

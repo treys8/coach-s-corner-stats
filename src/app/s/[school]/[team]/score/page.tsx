@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { formatGameTime } from "@/lib/date-display";
+import { formatDatePart, formatGameTime, localToday } from "@/lib/date-display";
 import type { GameStatus, GameLocation } from "@/integrations/supabase/types";
 
 interface ScorableGame {
@@ -26,7 +26,6 @@ interface ScorableGame {
 }
 
 const supabase = createClient();
-const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export default function ScoreIndexPage() {
   const { team } = useTeam();
@@ -46,7 +45,7 @@ export default function ScoreIndexPage() {
       .select("id, game_date, game_time, opponent, location, status")
       .eq("team_id", team.id)
       .in("status", ["draft", "in_progress", "suspended"])
-      .gte("game_date", todayIso())
+      .gte("game_date", localToday(school.timezone))
       .order("game_date", { ascending: true })
       .order("game_time", { ascending: true, nullsFirst: false });
     if (error) {
@@ -72,7 +71,7 @@ export default function ScoreIndexPage() {
       .from("games")
       .insert({
         team_id: team.id,
-        game_date: todayIso(),
+        game_date: localToday(school.timezone),
         game_time: form.time || null,
         opponent: form.opponent.trim(),
         location: form.location,
@@ -115,9 +114,7 @@ export default function ScoreIndexPage() {
                   <Card className="p-4 flex items-center gap-4 hover:border-sa-orange transition-colors">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-muted-foreground">
-                        {new Date(g.game_date + "T12:00:00").toLocaleDateString(undefined, {
-                          weekday: "short", month: "short", day: "numeric",
-                        })}
+                        {formatDatePart(g.game_date, "short", school.timezone)}
                         {g.game_time ? ` · ${formatGameTime(g.game_time)}` : ""}
                       </p>
                       <p className="font-display text-xl text-sa-blue-deep truncate">

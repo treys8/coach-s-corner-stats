@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertCircle, Trash2, AlertTriangle } from "lucide-react";
 import { OpponentPicker, type OpponentPickerValue } from "@/components/schedule/OpponentPicker";
 import { recognizeOpponentTeam } from "@/lib/opponents/recognition";
+import { normalizeOpponentName } from "@/lib/opponents/normalize";
 import type { ParsedScheduleRow, ScheduleLocation } from "@/lib/csvParser";
 import type { Sport } from "@/integrations/supabase/types";
 
@@ -69,19 +70,24 @@ export function ScheduleUploadPreview({
   useEffect(() => {
     if (recognizedOnce.current) return;
     recognizedOnce.current = true;
-    const uniqueNames = Array.from(
-      new Set(rows.map((r) => r.opponent.trim()).filter((n) => n.length > 0)),
-    );
-    if (uniqueNames.length === 0) return;
+    // Map keyed by the normalized form so "Meridian" / "MERIDIAN" / "@ Meridian"
+    // collapse to one recognition call and one resolved team_id.
+    const byKey = new Map<string, string>(); // normalized → display name
+    for (const r of rows) {
+      const key = normalizeOpponentName(r.opponent);
+      if (key.length === 0) continue;
+      if (!byKey.has(key)) byKey.set(key, r.opponent.trim());
+    }
+    if (byKey.size === 0) return;
     let cancelled = false;
     setRecognizing(true);
     (async () => {
-      const resolved = new Map<string, string>();
+      const resolved = new Map<string, string>(); // normalized → team_id
       await Promise.all(
-        uniqueNames.map(async (name) => {
-          const r = await recognizeOpponentTeam(teamId, name);
+        Array.from(byKey.entries()).map(async ([key, displayName]) => {
+          const r = await recognizeOpponentTeam(teamId, displayName);
           if (r.kind === "match") {
-            resolved.set(name, r.match.team_id);
+            resolved.set(key, r.match.team_id);
           }
         }),
       );
@@ -91,7 +97,7 @@ export function ScheduleUploadPreview({
       }
       setRows((prev) =>
         prev.map((row) => {
-          const hit = resolved.get(row.opponent.trim());
+          const hit = resolved.get(normalizeOpponentName(row.opponent));
           return hit && row.opponent_team_id === null
             ? { ...row, opponent_team_id: hit }
             : row;

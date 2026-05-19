@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Upload, Users, Lock } from "lucide-react";
 import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
 import { useSchool } from "@/lib/contexts/school";
+import { formatDatePart } from "@/lib/date-display";
 import { useTeam } from "@/lib/contexts/team";
 
 interface RosterRow {
@@ -106,7 +107,7 @@ export default function RosterPage() {
               <p className="text-sm text-muted-foreground">
                 Stats current through{" "}
                 <span className="font-semibold text-foreground">
-                  {new Date(latestUpload).toLocaleDateString()}
+                  {formatDatePart(latestUpload, "short", school.timezone)}
                 </span>
               </p>
             )}

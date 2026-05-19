@@ -79,7 +79,8 @@ describe("POST /api/games/[gameId]/events", () => {
     );
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.error).toContain("batter");
+    expect(body.error).toBe("invalid_payload");
+    expect(body.detail).toContain("batter");
     expect(applyEventMock).not.toHaveBeenCalled();
   });
 

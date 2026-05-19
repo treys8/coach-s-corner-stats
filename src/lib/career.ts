@@ -7,6 +7,13 @@
 
 import { sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
 import { SUM_STATS } from "@/lib/aggregate";
+import { deriveBattingRates, safeDiv } from "@/lib/stats/derived";
+import {
+  eraFromOuts,
+  ipToOuts,
+  outsToIp,
+  whipFromOuts,
+} from "@/lib/stats/innings-pitched";
 
 export type SectionAgg = Record<string, number>;
 
@@ -32,19 +39,6 @@ export interface PlayerSeasonAgg {
   player_id: string;
   season_year: number;
   agg: SectionAgg;
-}
-
-function ipToOuts(ip: number): number {
-  if (!Number.isFinite(ip) || ip < 0) return 0;
-  const whole = Math.floor(ip);
-  const frac = Math.round((ip - whole) * 10);
-  return whole * 3 + (frac === 1 ? 1 : frac === 2 ? 2 : 0);
-}
-
-function outsToIp(outs: number): number {
-  const whole = Math.floor(outs / 3);
-  const rem = outs % 3;
-  return whole + rem / 10;
 }
 
 /**
@@ -75,56 +69,45 @@ export function aggregateCareer(
     }
   }
 
-  if (section === "batting") {
-    const ab = summed.AB ?? 0;
-    const h  = summed.H  ?? 0;
-    const hr = summed.HR ?? 0;
-    const so = summed.SO ?? 0;
-    const bb = summed.BB ?? 0;
-    const hbp = summed.HBP ?? 0;
-    const sf = summed.SF ?? 0;
-    const tb = summed.TB ?? 0;
-    const pa = summed.PA ?? 0;
-    const ps = summed.PS ?? 0;
-    const twoS3 = summed["2S+3"] ?? 0;
-    const sixPlus = summed["6+"] ?? 0;
-    const sb = summed.SB ?? 0;
-    const cs = summed.CS ?? 0;
-
-    if (ab > 0) summed.AVG = h / ab;
-    if (ab > 0) summed.SLG = tb / ab;
-    const obpDenom = ab + bb + hbp + sf;
-    if (obpDenom > 0) summed.OBP = (h + bb + hbp) / obpDenom;
-    if (summed.OBP !== undefined && summed.SLG !== undefined) {
-      summed.OPS = summed.OBP + summed.SLG;
-    }
-    const babipDen = ab - so - hr + sf;
-    if (babipDen > 0) summed.BABIP = (h - hr) / babipDen;
-    if (ab > 0) summed["C%"] = (ab - so) / ab;
-    if (hr > 0) summed["AB/HR"] = ab / hr;
-    if (so > 0) summed["BB/K"] = bb / so;
-    if (pa > 0) {
-      summed["PS/PA"] = ps / pa;
-      summed["2S+3%"] = twoS3 / pa;
-      summed["6+%"] = sixPlus / pa;
-    }
-    if (sb + cs > 0) summed["SB%"] = sb / (sb + cs);
-  } else if (section === "pitching") {
+  // Rates are only emitted when the section actually has data — keeps the
+  // returned object empty for a "no batting" career (pure pitcher etc.) so
+  // the UI can fall back to its empty-state hint.
+  if (section === "batting" && (summed.AB ?? 0) > 0) {
+    const rates = deriveBattingRates({
+      AB: summed.AB ?? 0,
+      H: summed.H ?? 0,
+      HR: summed.HR ?? 0,
+      SO: summed.SO ?? 0,
+      BB: summed.BB ?? 0,
+      HBP: summed.HBP ?? 0,
+      SF: summed.SF ?? 0,
+      TB: summed.TB ?? 0,
+      PA: summed.PA ?? 0,
+      PS: summed.PS ?? 0,
+      "2S+3": summed["2S+3"] ?? 0,
+      "6+": summed["6+"] ?? 0,
+      SB: summed.SB ?? 0,
+      CS: summed.CS ?? 0,
+    });
+    summed.AVG = rates.AVG;
+    summed.OBP = rates.OBP;
+    summed.SLG = rates.SLG;
+    summed.OPS = rates.OPS;
+    summed.BABIP = rates.BABIP;
+    summed["C%"] = rates["C%"];
+    summed["BB/K"] = rates["BB/K"];
+    summed["AB/HR"] = rates["AB/HR"];
+    summed["PS/PA"] = rates["PS/PA"];
+    summed["2S+3%"] = rates["2S+3%"];
+    summed["6+%"] = rates["6+%"];
+    summed["SB%"] = rates["SB%"];
+  } else if (section === "pitching" && outsTotal > 0) {
     if (ipSeen) summed.IP = outsToIp(outsTotal);
-    const ipReal = outsTotal / 3;
-    const er = summed.ER ?? 0;
-    const bb = summed.BB ?? 0;
-    const h  = summed.H  ?? 0;
-    const so = summed.SO ?? 0;
-
-    if (ipReal > 0) summed.ERA = (er * 9) / ipReal;
-    if (ipReal > 0) summed.WHIP = (bb + h) / ipReal;
-    if (bb > 0) summed["K/BB"] = so / bb;
-  } else if (section === "fielding") {
-    const tc = summed.TC ?? 0;
-    const po = summed.PO ?? 0;
-    const a  = summed.A  ?? 0;
-    if (tc > 0) summed.FPCT = (po + a) / tc;
+    summed.ERA = eraFromOuts(summed.ER ?? 0, outsTotal);
+    summed.WHIP = whipFromOuts((summed.BB ?? 0) + (summed.H ?? 0), outsTotal);
+    if ((summed.BB ?? 0) > 0) summed["K/BB"] = safeDiv(summed.SO ?? 0, summed.BB);
+  } else if (section === "fielding" && (summed.TC ?? 0) > 0) {
+    summed.FPCT = safeDiv((summed.PO ?? 0) + (summed.A ?? 0), summed.TC);
   }
 
   return summed;
