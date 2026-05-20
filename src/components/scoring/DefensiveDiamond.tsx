@@ -207,11 +207,16 @@ export function DefensiveDiamond({
   const svgCoords = (clientX: number, clientY: number) => {
     const svg = svgRef.current;
     if (!svg) return null;
-    const rect = svg.getBoundingClientRect();
-    return {
-      x: ((clientX - rect.left) / rect.width) * 100,
-      y: ((clientY - rect.top) / rect.height) * 100,
-    };
+    // Use the SVG's CTM so the mapping honors `preserveAspectRatio="xMidYMid meet"`.
+    // A naive bounding-rect ratio skews pointer→viewBox when the container is
+    // wider (or taller) than the 1:1 viewBox — chip ends up offset from the finger.
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const p = pt.matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
   };
 
   const beginDrag = (

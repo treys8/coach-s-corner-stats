@@ -167,6 +167,21 @@ export function LiveScoringV2({
     : currentOpponentBatterId;
   const dragMode = !!armedResult && armedResult !== ARMED_IN_PLAY_PENDING && !submitting;
 
+  // In-game spray markers for the opposing batter at the plate. Merged into
+  // OpposingBatterPanel so the right rail shows one combined chart instead
+  // of duplicating career + current game in adjacent cards.
+  const oppBatterCurrentGameMarkers = currentOpponentBatterId
+    ? state.at_bats
+        .filter((ab) => ab.opponent_batter_id === currentOpponentBatterId)
+        .map((ab) => ({
+          id: ab.event_id,
+          result: ab.result,
+          spray_x: ab.spray_x,
+          spray_y: ab.spray_y,
+          description: ab.description,
+        }))
+    : [];
+
   const hasRunners = !!(state.bases.first || state.bases.second || state.bases.third);
 
   const handleBalk = () => {
@@ -289,19 +304,28 @@ export function LiveScoringV2({
                       : "Set opposing lineup to track batters."
                   }
                   cache={opposingProfileCache.current}
+                  currentGameMarkers={oppBatterCurrentGameMarkers}
+                  currentGameDate={gameDate}
+                  currentGameId={gameId}
                 />
               </>
             )}
-            <Card className="p-3">
-              <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">
-                Spray chart
-              </h3>
-              <LiveSprayChart
-                state={state}
-                currentBatterId={currentBatterIdForChip}
-                currentBatterIsOurs={weAreBatting}
-              />
-            </Card>
+            {/* When fielding, OpposingBatterPanel already renders a unified
+                spray chart (career vs you + in-game) — skip the duplicate.
+                When batting, our batter has no career-vs-this-team channel,
+                so this card is the only spray surface and stays. */}
+            {weAreBatting && (
+              <Card className="p-3">
+                <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">
+                  Spray chart
+                </h3>
+                <LiveSprayChart
+                  state={state}
+                  currentBatterId={currentBatterIdForChip}
+                  currentBatterIsOurs={weAreBatting}
+                />
+              </Card>
+            )}
           </aside>
         )}
       </div>

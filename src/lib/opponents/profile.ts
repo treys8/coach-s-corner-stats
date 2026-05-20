@@ -49,6 +49,9 @@ export interface SprayPoint {
   y: number;
   result: string;
   game_id: string;
+  /** ISO date of the game this point came from. Lets the side-panel filter
+   *  career sprays by year without re-joining against `games` at render time. */
+  game_date: string;
 }
 
 export interface RawOpposingAtBat {
@@ -98,7 +101,13 @@ export function deriveOpposingBatterProfile(
     line.RBI += ab.rbi;
 
     if (ab.spray_x !== null && ab.spray_y !== null) {
-      spray.push({ x: ab.spray_x, y: ab.spray_y, result: ab.result, game_id: ab.game_id });
+      spray.push({
+        x: ab.spray_x,
+        y: ab.spray_y,
+        result: ab.result,
+        game_id: ab.game_id,
+        game_date: ab.game_date,
+      });
     }
   }
 
