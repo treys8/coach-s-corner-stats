@@ -1,19 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Calendar } from "lucide-react";
+import { Plus, Calendar, Lock } from "lucide-react";
 import { toast } from "sonner";
-import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
+import { currentSeasonYear, isSeasonLockedFor, seasonLabel } from "@/lib/season";
+import { fetchTeamSeasonLocks, type SeasonLockRow } from "@/lib/season-locks";
 import { useTeam } from "@/lib/contexts/team";
 import { useSchool } from "@/lib/contexts/school";
-import { localToday } from "@/lib/date-display";
+import { formatDatePart, localToday } from "@/lib/date-display";
 import { GameFormDialog } from "@/components/schedule/GameFormDialog";
 import { GameRow } from "@/components/schedule/GameRow";
 import type { Game } from "@/components/schedule/types";
+import { EndSeasonDialog } from "@/components/season/EndSeasonDialog";
 
 const supabase = createClient();
 
@@ -25,13 +27,18 @@ export default function SchedulePage() {
   const [season, setSeason] = useState<number>(currentSeasonYear());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingGame, setEditingGame] = useState<Game | null>(null);
+  const [locks, setLocks] = useState<Map<number, SeasonLockRow>>(new Map());
+  const [endSeasonOpen, setEndSeasonOpen] = useState(false);
 
   const load = async () => {
-    const { data, error } = await supabase
-      .from("games")
-      .select("*")
-      .eq("team_id", team.id)
-      .order("game_date", { ascending: true });
+    const [{ data, error }, locksMap] = await Promise.all([
+      supabase
+        .from("games")
+        .select("*")
+        .eq("team_id", team.id)
+        .order("game_date", { ascending: true }),
+      fetchTeamSeasonLocks(supabase, team.id),
+    ]);
     if (error) {
       toast.error(`Couldn't load schedule: ${error.message}`);
       return;
@@ -40,13 +47,19 @@ export default function SchedulePage() {
     setGames(all);
     const yrs = Array.from(new Set([currentSeasonYear(), ...all.map((g) => g.season_year)])).sort((a, b) => b - a);
     setSeasons(yrs);
+    setLocks(locksMap);
   };
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [team.id]);
 
-  const closed = isSeasonClosed(season);
+  const lockedYears = useMemo(() => new Set(locks.keys()), [locks]);
+  const closed = isSeasonLockedFor(season, lockedYears);
+  const manualLock = locks.get(season);
+  // "End Season" button only makes sense before May 31 — past that, the
+  // season is auto-closed and there's nothing left to do.
+  const canArchive = !closed;
 
   const openAdd = () => {
     setEditingGame(null);
@@ -69,8 +82,12 @@ export default function SchedulePage() {
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Schedule</p>
           <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">Season Slate</h2>
           {closed && (
-            <p className="text-xs uppercase tracking-wider text-sa-orange font-bold mt-2">
-              {seasonLabel(season)} · Archived (closed May 31)
+            <p className="text-xs uppercase tracking-wider text-sa-orange font-bold mt-2 inline-flex items-center gap-1">
+              <Lock className="w-3 h-3" />
+              {seasonLabel(season)} · Archived
+              {manualLock
+                ? ` (closed ${formatDatePart(manualLock.locked_at, "short", school.timezone)})`
+                : " (closed May 31)"}
             </p>
           )}
         </div>
@@ -79,7 +96,7 @@ export default function SchedulePage() {
             <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               {seasons.map((y) => (
-                <SelectItem key={y} value={String(y)}>{seasonLabel(y)}{isSeasonClosed(y) ? " (closed)" : ""}</SelectItem>
+                <SelectItem key={y} value={String(y)}>{seasonLabel(y)}{isSeasonLockedFor(y, lockedYears) ? " (closed)" : ""}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -90,12 +107,30 @@ export default function SchedulePage() {
           >
             <Plus className="w-4 h-4 mr-1" /> Add Game
           </Button>
+          {canArchive && (
+            <Button
+              variant="outline"
+              onClick={() => setEndSeasonOpen(true)}
+              className="border-sa-blue text-sa-blue hover:bg-sa-blue/5"
+              title="Archive the current season so it can't be edited"
+            >
+              <Lock className="w-4 h-4 mr-1" /> End Season
+            </Button>
+          )}
           <GameFormDialog
             teamId={team.id}
             open={dialogOpen}
             editingGame={editingGame}
             onOpenChange={setDialogOpen}
             onSaved={load}
+          />
+          <EndSeasonDialog
+            open={endSeasonOpen}
+            onOpenChange={setEndSeasonOpen}
+            teamId={team.id}
+            teamName={team.name}
+            seasonYear={season}
+            onArchived={load}
           />
         </div>
       </div>

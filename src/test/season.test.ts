@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { seasonYearFor, isSeasonClosed, currentSeasonYear } from "@/lib/season";
+import { seasonYearFor, isSeasonClosed, isSeasonLockedFor, currentSeasonYear } from "@/lib/season";
 
 describe("seasonYearFor", () => {
   // A season is Feb 1 – May 31. Off-season dates roll back to the most recent
@@ -62,5 +62,26 @@ describe("currentSeasonYear", () => {
     expect(currentSeasonYear(new Date(2026, 2, 15))).toBe(2026);
     expect(currentSeasonYear(new Date(2027, 0, 15))).toBe(2026);
     expect(currentSeasonYear(new Date(2027, 1, 1))).toBe(2027);
+  });
+});
+
+describe("isSeasonLockedFor", () => {
+  const midSeason = new Date(2026, 3, 15); // April 15, 2026 — well before May 31
+  const offseason = new Date(2026, 6, 15); // July 15, 2026 — after May 31
+
+  it("returns true when the date alone has auto-closed the season", () => {
+    expect(isSeasonLockedFor(2026, new Set(), offseason)).toBe(true);
+  });
+
+  it("returns false mid-season when the season isn't manually locked", () => {
+    expect(isSeasonLockedFor(2026, new Set(), midSeason)).toBe(false);
+  });
+
+  it("returns true mid-season when the season IS manually locked", () => {
+    expect(isSeasonLockedFor(2026, new Set([2026]), midSeason)).toBe(true);
+  });
+
+  it("only considers the matching year — other locks are ignored", () => {
+    expect(isSeasonLockedFor(2026, new Set([2025]), midSeason)).toBe(false);
   });
 });

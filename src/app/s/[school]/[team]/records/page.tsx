@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { parseSnapshotStats, type Section, type SnapshotStats } from "@/lib/snapshots";
@@ -10,6 +11,15 @@ import { aggregatePlayerSeasons, type PlayerSeasonAgg } from "@/lib/career";
 import { BOARDS, Leaderboard } from "@/components/records/Leaderboard";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
+import { seasonLabel } from "@/lib/season";
+
+interface TeamRecordRow {
+  season_year: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  games_played: number;
+}
 
 interface RawSnapshot {
   player_id: string;
@@ -34,13 +44,15 @@ export default function RecordsPage() {
   const { team } = useTeam();
   const [snapshots, setSnapshots] = useState<RawSnapshot[]>([]);
   const [players, setPlayers] = useState<Record<string, PlayerInfo>>({});
+  const [teamRecords, setTeamRecords] = useState<TeamRecordRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     (async () => {
       setLoading(true);
-      const [{ data: snaps, error: sErr }, { data: entries, error: pErr }] = await Promise.all([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [{ data: snaps, error: sErr }, { data: entries, error: pErr }, { data: recRows, error: recErr }] = await Promise.all([
         supabase
           .from("stat_snapshots")
           .select("player_id, upload_date, season_year, stats")
@@ -50,10 +62,18 @@ export default function RecordsPage() {
           .from("roster_entries")
           .select("player_id, jersey_number, season_year, players(id, first_name, last_name)")
           .eq("team_id", team.id),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any)
+          .from("team_season_records")
+          .select("season_year, wins, losses, ties, games_played")
+          .eq("team_id", team.id)
+          .order("season_year", { ascending: false }),
       ]);
       if (!active) return;
       if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
       if (pErr) toast.error(`Couldn't load players: ${pErr.message}`);
+      if (recErr) toast.error(`Couldn't load team records: ${recErr.message}`);
+      setTeamRecords(((recRows ?? []) as TeamRecordRow[]));
 
       setSnapshots(
         ((snaps ?? []) as RawSnapshot[]).map((s) => ({
@@ -117,6 +137,34 @@ export default function RecordsPage() {
           one season; rate stats are recomputed from that season&apos;s counters.
         </p>
       </div>
+
+      {teamRecords.length > 0 && (
+        <div className="mb-8">
+          <h3 className="font-display text-xl text-sa-blue uppercase tracking-wider mb-3">
+            Team Record by Season
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {teamRecords.map((r) => {
+              const label = r.ties > 0
+                ? `${r.wins}-${r.losses}-${r.ties}`
+                : `${r.wins}-${r.losses}`;
+              return (
+                <Card key={r.season_year} className="p-4 flex flex-col gap-1">
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                    {seasonLabel(r.season_year)}
+                  </p>
+                  <p className="font-display font-mono-stat text-3xl text-sa-orange leading-none">
+                    {label}
+                  </p>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {r.games_played} game{r.games_played === 1 ? "" : "s"}
+                  </p>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <Tabs defaultValue="batting" className="w-full">
         <TabsList className="grid w-full grid-cols-3 max-w-md">

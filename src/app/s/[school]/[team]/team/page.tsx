@@ -14,7 +14,8 @@ import { ArrowDown, ArrowUp, Lock } from "lucide-react";
 import { StatLabel } from "@/components/StatTooltip";
 import { formatStat } from "@/lib/csvParser";
 import { GLOSSARY } from "@/lib/glossary";
-import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
+import { currentSeasonYear, isSeasonLockedFor, seasonLabel } from "@/lib/season";
+import { fetchTeamSeasonLocks, type SeasonLockRow } from "@/lib/season-locks";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
 import { aggregateByDate } from "@/lib/aggregate";
 import { buildLeaderboard, qualifierNote } from "@/lib/team-stats";
@@ -59,6 +60,7 @@ export default function TeamTotalsPage() {
   const [allPlayers, setAllPlayers] = useState<Record<string, PlayerInfo>>({});
   const [loading, setLoading] = useState(true);
   const [season, setSeason] = useState<number>(currentSeasonYear());
+  const [locks, setLocks] = useState<Map<number, SeasonLockRow>>(new Map());
 
   const [leaderStat, setLeaderStat] = useState<Record<Section, string>>({ batting: "AVG", pitching: "ERA", fielding: "FPCT" });
   const [leaderDir, setLeaderDir] = useState<Record<Section, "desc" | "asc">>({ batting: "desc", pitching: "asc", fielding: "desc" });
@@ -66,7 +68,7 @@ export default function TeamTotalsPage() {
   useEffect(() => {
     setLoading(true);
     const load = async () => {
-      const [{ data: snaps, error: sErr }, { data: entries, error: pErr }] = await Promise.all([
+      const [{ data: snaps, error: sErr }, { data: entries, error: pErr }, locksMap] = await Promise.all([
         supabase
           .from("stat_snapshots")
           .select("player_id, upload_date, season_year, stats")
@@ -76,9 +78,11 @@ export default function TeamTotalsPage() {
           .from("roster_entries")
           .select("player_id, jersey_number, season_year, players(id, first_name, last_name)")
           .eq("team_id", team.id),
+        fetchTeamSeasonLocks(supabase, team.id),
       ]);
       if (sErr) toast.error(`Couldn't load snapshots: ${sErr.message}`);
       if (pErr) toast.error(`Couldn't load players: ${pErr.message}`);
+      setLocks(locksMap);
       setAllSnapshots(
         (snaps ?? []).map((s) => ({
           player_id: s.player_id,
@@ -120,7 +124,9 @@ export default function TeamTotalsPage() {
     return Array.from(yrs).sort((a, b) => b - a);
   }, [allSnapshots, allPlayers]);
 
-  const closed = isSeasonClosed(season);
+  const lockedYears = useMemo(() => new Set(locks.keys()), [locks]);
+  const closed = isSeasonLockedFor(season, lockedYears);
+  const manualLock = locks.get(season);
   const snapshots = useMemo(() => allSnapshots.filter((s) => s.season_year === season), [allSnapshots, season]);
 
   const byDate = useMemo(() => aggregateByDate(snapshots), [snapshots]);
@@ -171,8 +177,15 @@ export default function TeamTotalsPage() {
         </div>
         <div className="flex items-center gap-2">
           {closed && (
-            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-sa-orange bg-sa-orange/10 px-2 py-1 rounded">
-              <Lock className="w-3 h-3" /> Archived
+            <span
+              className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-sa-orange bg-sa-orange/10 px-2 py-1 rounded"
+              title={
+                manualLock
+                  ? `Archived manually on ${formatDatePart(manualLock.locked_at, "short", school.timezone)}`
+                  : "Auto-archived after May 31"
+              }
+            >
+              <Lock className="w-3 h-3" /> {manualLock ? "Archived (manual)" : "Archived"}
             </span>
           )}
           <Select value={String(season)} onValueChange={(v) => setSeason(Number(v))}>
@@ -180,7 +193,7 @@ export default function TeamTotalsPage() {
             <SelectContent>
               {seasons.map((y) => (
                 <SelectItem key={y} value={String(y)}>
-                  {seasonLabel(y)}{isSeasonClosed(y) ? " (closed)" : ""}
+                  {seasonLabel(y)}{isSeasonLockedFor(y, lockedYears) ? " (closed)" : ""}
                 </SelectItem>
               ))}
             </SelectContent>

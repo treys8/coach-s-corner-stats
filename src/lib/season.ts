@@ -19,3 +19,14 @@ export const isSeasonClosed = (year: number, today: Date = new Date()): boolean 
 export const currentSeasonYear = (today: Date = new Date()): number => seasonYearFor(today);
 
 export const seasonLabel = (year: number): string => `${year} Season`;
+
+// Combined "is this team's season editable?" predicate. Mirrors the SQL
+// public.is_season_locked(team_id, year) and is the value pages should use
+// to drive the closed/archived UI state. Pass the team's manual-lock set
+// (from fetchTeamSeasonLocks); auto May-31 closure is folded in here so the
+// caller doesn't have to OR the two sources themselves.
+export const isSeasonLockedFor = (
+  year: number,
+  manualLocks: ReadonlySet<number>,
+  today: Date = new Date(),
+): boolean => isSeasonClosed(year, today) || manualLocks.has(year);

@@ -8,7 +8,8 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, Users, Lock } from "lucide-react";
-import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
+import { currentSeasonYear, isSeasonLockedFor, seasonLabel } from "@/lib/season";
+import { fetchTeamSeasonLocks, type SeasonLockRow } from "@/lib/season-locks";
 import { useSchool } from "@/lib/contexts/school";
 import { formatDatePart } from "@/lib/date-display";
 import { useTeam } from "@/lib/contexts/team";
@@ -22,6 +23,14 @@ interface RosterRow {
   season_year: number;
 }
 
+interface TeamRecordRow {
+  season_year: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  games_played: number;
+}
+
 const supabase = createClient();
 
 export default function RosterPage() {
@@ -31,11 +40,19 @@ export default function RosterPage() {
   const [loading, setLoading] = useState(true);
   const [latestUpload, setLatestUpload] = useState<string | null>(null);
   const [season, setSeason] = useState<number>(currentSeasonYear());
+  const [locks, setLocks] = useState<Map<number, SeasonLockRow>>(new Map());
+  const [records, setRecords] = useState<Map<number, TeamRecordRow>>(new Map());
 
   useEffect(() => {
     setLoading(true);
     const load = async () => {
-      const [{ data: entries, error: rErr }, { data: uploads, error: uErr }] = await Promise.all([
+      const [
+        { data: entries, error: rErr },
+        { data: uploads, error: uErr },
+        locksMap,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { data: recRows, error: recErr },
+      ] = await Promise.all([
         supabase
           .from("roster_entries")
           .select("player_id, jersey_number, position, season_year, players(first_name, last_name)")
@@ -45,9 +62,16 @@ export default function RosterPage() {
           .select("upload_date, season_year")
           .eq("team_id", team.id)
           .order("upload_date", { ascending: false }),
+        fetchTeamSeasonLocks(supabase, team.id),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any)
+          .from("team_season_records")
+          .select("season_year, wins, losses, ties, games_played")
+          .eq("team_id", team.id),
       ]);
       if (rErr) toast.error(`Couldn't load roster: ${rErr.message}`);
       if (uErr) toast.error(`Couldn't load upload history: ${uErr.message}`);
+      if (recErr) toast.error(`Couldn't load team record: ${recErr.message}`);
       const rows: RosterRow[] = ((entries ?? []) as unknown as Array<{
         player_id: string;
         jersey_number: string | null;
@@ -66,10 +90,16 @@ export default function RosterPage() {
         }));
       setAllEntries(rows);
       setLatestUpload(uploads?.[0]?.upload_date ?? null);
+      setLocks(locksMap);
+      const recMap = new Map<number, TeamRecordRow>();
+      ((recRows ?? []) as TeamRecordRow[]).forEach((r) => recMap.set(r.season_year, r));
+      setRecords(recMap);
       setLoading(false);
     };
     load();
   }, [team.id]);
+
+  const lockedYears = useMemo(() => new Set(locks.keys()), [locks]);
 
   const seasons = useMemo(() => {
     const yrs = new Set<number>([currentSeasonYear()]);
@@ -94,14 +124,31 @@ export default function RosterPage() {
       });
   }, [allEntries, season]);
 
-  const closed = isSeasonClosed(season);
+  const closed = isSeasonLockedFor(season, lockedYears);
+  const manualLock = locks.get(season);
+  const record = records.get(season);
+  const recordLabel = record
+    ? record.ties > 0
+      ? `${record.wins}-${record.losses}-${record.ties}`
+      : `${record.wins}-${record.losses}`
+    : null;
 
   return (
     <div className="container mx-auto px-6 py-10">
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Roster</p>
-          <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">{team.name}</h2>
+          <div className="flex items-baseline gap-4 flex-wrap">
+            <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">{team.name}</h2>
+            {recordLabel && (
+              <span
+                className="font-display font-mono-stat text-3xl md:text-4xl text-sa-orange leading-none"
+                title={`${record!.games_played} games played in ${season}`}
+              >
+                {recordLabel}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-3 mt-2 flex-wrap">
             {latestUpload && (
               <p className="text-sm text-muted-foreground">
@@ -112,8 +159,16 @@ export default function RosterPage() {
               </p>
             )}
             {closed && (
-              <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-sa-orange bg-sa-orange/10 px-2 py-1 rounded">
-                <Lock className="w-3 h-3" /> Archived season
+              <span
+                className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-sa-orange bg-sa-orange/10 px-2 py-1 rounded"
+                title={
+                  manualLock
+                    ? `Archived manually on ${formatDatePart(manualLock.locked_at, "short", school.timezone)}`
+                    : "Auto-archived after May 31"
+                }
+              >
+                <Lock className="w-3 h-3" />{" "}
+                {manualLock ? "Archived season (manual)" : "Archived season"}
               </span>
             )}
           </div>
@@ -124,7 +179,7 @@ export default function RosterPage() {
             <SelectContent>
               {seasons.map((y) => (
                 <SelectItem key={y} value={String(y)}>
-                  {seasonLabel(y)}{isSeasonClosed(y) ? " (closed)" : ""}
+                  {seasonLabel(y)}{isSeasonLockedFor(y, lockedYears) ? " (closed)" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
