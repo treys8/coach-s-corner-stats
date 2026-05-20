@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { StatLabel } from "@/components/StatTooltip";
@@ -44,7 +45,10 @@ export function Leaderboard({
   teamSlugFor,
   teamLabelFor,
 }: LeaderboardProps) {
-  const top = rankLeaderboard(rows, cfg).slice(0, TOP_N);
+  const top = useMemo(
+    () => rankLeaderboard(rows, cfg).slice(0, TOP_N),
+    [rows, cfg],
+  );
 
   return (
     <Card className="p-5">

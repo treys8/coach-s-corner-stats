@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -17,10 +18,16 @@ import { currentSeasonYear, isSeasonClosed, seasonLabel } from "@/lib/season";
 import { parseSnapshotStats, sectionOf, type Section, type SnapshotStats } from "@/lib/snapshots";
 import { aggregateByDate } from "@/lib/aggregate";
 import { buildLeaderboard, qualifierNote } from "@/lib/team-stats";
-import { LineChart, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useSchool } from "@/lib/contexts/school";
 import { useTeam } from "@/lib/contexts/team";
 import { formatDatePart } from "@/lib/date-display";
+
+// Recharts is ~150KB gzipped and only rendered when ≥2 dated snapshots exist.
+// Code-split so first-paint on this page doesn't pay for it.
+const TrendChart = dynamic(() => import("@/components/team/TrendChart"), {
+  ssr: false,
+  loading: () => <div className="h-80" />,
+});
 
 interface Snapshot {
   player_id: string;
@@ -152,22 +159,7 @@ export default function TeamTotalsPage() {
       keys.forEach((k) => { row[k] = d.agg[section][k] ?? 0; });
       return row;
     });
-    const colors = ["#FF4A00", "#0021A5", "#A7A8AA", "#001f6b"];
-    return (
-      <div className="h-80">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-            <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <RTooltip contentStyle={{ background: "hsl(var(--sa-blue-deep))", border: "1px solid hsl(var(--sa-orange))", color: "white", fontSize: 12 }} />
-            {keys.map((k, i) => (
-              <Line key={k} type="monotone" dataKey={k} stroke={colors[i % colors.length]} strokeWidth={2} />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    );
+    return <TrendChart data={data} keys={keys} />;
   };
 
   return (

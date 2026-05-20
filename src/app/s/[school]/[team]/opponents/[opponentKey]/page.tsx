@@ -32,6 +32,9 @@ interface AbRow {
   result: string;
   rbi: number;
   game_id: string;
+  // !inner join on opponent_players: rows where the FK doesn't resolve are
+  // filtered out server-side, so this is always present in the result set.
+  opponent_players: OpponentRow;
 }
 
 const HIT_RESULTS = new Set(["1B", "2B", "3B", "HR"]);
@@ -88,11 +91,15 @@ export default function OpponentDetailPage({
       }
       setDisplayName(gameRows[0].opponent ?? decoded.value);
 
-      // Opponent players who batted against us in these games.
+      // Opponent players who batted against us in these games. Embed the
+      // opponent_players row directly so we don't round-trip a second
+      // .in("id", playerIds) lookup just to get name/jersey.
       const gameIds = gameRows.map((g) => g.id);
       const abRes = await supabase
         .from("at_bats")
-        .select("opponent_batter_id, result, rbi, game_id")
+        .select(
+          "opponent_batter_id, result, rbi, game_id, opponent_players!inner(id, first_name, last_name, jersey_number)",
+        )
         .in("game_id", gameIds)
         .not("opponent_batter_id", "is", null);
       if (!active) return;
@@ -104,24 +111,13 @@ export default function OpponentDetailPage({
       const abs = (abRes.data ?? []) as unknown as AbRow[];
       setAtBats(abs);
 
-      const playerIds = Array.from(
-        new Set(abs.map((a) => a.opponent_batter_id).filter(Boolean) as string[]),
-      );
-      if (playerIds.length === 0) {
-        setPlayers([]);
-        setLoading(false);
-        return;
+      const playersById = new Map<string, OpponentRow>();
+      for (const ab of abs) {
+        if (!playersById.has(ab.opponent_players.id)) {
+          playersById.set(ab.opponent_players.id, ab.opponent_players);
+        }
       }
-      const playersRes = await supabase
-        .from("opponent_players")
-        .select("id, first_name, last_name, jersey_number")
-        .in("id", playerIds);
-      if (!active) return;
-      if (playersRes.error) {
-        toast.error(`Couldn't load opponent players: ${playersRes.error.message}`);
-      } else {
-        setPlayers((playersRes.data ?? []) as OpponentRow[]);
-      }
+      setPlayers(Array.from(playersById.values()));
       setLoading(false);
     })();
     return () => { active = false; };
