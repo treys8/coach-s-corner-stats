@@ -10,6 +10,7 @@ import {
 import { RESULT_DESC } from "@/lib/scoring/at-bat-helpers";
 import type {
   AtBatResult,
+  FielderTouch,
   K3ReachSource,
   PitchType,
 } from "@/lib/scoring/types";
@@ -35,6 +36,20 @@ interface PitchRailProps {
   canRecord: (r: AtBatResult) => boolean;
   armedResult: ArmedState | null;
   setArmedResult: (v: ArmedState | null) => void;
+  /** Multi-step chain (DP/TP) — present once the coach has dropped at
+   *  least one fielder for a DP/TP arm. Drives the Commit / Undo / Cancel
+   *  controls inside the drag prompt. */
+  pendingChain: FielderTouch[];
+  commitChain: () => void;
+  popChainStep: () => void;
+  cancelChain: () => void;
+  /** True when the pending chain enumerates enough outs (2 for DP, 3 for
+   *  TP). Used to enable/disable the Commit button. */
+  canCommitChain: boolean;
+  /** Force-outs the chain currently attributes (for "X of Y" copy). */
+  chainOuts: number;
+  /** Required force-outs for the armed result (2 for DP, 3 for TP). */
+  chainOutsRequired: number;
 }
 
 type Mode = "pitchPad" | "armedDrag" | "pickContact";
@@ -74,6 +89,13 @@ export function PitchRail({
   canRecord,
   armedResult,
   setArmedResult,
+  pendingChain,
+  commitChain,
+  popChainStep,
+  cancelChain,
+  canCommitChain,
+  chainOuts,
+  chainOutsRequired,
 }: PitchRailProps) {
   const [showOutcomesManually, setShowOutcomesManually] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -245,6 +267,13 @@ export function PitchRail({
             armedResult={armedResult}
             onCancel={() => setArmedResult(null)}
             submitting={submitting}
+            pendingChain={pendingChain}
+            commitChain={commitChain}
+            popChainStep={popChainStep}
+            cancelChain={cancelChain}
+            canCommitChain={canCommitChain}
+            chainOuts={chainOuts}
+            chainOutsRequired={chainOutsRequired}
           />
         )}
       </div>
@@ -256,13 +285,93 @@ interface ArmedDragBodyProps {
   armedResult: AtBatResult;
   onCancel: () => void;
   submitting: boolean;
+  pendingChain: FielderTouch[];
+  commitChain: () => void;
+  popChainStep: () => void;
+  cancelChain: () => void;
+  canCommitChain: boolean;
+  chainOuts: number;
+  chainOutsRequired: number;
 }
 
 /** Body shown after the coach picks an in-play outcome. Auto-commit flow:
  *  dragging a fielder on the diamond submits the play immediately with the
  *  drop coords as the spray location. Coach has Cancel to re-arm; mistakes
- *  after commit go through the top-bar Undo or Edit last play. */
-function ArmedDragBody({ armedResult, onCancel, submitting }: ArmedDragBodyProps) {
+ *  after commit go through the top-bar Undo or Edit last play.
+ *
+ *  Multi-step flow (DP/TP): each drop appends to `pendingChain` instead
+ *  of committing. The body shows the in-progress chain notation plus
+ *  Commit / Undo last drop controls so the coach can capture the full
+ *  6-4-3 / 4-6-3 / 1-2-3 path before submitting. */
+function ArmedDragBody({
+  armedResult,
+  onCancel,
+  submitting,
+  pendingChain,
+  commitChain,
+  popChainStep,
+  cancelChain,
+  canCommitChain,
+  chainOuts,
+  chainOutsRequired,
+}: ArmedDragBodyProps) {
+  const isMultiStep = armedResult === "DP" || armedResult === "TP";
+  const chainLen = pendingChain.length;
+
+  if (isMultiStep && chainLen > 0) {
+    return (
+      <div className="space-y-3 text-sm">
+        <div className="rounded-md border bg-muted/40 px-3 py-2">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground">Recording</div>
+          <div className="mt-1 font-semibold text-sa-blue-deep">
+            {RESULT_DESC[armedResult] ?? armedResult}
+          </div>
+          <div className="mt-2 flex items-center gap-1 flex-wrap">
+            {pendingChain.map((step, i) => (
+              <span key={i} className="inline-flex items-center gap-1">
+                {i > 0 && <span className="text-muted-foreground">→</span>}
+                <span className="rounded bg-sa-blue-deep/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-sa-blue-deep">
+                  {step.position}
+                </span>
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {canCommitChain
+              ? "Chain captured. Tap Commit, or drop more fielders to refine."
+              : `${chainOuts} of ${chainOutsRequired} outs captured — drop the next fielder on a base.`}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={popChainStep}
+            disabled={submitting}
+          >
+            Undo drop
+          </Button>
+          <Button
+            className="w-full bg-sa-orange hover:bg-sa-orange/90 text-white"
+            onClick={commitChain}
+            disabled={submitting || !canCommitChain}
+          >
+            Commit
+          </Button>
+        </div>
+        <Button
+          variant="ghost"
+          className="w-full"
+          onClick={cancelChain}
+          disabled={submitting}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3 text-sm">
       <div className="rounded-md border bg-muted/40 px-3 py-2">
@@ -271,7 +380,9 @@ function ArmedDragBody({ armedResult, onCancel, submitting }: ArmedDragBodyProps
           {RESULT_DESC[armedResult] ?? armedResult}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Drag the fielder to where the ball was {isCaughtOutcome(armedResult) ? "caught" : "hit"}.
+          {isMultiStep
+            ? "Drag the fielder who first touched the ball. Then drag each receiving fielder onto the bag covered."
+            : `Drag the fielder to where the ball was ${isCaughtOutcome(armedResult) ? "caught" : "hit"}.`}
         </p>
       </div>
 

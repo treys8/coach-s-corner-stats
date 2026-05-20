@@ -169,6 +169,7 @@ export function rollupFielding(
     // Result-level overlays (DP/TP) still increment on the primary fielder.
     const chain = ab.fielder_chain;
     const chainIds = ab.fielder_chain_player_ids;
+    const isDpOrTp = ab.result === "DP" || ab.result === "TP";
     if (chain && chain.length > 0 && chainIds && chainIds.length === chain.length) {
       const lastIdx = chain.length - 1;
       const errIdx = ab.error_step_index ?? null;
@@ -189,7 +190,20 @@ export function rollupFielding(
             ensure(pid).A += 1;
           }
         } else {
+          // Non-terminal step: always +1 A. On a DP/TP, a non-terminal
+          // `received` step on a base is itself a force-out — credit
+          // both PO (the retire at that bag) and A (the throw to the
+          // next fielder). Scoped to DP/TP so non-DP chains (FC, hits
+          // with throws) don't over-credit a receiver who didn't retire
+          // anyone.
           ensure(pid).A += 1;
+          if (
+            isDpOrTp &&
+            chain[i].action === "received" &&
+            chain[i].target
+          ) {
+            ensure(pid).PO += 1;
+          }
         }
       }
       // DP/TP overlay credit still goes to the primary fielder so the

@@ -5,6 +5,7 @@ import { defaultAdvances } from "@/lib/scoring/advances";
 import { postEvent } from "@/lib/scoring/events-client";
 import {
   autoRBI,
+  buildChainAdvances,
   chainNotation,
   defaultBattedBallType,
   describePlay,
@@ -14,6 +15,7 @@ import {
 import type {
   AtBatPayload,
   AtBatResult,
+  Bases,
   BattedBallType,
   FielderTouch,
   K3ReachSource,
@@ -23,6 +25,7 @@ import type {
 } from "@/lib/scoring/types";
 import type { OpposingBatterProfile } from "@/lib/opponents/profile";
 import type { FielderPosition } from "@/components/scoring/DefensiveDiamond";
+import { nearestBaseFromNormalized } from "@/components/scoring/diamond-geometry";
 import type { UseGameEventsResult } from "./useGameEvents";
 import { announceAutoEndHalf } from "./useGameEvents";
 
@@ -87,6 +90,29 @@ export interface UseAtBatActionsResult {
    *  by `onFielderDrop` when building the auto-commit chain. */
   battedBallType: BattedBallType | null;
   setBattedBallType: (t: BattedBallType | null) => void;
+  /** Pending fielder chain for multi-step outcomes (DP/TP). Empty until the
+   *  first drop. Coach drops fielders one at a time; the diamond renders
+   *  numbered markers + arrows from this prop. */
+  pendingChain: FielderTouch[];
+  /** Commit the in-progress chain as a single at-bat. Auto-derives runner
+   *  outs from each step's snapped base + the snapshot of bases captured
+   *  at chain start. No-op when armedResult isn't multi-step. */
+  commitChain: () => void;
+  /** Pop the last step off the pending chain. Diamond's marker layer trims
+   *  itself via the chain-length effect. */
+  popChainStep: () => void;
+  /** Clear the pending chain and disarm the outcome. */
+  cancelChain: () => void;
+  /** True when the pending chain enumerates enough outs for the armed
+   *  result (2 for DP, 3 for TP). Drives the Commit button enabled state.
+   *  False when armedResult is not DP/TP. */
+  canCommitChain: boolean;
+  /** Force-outs currently enumerated by the chain. Used by the rail for
+   *  the "X of Y outs captured" copy. */
+  chainOuts: number;
+  /** Required force-outs for the armed result (2 for DP, 3 for TP, 0
+   *  otherwise). */
+  chainOutsRequired: number;
 }
 
 /** Internal chain-extras bundle threaded into submitAtBat. */
@@ -147,16 +173,33 @@ export function useAtBatActions({
   // auto-commit `onFielderDrop` consumes this when building the chain;
   // corrections happen via Edit last play. Reset on submit / cancel / re-arm.
   const [battedBallType, setBattedBallType] = useState<BattedBallType | null>(null);
+  // Multi-step chain accumulator for DP/TP. Coach drops fielders one at a
+  // time; only commits when the coach taps Commit. Snapshot of bases at the
+  // first drop is held alongside so runner-out attribution at commit time
+  // doesn't drift if any other state moves underneath.
+  const [pendingChain, setPendingChain] = useState<FielderTouch[]>([]);
+  const [chainStartBases, setChainStartBases] = useState<Bases | null>(null);
+  const [chainStartSpray, setChainStartSpray] = useState<{ x: number; y: number } | null>(null);
 
   const resetChain = () => {
     setBattedBallType(null);
+    setPendingChain([]);
+    setChainStartBases(null);
+    setChainStartSpray(null);
   };
 
   const setArmedResultClearing = (v: ArmedState | null) => {
     setArmedResult(v);
+    // Pending chain is tied to the specific armed outcome — clear on any
+    // arm change (cancel, re-arm to a different outcome, or first-arm).
+    // Otherwise a stale DP/TP chain marker would linger on the diamond
+    // after the coach picks a different result.
+    setPendingChain([]);
+    setChainStartBases(null);
+    setChainStartSpray(null);
     if (v === null) {
       setArmedExtras(null);
-      resetChain();
+      setBattedBallType(null);
     } else if (v !== ARMED_IN_PLAY_PENDING) {
       // Transition from IN_PLAY_PENDING → concrete result. Smart-default
       // the batted-ball-type chip based on the picked outcome (FO→fly,
@@ -381,6 +424,9 @@ export function useAtBatActions({
   // immediately with a single-step chain so notation (F8 / 6 / SF8) renders.
   // Corrections go through the top-bar Undo (voids the at_bat) or Edit
   // last play (lets the coach add a multi-step chain or flip hit↔error).
+  // EXCEPTION: DP/TP need 2-3 drops to capture the relay path (6-4-3, 1-2-3,
+  // etc.). They append to `pendingChain` instead and wait for an explicit
+  // Commit tap so the coach can build the full chain.
   const onFielderDrop = (x: number, y: number, fielder: FielderPosition) => {
     if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
     if (submitting) return;
@@ -392,8 +438,31 @@ export function useAtBatActions({
       armedResult === "PO" ||
       armedResult === "SF" ||
       armedResult === "IF";
-    const action: FielderTouch["action"] = isOf && looksFly ? "caught" : "fielded";
-    const chainStep: FielderTouch = { position: fielder, action };
+    const firstAction: FielderTouch["action"] = isOf && looksFly ? "caught" : "fielded";
+
+    if (armedResult === "DP" || armedResult === "TP") {
+      // Multi-step: append, defer commit. First step uses the same
+      // fielded/caught action rules; subsequent steps are throw-receivers
+      // snapped to the nearest base.
+      const isFirstStep = pendingChain.length === 0;
+      const target = isFirstStep ? undefined : nearestBaseFromNormalized(x, y);
+      const action: FielderTouch["action"] = isFirstStep
+        ? firstAction
+        : target
+          ? "received"
+          : "tagged";
+      const step: FielderTouch = target
+        ? { position: fielder, action, target }
+        : { position: fielder, action };
+      if (isFirstStep) {
+        setChainStartBases(state.bases);
+        setChainStartSpray({ x, y });
+      }
+      setPendingChain((prev) => [...prev, step]);
+      return;
+    }
+
+    const chainStep: FielderTouch = { position: fielder, action: firstAction };
     const bbt = battedBallType ?? defaultBattedBallType(armedResult);
     void submitAtBat(
       armedResult,
@@ -405,6 +474,54 @@ export function useAtBatActions({
         batted_ball_type: bbt ?? undefined,
         error_step_index: null,
       },
+    );
+  };
+
+  const popChainStep = () => {
+    setPendingChain((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.slice(0, -1);
+      if (next.length === 0) {
+        setChainStartBases(null);
+        setChainStartSpray(null);
+      }
+      return next;
+    });
+  };
+
+  const cancelChain = () => {
+    setPendingChain([]);
+    setChainStartBases(null);
+    setChainStartSpray(null);
+    setArmedResultClearing(null);
+  };
+
+  const commitChain = () => {
+    if (submitting) return;
+    if (armedResult !== "DP" && armedResult !== "TP") return;
+    if (pendingChain.length === 0) return;
+    const startBases = chainStartBases ?? state.bases;
+    const spray = chainStartSpray ?? { x: 0.5, y: 0.5 };
+    const advances = buildChainAdvances(pendingChain, startBases);
+    // Defense in depth: even if a caller invokes commitChain without
+    // checking canCommitChain, refuse to ship a DP/TP that doesn't
+    // enumerate enough outs — the at_bat would land with a wrong
+    // base/out state.
+    const requiredOuts = armedResult === "DP" ? 2 : 3;
+    if (advances.filter((a) => a.to === "out").length < requiredOuts) return;
+    const firstStep = pendingChain[0];
+    const bbt = battedBallType ?? defaultBattedBallType(armedResult);
+    void submitAtBat(
+      armedResult,
+      { x: spray.x, y: spray.y, fielder: firstStep.position as FielderPosition },
+      undefined,
+      armedExtras ?? undefined,
+      {
+        fielder_chain: pendingChain,
+        batted_ball_type: bbt ?? undefined,
+        error_step_index: null,
+      },
+      advances,
     );
   };
 
@@ -420,6 +537,18 @@ export function useAtBatActions({
     void submitAtBat(armedResult, null, undefined, armedExtras ?? undefined);
   };
 
+  // Commit gate for multi-step DP/TP. The chain is incomplete until it
+  // enumerates DEFAULT_OUTS_FOR[result] real outs in the derived advances
+  // (a "tagged" step with no `target` doesn't count, since it attributes
+  // no out). The Commit button stays disabled until then so the coach
+  // doesn't accidentally record a DP that only retired one runner.
+  const chainOutsRequired = armedResult === "DP" ? 2 : armedResult === "TP" ? 3 : 0;
+  const chainOuts =
+    chainOutsRequired > 0 && chainStartBases && pendingChain.length >= 2
+      ? buildChainAdvances(pendingChain, chainStartBases).filter((a) => a.to === "out").length
+      : 0;
+  const canCommitChain = chainOutsRequired > 0 && chainOuts >= chainOutsRequired;
+
   return {
     armedResult,
     setArmedResult: setArmedResultClearing,
@@ -431,5 +560,12 @@ export function useAtBatActions({
     skipLocation,
     battedBallType,
     setBattedBallType,
+    pendingChain,
+    commitChain,
+    popChainStep,
+    cancelChain,
+    canCommitChain,
+    chainOuts,
+    chainOutsRequired,
   };
 }

@@ -290,6 +290,158 @@ describe("rollupFielding", () => {
     expect(first.PO).toBe(0);
   });
 
+  it("DP 6-4-3: middle fielder (2B) gets PO at second + A on throw to first", () => {
+    // R1 on, ground ball to SS, throw to 2B at second (force R1), throw
+    // to 1B at first (force batter). 2B is credited with both PO (the
+    // force-out at second) and A (the throw to first).
+    const events = [
+      startGame(),
+      // Put R1 on via a walk.
+      fieldingPA({
+        result: "BB",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r1" }],
+      }),
+      // 6-4-3 DP.
+      fieldingPA({
+        result: "DP",
+        fielder_chain: [
+          { position: "SS", action: "fielded" },
+          { position: "2B", action: "received", target: "second" },
+          { position: "1B", action: "received", target: "first" },
+        ],
+        runner_advances: [
+          { from: "batter", to: "out", player_id: null },
+          { from: "first", to: "out", player_id: "opp-r1" },
+        ],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    const ss = fielding.get("p-ss")!;
+    const second = fielding.get("p-2b")!;
+    const first = fielding.get("p-1b")!;
+    expect(ss.A).toBe(1);
+    expect(ss.PO).toBe(0);
+    expect(second.A).toBe(1);
+    expect(second.PO).toBe(1); // NEW: middle-fielder force-out PO
+    expect(first.PO).toBe(1);
+    expect(first.A).toBe(0);
+    // DP overlay still on the primary fielder.
+    expect(ss.DP).toBe(1);
+  });
+
+  it("DP 4-6-3: same shape, different positions", () => {
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "BB",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r1" }],
+      }),
+      fieldingPA({
+        result: "DP",
+        fielder_chain: [
+          { position: "2B", action: "fielded" },
+          { position: "SS", action: "received", target: "second" },
+          { position: "1B", action: "received", target: "first" },
+        ],
+        runner_advances: [
+          { from: "batter", to: "out", player_id: null },
+          { from: "first", to: "out", player_id: "opp-r1" },
+        ],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    expect(fielding.get("p-2b")!.A).toBe(1);
+    expect(fielding.get("p-ss")!.A).toBe(1);
+    expect(fielding.get("p-ss")!.PO).toBe(1); // SS now gets the PO at 2nd
+    expect(fielding.get("p-1b")!.PO).toBe(1);
+    expect(fielding.get("p-2b")!.DP).toBe(1); // primary fielder overlay
+  });
+
+  it("DP L6-3 caught liner doubled off at 1st: SS PO (catch), 1B PO (terminal double-off)", () => {
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "BB",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r1" }],
+      }),
+      fieldingPA({
+        result: "DP",
+        fielder_chain: [
+          { position: "SS", action: "caught" },
+          { position: "1B", action: "received", target: "first" },
+        ],
+        batted_ball_type: "line",
+        runner_advances: [
+          { from: "batter", to: "out", player_id: null },
+          { from: "first", to: "out", player_id: "opp-r1" },
+        ],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    // SS catches the liner — that's an A (non-terminal). Terminal 1B
+    // gets PO. The middle-fielder PO+A overlay doesn't apply because
+    // the caught step has no `target` (it's a catch, not a received
+    // throw on a base).
+    expect(fielding.get("p-ss")!.A).toBe(1);
+    expect(fielding.get("p-ss")!.PO).toBe(0);
+    expect(fielding.get("p-1b")!.PO).toBe(1);
+    expect(fielding.get("p-ss")!.DP).toBe(1);
+  });
+
+  it("FC multi-step (regression guard): non-DP receiver does NOT get the extra PO", () => {
+    // R1 on, FC at second (R1 retired), batter safe at 1st. Same
+    // chain shape as 6-4-3 but the result is FC, not DP. The middle
+    // fielder should NOT get the extra PO — only DP/TP gets the overlay.
+    const events = [
+      startGame(),
+      fieldingPA({
+        result: "BB",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp-r1" }],
+      }),
+      fieldingPA({
+        result: "FC",
+        fielder_chain: [
+          { position: "SS", action: "fielded" },
+          { position: "2B", action: "received", target: "second" },
+          { position: "1B", action: "received", target: "first" },
+        ],
+        runner_advances: [
+          { from: "first", to: "out", player_id: "opp-r1" },
+          { from: "batter", to: "first", player_id: null },
+        ],
+      }),
+    ];
+    const state = replay(events);
+    const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+      stolen_bases: state.stolen_bases,
+      caught_stealing: state.caught_stealing,
+      pickoffs: state.pickoffs,
+      passed_balls: state.passed_balls,
+    });
+    expect(fielding.get("p-2b")!.A).toBe(1);
+    // Confirms the DP/TP gate works: 2B should NOT have the extra PO
+    // here even though they received at second.
+    expect(fielding.get("p-2b")!.PO).toBe(0);
+  });
+
   it("Stage 3: legacy events without fielder_chain still use fielder_position", () => {
     const events = [
       startGame(),

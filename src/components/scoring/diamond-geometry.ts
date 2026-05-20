@@ -28,3 +28,30 @@ export const BASE_XY = {
   second: [50, 54],
   third:  [34, 70],
 } as const;
+
+export const HOME_XY: [number, number] = [50, 92];
+
+// Snap a normalized (0..1) drop position to the nearest base bag. Returns
+// undefined when the drop isn't close enough to any base — used to attach
+// a `target` to non-first chain steps so notation renders "6-4-3" and the
+// runner-out attribution knows which bag was covered.
+export function nearestBaseFromNormalized(
+  xNorm: number,
+  yNorm: number,
+): "first" | "second" | "third" | "home" | undefined {
+  const x = xNorm * 100;
+  const y = yNorm * 100;
+  const SNAP_RADIUS = 8;
+  const candidates: Array<{ base: "first" | "second" | "third" | "home"; xy: readonly [number, number] }> = [
+    { base: "first",  xy: BASE_XY.first },
+    { base: "second", xy: BASE_XY.second },
+    { base: "third",  xy: BASE_XY.third },
+    { base: "home",   xy: HOME_XY },
+  ];
+  let best: { base: "first" | "second" | "third" | "home"; d: number } | null = null;
+  for (const c of candidates) {
+    const d = Math.hypot(x - c.xy[0], y - c.xy[1]);
+    if (!best || d < best.d) best = { base: c.base, d };
+  }
+  return best && best.d <= SNAP_RADIUS ? best.base : undefined;
+}

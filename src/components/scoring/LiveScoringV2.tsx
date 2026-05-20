@@ -100,6 +100,13 @@ export function LiveScoringV2({
     submitAtBat,
     submitPitch,
     onFielderDrop,
+    pendingChain,
+    commitChain,
+    popChainStep,
+    cancelChain,
+    canCommitChain,
+    chainOuts,
+    chainOutsRequired,
     submitMidPA,
     submitRunnerDrag,
     pendingRbiPrompt,
@@ -211,6 +218,13 @@ export function LiveScoringV2({
           canRecord={(r) => canRecordResult(r, state)}
           armedResult={armedResult}
           setArmedResult={setArmedResult}
+          pendingChain={pendingChain}
+          commitChain={commitChain}
+          popChainStep={popChainStep}
+          cancelChain={cancelChain}
+          canCommitChain={canCommitChain}
+          chainOuts={chainOuts}
+          chainOutsRequired={chainOutsRequired}
         />
 
         <div className="relative min-h-0 flex items-center justify-center overflow-hidden p-2">
@@ -236,6 +250,7 @@ export function LiveScoringV2({
               void submitRunnerDrag(from, target.base, target.verdict, runnerId);
             }}
             onRunnerAction={(base, runnerId) => setRunnerAction({ base, runnerId })}
+            chain={pendingChain.length > 0 ? pendingChain : undefined}
             fillContainer
           />
         </div>

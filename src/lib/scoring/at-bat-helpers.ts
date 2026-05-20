@@ -230,6 +230,93 @@ export function chainNotation(
   return digits.join("-");
 }
 
+/**
+ * Derive `RunnerAdvance[]` from a captured DP/TP fielder chain.
+ *
+ * Two play-shape branches:
+ *
+ *  - **Caught** (chain[0].action === "caught"): the batter is out by the
+ *    catch (rules-reference.md §1, §6: "A caught fly ball never creates a
+ *    force"). Subsequent steps with a snapped `target` indicate trailing
+ *    runners doubled off at that base (left early on the catch).
+ *
+ *  - **Ground ball** (chain[0].action === "fielded"): the batter is forced
+ *    to 1st, which cascades a force on R1→2nd, R2→3rd, R3→home — but only
+ *    while the bases behind are continuously occupied (rules-reference.md
+ *    §6: "forced only when there is a runner on every base behind him").
+ *    Each forced runner is retired when the chain has a `target` at their
+ *    destination; otherwise they advance safely to that base.
+ *
+ * Mid-chain steps with `action: "tagged"` and no `target` attribute no out
+ * — they record a tag attempt that didn't land or a touch without
+ * retirement. The Commit gate (`canCommitChain` in useAtBatActions)
+ * blocks submission when the chain doesn't enumerate enough outs for the
+ * result, so the coach is nudged to drop fielders more accurately.
+ *
+ * Reverse-force DPs (e.g., 3-6: batter retired at 1st first, then R1 tag
+ * at 2nd) emit the correct `RunnerAdvance` shape, but downstream
+ * timing-play consumers that need force-vs-tag semantics must consult
+ * chain order (the function does not encode reverse-force as a separate
+ * marker). Acceptable for stat rollups; flagged for future timing work.
+ *
+ * `batter` advances always carry `player_id: null` — submitAtBat
+ * re-stamps it to the reachId for the current half-inning.
+ */
+export function buildChainAdvances(
+  chain: FielderTouch[],
+  startBases: Bases,
+): RunnerAdvance[] {
+  if (chain.length < 2) return [];
+
+  const isCatch = chain[0].action === "caught";
+  const playBases = new Set<"first" | "second" | "third" | "home">();
+  for (let i = 1; i < chain.length; i++) {
+    const t = chain[i].target;
+    if (t) playBases.add(t);
+  }
+
+  if (isCatch) {
+    const advances: RunnerAdvance[] = [
+      { from: "batter", to: "out", player_id: null },
+    ];
+    if (playBases.has("first") && startBases.first) {
+      advances.push({ from: "first", to: "out", player_id: startBases.first.player_id });
+    }
+    if (playBases.has("second") && startBases.second) {
+      advances.push({ from: "second", to: "out", player_id: startBases.second.player_id });
+    }
+    if (playBases.has("third") && startBases.third) {
+      advances.push({ from: "third", to: "out", player_id: startBases.third.player_id });
+    }
+    return advances;
+  }
+
+  // Ground-ball cascade: batter forces R1 forces R2 forces R3. Breaks at
+  // the first empty base behind the runner.
+  type Step = { src: "batter" | "first" | "second" | "third"; dst: "first" | "second" | "third" | "home" };
+  const cascade: Step[] = [{ src: "batter", dst: "first" }];
+  if (startBases.first) {
+    cascade.push({ src: "first", dst: "second" });
+    if (startBases.second) {
+      cascade.push({ src: "second", dst: "third" });
+      if (startBases.third) {
+        cascade.push({ src: "third", dst: "home" });
+      }
+    }
+  }
+  return cascade.map((c) => {
+    const playerIdForSrc = (): string | null => {
+      if (c.src === "batter") return null;
+      const runner = startBases[c.src];
+      return runner ? runner.player_id : null;
+    };
+    if (playBases.has(c.dst)) {
+      return { from: c.src, to: "out", player_id: playerIdForSrc() };
+    }
+    return { from: c.src, to: c.dst, player_id: playerIdForSrc() };
+  });
+}
+
 /** Smart-default batted_ball_type from result. The chip-prompt UI pre-
  *  selects this so the coach confirms with a tap rather than reading 5
  *  options. Returns null when the outcome doesn't imply a type. */

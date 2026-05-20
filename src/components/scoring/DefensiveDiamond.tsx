@@ -475,9 +475,9 @@ export function DefensiveDiamond({
                 ? (e) => beginRunnerDrag(e, b, runner.player_id)
                 : undefined
             }
-            onPointerMove={dragging ? continueRunnerDrag : undefined}
-            onPointerUp={dragging || runnerDrag?.from === b ? endRunnerDrag : undefined}
-            onPointerCancel={dragging || runnerDrag?.from === b ? endRunnerDrag : undefined}
+            onPointerMove={runnerDrag?.from === b ? continueRunnerDrag : undefined}
+            onPointerUp={runnerDrag?.from === b ? endRunnerDrag : undefined}
+            onPointerCancel={runnerDrag?.from === b ? endRunnerDrag : undefined}
           >
             {tappable && <title>Drag to SAFE/OUT or tap to record action</title>}
             <circle
