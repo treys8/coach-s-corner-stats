@@ -44,8 +44,13 @@ export default function RosterUploadPage() {
     setResult(null);
     try {
       const buf = await file.arrayBuffer();
-      const { players, hadNumberColumn, hadPositionColumn, hadGradYearColumn } =
-        parseRosterFile(buf);
+      const {
+        players,
+        hadNumberColumn,
+        hadPositionColumn,
+        hadGradYearColumn,
+        hadGradeColumn,
+      } = parseRosterFile(buf);
 
       // Atomic upsert via SECURITY DEFINER RPC. The has_* flags tell the RPC
       // which columns to actually write — columns absent from the file are
@@ -59,6 +64,7 @@ export default function RosterUploadPage() {
         p_has_number: hadNumberColumn,
         p_has_position: hadPositionColumn,
         p_has_grad_year: hadGradYearColumn,
+        p_has_grade: hadGradeColumn,
       });
       if (rpcErr) throw rpcErr;
 
@@ -152,8 +158,9 @@ export default function RosterUploadPage() {
         <h3 className="font-display text-xl text-sa-blue-deep mb-2">Expected format</h3>
         <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
           <li>Single sheet (or CSV) with a header row including <strong>First</strong> and <strong>Last</strong> columns</li>
-          <li>Optional columns: <strong>Number</strong> (jersey), <strong>Position</strong>, <strong>Grad Year</strong></li>
-          <li>Header names are case-insensitive — <code>#</code>, <code>Jersey</code>, <code>Pos</code>, <code>Class</code> all work</li>
+          <li>Optional columns: <strong>Number</strong> (jersey), <strong>Position</strong>, <strong>Grad Year</strong>, <strong>Grade</strong></li>
+          <li>Header names are case-insensitive — <code>#</code>, <code>Jersey</code>, <code>Pos</code>, <code>Class</code>, <code>Level</code> all work</li>
+          <li><strong>Grade</strong> accepts <code>7th</code>, <code>8th</code>, <code>Fr</code>/<code>Freshman</code>, <code>So</code>/<code>Sophomore</code>, <code>Jr</code>/<code>Junior</code>, <code>Sr</code>/<code>Senior</code> (or <code>9</code>–<code>12</code>)</li>
           <li>Players are matched by First + Last name across uploads, so re-uploading is safe</li>
         </ul>
       </Card>

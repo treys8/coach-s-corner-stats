@@ -7,17 +7,25 @@ import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Upload, Users, Lock } from "lucide-react";
 import { currentSeasonYear, isSeasonLockedFor, seasonLabel } from "@/lib/season";
 import { fetchTeamSeasonLocks, type SeasonLockRow } from "@/lib/season-locks";
 import { useSchool } from "@/lib/contexts/school";
 import { formatDatePart } from "@/lib/date-display";
 import { useTeam } from "@/lib/contexts/team";
+import { PLAYER_GRADES, type PlayerGrade } from "@/lib/rosterParser";
 
 interface RosterRow {
   player_id: string;
   jersey_number: string | null;
   position: string | null;
+  grade: PlayerGrade | null;
   first_name: string;
   last_name: string;
   season_year: number;
@@ -54,7 +62,7 @@ export default function RosterPage() {
       ] = await Promise.all([
         supabase
           .from("roster_entries")
-          .select("player_id, jersey_number, position, season_year, players(first_name, last_name)")
+          .select("player_id, jersey_number, position, grade, season_year, players(first_name, last_name)")
           .eq("team_id", team.id),
         supabase
           .from("csv_uploads")
@@ -74,6 +82,7 @@ export default function RosterPage() {
         player_id: string;
         jersey_number: string | null;
         position: string | null;
+        grade: PlayerGrade | null;
         season_year: number;
         players: { first_name: string; last_name: string } | null;
       }>)
@@ -82,6 +91,7 @@ export default function RosterPage() {
           player_id: e.player_id,
           jersey_number: e.jersey_number,
           position: e.position,
+          grade: e.grade,
           season_year: e.season_year,
           first_name: e.players!.first_name,
           last_name: e.players!.last_name,
@@ -98,6 +108,24 @@ export default function RosterPage() {
   }, [team.id]);
 
   const lockedYears = useMemo(() => new Set(locks.keys()), [locks]);
+
+  const handleSetGrade = async (playerId: string, grade: PlayerGrade) => {
+    const { error: rpcErr } = await (supabase as any).rpc("set_roster_entry_grade", {
+      p_team_id: team.id,
+      p_season_year: season,
+      p_player_id: playerId,
+      p_grade: grade,
+    });
+    if (rpcErr) {
+      toast.error(`Couldn't save grade: ${rpcErr.message}`);
+      return;
+    }
+    setAllEntries((prev) =>
+      prev.map((e) =>
+        e.player_id === playerId && e.season_year === season ? { ...e, grade } : e,
+      ),
+    );
+  };
 
   const seasons = useMemo(() => {
     const yrs = new Set<number>([currentSeasonYear()]);
@@ -253,6 +281,12 @@ export default function RosterPage() {
                     </div>
                   </div>
                 </Link>
+                <GradeChip
+                  playerId={p.player_id}
+                  grade={p.grade}
+                  locked={closed}
+                  onChange={handleSetGrade}
+                />
                 {needsBackfill && !closed && (
                   <Link
                     href={`/s/${school.slug}/${team.slug}/upload/roster`}
@@ -269,5 +303,59 @@ export default function RosterPage() {
         </div>
       )}
     </div>
+  );
+}
+
+interface GradeChipProps {
+  playerId: string;
+  grade: PlayerGrade | null;
+  locked: boolean;
+  onChange: (playerId: string, grade: PlayerGrade) => void | Promise<void>;
+}
+
+function GradeChip({ playerId, grade, locked, onChange }: GradeChipProps) {
+  if (locked) {
+    if (!grade) return null;
+    return (
+      <span
+        className="absolute top-2 left-2 z-10 inline-flex items-center rounded-full bg-sa-blue/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sa-blue border border-sa-blue/30"
+        title={`Grade: ${grade}`}
+      >
+        {grade}
+      </span>
+    );
+  }
+
+  const missing = grade === null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={missing ? "Set grade" : `Change grade (currently ${grade})`}
+          title={missing ? "Grade not set — pick one" : `Grade: ${grade} — click to change`}
+          className={
+            "absolute top-2 left-2 z-10 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider border transition-colors " +
+            (missing
+              ? "bg-sa-orange/10 text-sa-orange border-sa-orange/30 hover:bg-sa-orange/20"
+              : "bg-sa-blue/10 text-sa-blue border-sa-blue/30 hover:bg-sa-blue/20")
+          }
+        >
+          {missing ? "Set grade?" : grade}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {PLAYER_GRADES.map((g) => (
+          <DropdownMenuItem
+            key={g}
+            onSelect={() => {
+              void onChange(playerId, g);
+            }}
+          >
+            {g}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

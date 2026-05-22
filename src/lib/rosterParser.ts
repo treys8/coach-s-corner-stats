@@ -1,10 +1,27 @@
 // Roster parser. Reads a single-sheet .xlsx or .csv file with columns:
-//   Number | Last | First [| Position] [| Grad Year]
+//   Number | Last | First [| Position] [| Grad Year] [| Grade]
 // Header row is auto-detected (case-insensitive). Player rows continue until
 // the first blank/non-name row. "Totals" rows are skipped.
 
 import * as XLSX from "xlsx";
 import { normalizePlayerName } from "@/lib/csvParser";
+
+export type PlayerGrade = "7th" | "8th" | "Freshman" | "Sophomore" | "Junior" | "Senior";
+
+export const PLAYER_GRADES: PlayerGrade[] = [
+  "7th", "8th", "Freshman", "Sophomore", "Junior", "Senior",
+];
+
+// Each grade's next-year default. Senior → null (graduated; not rolled into
+// the next season's roster unless the coach overrides it on the confirm screen).
+export const NEXT_GRADE: Record<PlayerGrade, PlayerGrade | null> = {
+  "7th": "8th",
+  "8th": "Freshman",
+  "Freshman": "Sophomore",
+  "Sophomore": "Junior",
+  "Junior": "Senior",
+  "Senior": null,
+};
 
 export interface ParsedRosterPlayer {
   number: string;
@@ -12,6 +29,7 @@ export interface ParsedRosterPlayer {
   first: string;
   position: string | null;
   grad_year: number | null;
+  grade: PlayerGrade | null;
 }
 
 export interface ParsedRoster {
@@ -22,11 +40,12 @@ export interface ParsedRoster {
   hadNumberColumn: boolean;
   hadPositionColumn: boolean;
   hadGradYearColumn: boolean;
+  hadGradeColumn: boolean;
 }
 
 type Row = (string | number | null | undefined)[];
 
-const HEADER_ALIASES: Record<string, "number" | "last" | "first" | "position" | "grad_year"> = {
+const HEADER_ALIASES: Record<string, "number" | "last" | "first" | "position" | "grad_year" | "grade"> = {
   number: "number",
   "#": "number",
   jersey: "number",
@@ -41,9 +60,33 @@ const HEADER_ALIASES: Record<string, "number" | "last" | "first" | "position" | 
   pos: "position",
   "grad year": "grad_year",
   "graduation year": "grad_year",
+  // "class" / "year" stay on grad_year for backwards compatibility with files
+  // that already use them to mean the 4-digit graduation year.
   class: "grad_year",
   year: "grad_year",
+  // New: per-season grade (Freshman / Senior / 7th / etc.). Disambiguated
+  // from "class" via explicit aliases.
+  grade: "grade",
+  level: "grade",
+  "class level": "grade",
+  "school year": "grade",
 };
+
+// Normalize free-text grade input (CSV cell or inline edit) to the enum.
+// Accepts: 7/7th, 8/8th, Fr/Fresh/Freshman/9/9th, So/Soph/Sophomore/10/10th,
+// Jr/Junior/11/11th, Sr/Senior/12/12th. Case-insensitive; returns null on no match.
+export function parseGrade(raw: unknown): PlayerGrade | null {
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).trim().toLowerCase().replace(/[.\s]+/g, "");
+  if (!s) return null;
+  if (s === "7" || s === "7th" || s === "seventh") return "7th";
+  if (s === "8" || s === "8th" || s === "eighth") return "8th";
+  if (s === "9" || s === "9th" || s === "ninth" || s === "fr" || s === "fresh" || s === "freshman" || s === "frosh") return "Freshman";
+  if (s === "10" || s === "10th" || s === "tenth" || s === "so" || s === "soph" || s === "sophomore") return "Sophomore";
+  if (s === "11" || s === "11th" || s === "eleventh" || s === "jr" || s === "junior") return "Junior";
+  if (s === "12" || s === "12th" || s === "twelfth" || s === "sr" || s === "senior") return "Senior";
+  return null;
+}
 
 interface HeaderMap {
   number: number;
@@ -51,13 +94,14 @@ interface HeaderMap {
   first: number;
   position: number;
   grad_year: number;
+  grade: number;
 }
 
 const findHeaderRow = (rows: Row[]): { idx: number; map: HeaderMap } | null => {
   const limit = Math.min(rows.length, 8);
   for (let i = 0; i < limit; i++) {
     const r = rows[i] ?? [];
-    const map: HeaderMap = { number: -1, last: -1, first: -1, position: -1, grad_year: -1 };
+    const map: HeaderMap = { number: -1, last: -1, first: -1, position: -1, grad_year: -1, grade: -1 };
     for (let c = 0; c < r.length; c++) {
       const cell = String(r[c] ?? "").trim().toLowerCase();
       const role = HEADER_ALIASES[cell];
@@ -109,6 +153,7 @@ export function parseRosterFile(data: ArrayBuffer): ParsedRoster {
     const number = map.number >= 0 ? String(row[map.number] ?? "").trim() : "";
     const position = map.position >= 0 ? (String(row[map.position] ?? "").trim() || null) : null;
     const grad_year = map.grad_year >= 0 ? parseGradYear(row[map.grad_year]) : null;
+    const grade = map.grade >= 0 ? parseGrade(row[map.grade]) : null;
 
     // Use the same normalization the upsert_roster RPC's unique key uses, so
     // we don't ship two rows that the RPC would collapse — ON CONFLICT DO
@@ -118,7 +163,7 @@ export function parseRosterFile(data: ArrayBuffer): ParsedRoster {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    players.push({ number, first, last, position, grad_year });
+    players.push({ number, first, last, position, grad_year, grade });
   }
 
   if (players.length === 0) {
@@ -129,5 +174,6 @@ export function parseRosterFile(data: ArrayBuffer): ParsedRoster {
     hadNumberColumn: map.number >= 0,
     hadPositionColumn: map.position >= 0,
     hadGradYearColumn: map.grad_year >= 0,
+    hadGradeColumn: map.grade >= 0,
   };
 }

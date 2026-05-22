@@ -609,6 +609,7 @@ export type Database = {
       roster_entries: {
         Row: {
           created_at: string
+          grade: Database["public"]["Enums"]["player_grade"] | null
           id: string
           jersey_number: string | null
           player_id: string
@@ -618,6 +619,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          grade?: Database["public"]["Enums"]["player_grade"] | null
           id?: string
           jersey_number?: string | null
           player_id: string
@@ -627,6 +629,7 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          grade?: Database["public"]["Enums"]["player_grade"] | null
           id?: string
           jersey_number?: string | null
           player_id?: string
@@ -1072,6 +1075,7 @@ export type Database = {
       upsert_roster: {
         Args: {
           p_has_grad_year: boolean
+          p_has_grade: boolean
           p_has_number: boolean
           p_has_position: boolean
           p_players: Json
@@ -1087,7 +1091,7 @@ export type Database = {
       }
     }
     Enums: {
-      [_ in never]: never
+      player_grade: "7th" | "8th" | "Freshman" | "Sophomore" | "Junior" | "Senior"
     }
     CompositeTypes: {
       [_ in never]: never
