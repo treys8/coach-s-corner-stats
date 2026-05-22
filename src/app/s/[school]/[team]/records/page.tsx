@@ -51,7 +51,6 @@ export default function RecordsPage() {
     let active = true;
     (async () => {
       setLoading(true);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const [{ data: snaps, error: sErr }, { data: entries, error: pErr }, { data: recRows, error: recErr }] = await Promise.all([
         supabase
           .from("stat_snapshots")
@@ -62,7 +61,6 @@ export default function RecordsPage() {
           .from("roster_entries")
           .select("player_id, jersey_number, season_year, players(id, first_name, last_name)")
           .eq("team_id", team.id),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (supabase as any)
           .from("team_season_records")
           .select("season_year, wins, losses, ties, games_played")

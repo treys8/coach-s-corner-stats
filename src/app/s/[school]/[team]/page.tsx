@@ -50,7 +50,6 @@ export default function RosterPage() {
         { data: entries, error: rErr },
         { data: uploads, error: uErr },
         locksMap,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { data: recRows, error: recErr },
       ] = await Promise.all([
         supabase
@@ -63,7 +62,6 @@ export default function RosterPage() {
           .eq("team_id", team.id)
           .order("upload_date", { ascending: false }),
         fetchTeamSeasonLocks(supabase, team.id),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (supabase as any)
           .from("team_season_records")
           .select("season_year, wins, losses, ties, games_played")

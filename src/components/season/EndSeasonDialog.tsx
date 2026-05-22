@@ -43,7 +43,6 @@ export function EndSeasonDialog({
     setBusy(true);
     setError(null);
     const supabase = createClient();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: rpcErr } = await (supabase as any).rpc("archive_team_season", {
       p_team_id: teamId,
       p_season_year: seasonYear,
