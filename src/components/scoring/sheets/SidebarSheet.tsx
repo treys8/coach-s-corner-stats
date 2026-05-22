@@ -13,6 +13,7 @@ import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
 import { formatOpposingSlotLabel } from "@/lib/scoring/at-bat-helpers";
 import type { OpposingBatterProfile } from "@/lib/opponents/profile";
 import type { OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
+import type { SprayMarker } from "@/components/spray/SprayField";
 
 interface SidebarSheetProps {
   open: boolean;
@@ -23,6 +24,9 @@ interface SidebarSheetProps {
   currentOpponentBatterId: string | null;
   currentBatterIdForChip: string | null;
   opposingProfileCache: Map<string, OpposingBatterProfile>;
+  oppBatterCurrentGameMarkers: SprayMarker[];
+  gameDate: string;
+  gameId: string;
 }
 
 export function SidebarSheet({
@@ -34,6 +38,9 @@ export function SidebarSheet({
   currentOpponentBatterId,
   currentBatterIdForChip,
   opposingProfileCache,
+  oppBatterCurrentGameMarkers,
+  gameDate,
+  gameId,
 }: SidebarSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -52,16 +59,22 @@ export function SidebarSheet({
                   : "Set opposing lineup to track batters."
               }
               cache={opposingProfileCache}
+              currentGameMarkers={oppBatterCurrentGameMarkers}
+              currentGameDate={gameDate}
+              currentGameId={gameId}
             />
           )}
-          <Card className="p-3">
-            <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
-            <LiveSprayChart
-              state={state}
-              currentBatterId={currentBatterIdForChip}
-              currentBatterIsOurs={weAreBatting}
-            />
-          </Card>
+          {/* OpposingBatterPanel already renders the unified spray when fielding. */}
+          {weAreBatting && (
+            <Card className="p-3">
+              <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
+              <LiveSprayChart
+                state={state}
+                currentBatterId={currentBatterIdForChip}
+                currentBatterIsOurs={weAreBatting}
+              />
+            </Card>
+          )}
         </div>
       </SheetContent>
     </Sheet>

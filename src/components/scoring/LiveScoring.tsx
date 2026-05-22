@@ -141,6 +141,21 @@ export function LiveScoring({
     : currentOpponentBatterId;
   const dragMode = !!armedResult && armedResult !== ARMED_IN_PLAY_PENDING && !submitting;
 
+  // In-game spray markers for the opposing batter, merged into OpposingBatterPanel
+  // so the right rail shows one combined chart instead of duplicating career +
+  // current game in adjacent cards.
+  const oppBatterCurrentGameMarkers = currentOpponentBatterId
+    ? state.at_bats
+        .filter((ab) => ab.opponent_batter_id === currentOpponentBatterId)
+        .map((ab) => ({
+          id: ab.event_id,
+          result: ab.result,
+          spray_x: ab.spray_x,
+          spray_y: ab.spray_y,
+          description: ab.description,
+        }))
+    : [];
+
   return (
     <div className="grid grid-rows-[auto_minmax(0,1fr)_auto] h-[100dvh] bg-background">
       {/* Row 1: status bar */}
@@ -216,16 +231,24 @@ export function LiveScoring({
                     : "Set opposing lineup to track batters."
                 }
                 cache={opposingProfileCache.current}
+                currentGameMarkers={oppBatterCurrentGameMarkers}
+                currentGameDate={gameDate}
+                currentGameId={gameId}
               />
             )}
-            <Card className="p-3">
-              <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
-              <LiveSprayChart
-                state={state}
-                currentBatterId={currentBatterIdForChip}
-                currentBatterIsOurs={weAreBatting}
-              />
-            </Card>
+            {/* When fielding, OpposingBatterPanel already renders the unified
+                career + in-game spray chart. When batting, our batter has no
+                career-vs-this-team channel, so this card is the only surface. */}
+            {weAreBatting && (
+              <Card className="p-3">
+                <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
+                <LiveSprayChart
+                  state={state}
+                  currentBatterId={currentBatterIdForChip}
+                  currentBatterIsOurs={weAreBatting}
+                />
+              </Card>
+            )}
           </aside>
         )}
       </div>
@@ -256,6 +279,9 @@ export function LiveScoring({
         currentOpponentBatterId={currentOpponentBatterId}
         currentBatterIdForChip={currentBatterIdForChip}
         opposingProfileCache={opposingProfileCache.current}
+        oppBatterCurrentGameMarkers={oppBatterCurrentGameMarkers}
+        gameDate={gameDate}
+        gameId={gameId}
       />
 
       <Sheet open={manageOpen} onOpenChange={setManageOpen}>

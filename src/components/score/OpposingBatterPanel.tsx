@@ -262,12 +262,12 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 }
 
 function fmtPct(n: number): string {
-  // Baseball convention: AVG/OBP/SLG render as .XXX with any leading digit
-  // before the decimal stripped. e.g. 0.328 -> ".328", 1.000 -> ".000",
-  // 2.000 -> ".000". Empty state keeps "—" so a zero-PA batter doesn't look
-  // like a real .000 line.
+  // Baseball convention: strip a leading zero only — .328 not 0.328 — but
+  // keep the digit for values >= 1.000 (1.000 AVG, 2.000 SLG on a double).
+  // Empty state keeps "—" so a zero-PA batter doesn't look like a real .000 line.
   if (n === 0) return "—";
-  return n.toFixed(3).replace(/^\d+/, "");
+  const s = n.toFixed(3);
+  return n < 1 ? s.replace(/^0/, "") : s;
 }
 
 function formatIdentity(p: OpposingBatterProfile): string {
