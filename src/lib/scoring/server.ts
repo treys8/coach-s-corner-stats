@@ -592,80 +592,117 @@ export async function rederive(
   const touchSnapshots = shouldTouchTabletSnapshots(state.status, chainTypes);
 
   if (touchSnapshots) {
-    const del = await admin
-      .from("stat_snapshots")
-      .delete()
-      .eq("game_id", gameId)
-      .eq("source", "tablet");
-    if (del.error) {
-      throw new Error(`stat_snapshots tablet delete failed: ${del.error.message}`);
-    }
-
-    if (state.status === "final") {
-      const gameRow = await admin
-        .from("games")
-        .select("team_id, game_date")
-        .eq("id", gameId)
-        .single();
-      if (gameRow.error || !gameRow.data) {
-        throw new Error(
-          `games fetch for rollup failed: ${gameRow.error?.message ?? "missing"}`,
-        );
-      }
-      const team_id = gameRow.data.team_id as string;
-      const game_date = gameRow.data.game_date as string;
-
-      const batting = rollupBatting(state.at_bats, {
-        stolen_bases: state.stolen_bases,
-        caught_stealing: state.caught_stealing,
-        pickoffs: state.pickoffs,
-      });
-      const pitching = rollupPitching(state.at_bats, state.non_pa_runs);
-      const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
-        stolen_bases: state.stolen_bases,
-        caught_stealing: state.caught_stealing,
-        pickoffs: state.pickoffs,
-        passed_balls: state.passed_balls,
-        error_advance_fielders: state.error_advance_fielders,
-      });
-      const wls = computeWLS(
-        state.at_bats,
-        state.non_pa_runs,
-        state.we_are_home,
-        state.team_score,
-        state.opponent_score,
-        state.league_type,
-      );
-      if (wls.W) { const line = pitching.get(wls.W); if (line) line.W = 1; }
-      if (wls.L) { const line = pitching.get(wls.L); if (line) line.L = 1; }
-      if (wls.SV) { const line = pitching.get(wls.SV); if (line) line.SV = 1; }
-      const playerIds = new Set<string>([
-        ...batting.keys(),
-        ...pitching.keys(),
-        ...fielding.keys(),
-      ]);
-
-      if (playerIds.size > 0) {
-        const rows = [...playerIds].map((player_id) => ({
-          team_id,
-          player_id,
-          upload_date: game_date,
-          game_id: gameId,
-          source: "tablet" as const,
-          upload_id: null,
-          stats: {
-            batting: batting.get(player_id) ?? {},
-            pitching: pitching.get(player_id) ?? {},
-            fielding: fielding.get(player_id) ?? {},
-          },
-        }));
-        const ins = await admin.from("stat_snapshots").insert(rows as never[]);
-        if (ins.error) {
-          throw new Error(`stat_snapshots tablet insert failed: ${ins.error.message}`);
-        }
-      }
-    }
+    await replaceTabletSnapshots(admin, gameId, state);
   }
 
   return state;
+}
+
+/**
+ * DELETE-then-INSERT atomic replace for tablet stat_snapshots. Exported so
+ * the regression test can mock the supabase client and pin the contract
+ * without driving the whole rederive() pipeline.
+ *
+ * Behavior:
+ *   - state.status === "final": fetch team_id + game_date, build per-player
+ *     rollup rows, and pass everything to the RPC.
+ *   - state.status !== "final": pass `p_rows = []`. The RPC still deletes any
+ *     stale tablet rows (un-finalize case) but skips the insert.
+ *
+ * Atomicity: the RPC wraps DELETE + INSERT in one Postgres transaction. A
+ * failure on the insert side leaves the prior rows intact instead of wiping
+ * the final box score.
+ */
+export async function replaceTabletSnapshots(
+  admin: AnyClient,
+  gameId: string,
+  state: ReplayState,
+): Promise<void> {
+  let teamId: string | null = null;
+  let gameDate: string | null = null;
+  let rows: TabletSnapshotRow[] = [];
+
+  if (state.status === "final") {
+    const gameRow = await admin
+      .from("games")
+      .select("team_id, game_date")
+      .eq("id", gameId)
+      .single();
+    if (gameRow.error || !gameRow.data) {
+      throw new Error(
+        `games fetch for rollup failed: ${gameRow.error?.message ?? "missing"}`,
+      );
+    }
+    teamId = gameRow.data.team_id as string;
+    gameDate = gameRow.data.game_date as string;
+    rows = buildTabletSnapshotRows(state);
+  }
+
+  const res = await admin.rpc("replace_tablet_stat_snapshots", {
+    p_game_id: gameId,
+    p_team_id: teamId,
+    p_upload_date: gameDate,
+    p_rows: rows,
+  });
+  if (res.error) {
+    throw new Error(`replace_tablet_stat_snapshots failed: ${res.error.message}`);
+  }
+}
+
+/** One per-player tablet snapshot row, post-rollup. The RPC adds game_id,
+ *  source='tablet', upload_id=null, plus team_id/upload_date (shared across
+ *  all rows for a game), so this shape only carries the per-player parts. */
+export interface TabletSnapshotRow {
+  player_id: string;
+  stats: {
+    batting: Record<string, unknown>;
+    pitching: Record<string, unknown>;
+    fielding: Record<string, unknown>;
+  };
+}
+
+/**
+ * Pure helper: turn a finalized ReplayState into the per-player rollup rows
+ * the tablet snapshot replace RPC consumes. Split out from rederive() so a
+ * regression test can pin the rollup shape without mocking the whole supabase
+ * call chain.
+ */
+export function buildTabletSnapshotRows(state: ReplayState): TabletSnapshotRow[] {
+  const batting = rollupBatting(state.at_bats, {
+    stolen_bases: state.stolen_bases,
+    caught_stealing: state.caught_stealing,
+    pickoffs: state.pickoffs,
+  });
+  const pitching = rollupPitching(state.at_bats, state.non_pa_runs);
+  const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+    stolen_bases: state.stolen_bases,
+    caught_stealing: state.caught_stealing,
+    pickoffs: state.pickoffs,
+    passed_balls: state.passed_balls,
+    error_advance_fielders: state.error_advance_fielders,
+  });
+  const wls = computeWLS(
+    state.at_bats,
+    state.non_pa_runs,
+    state.we_are_home,
+    state.team_score,
+    state.opponent_score,
+    state.league_type,
+  );
+  if (wls.W) { const line = pitching.get(wls.W); if (line) line.W = 1; }
+  if (wls.L) { const line = pitching.get(wls.L); if (line) line.L = 1; }
+  if (wls.SV) { const line = pitching.get(wls.SV); if (line) line.SV = 1; }
+  const playerIds = new Set<string>([
+    ...batting.keys(),
+    ...pitching.keys(),
+    ...fielding.keys(),
+  ]);
+  return [...playerIds].map((player_id) => ({
+    player_id,
+    stats: {
+      batting: (batting.get(player_id) ?? {}) as Record<string, unknown>,
+      pitching: (pitching.get(player_id) ?? {}) as Record<string, unknown>,
+      fielding: (fielding.get(player_id) ?? {}) as Record<string, unknown>,
+    },
+  }));
 }
