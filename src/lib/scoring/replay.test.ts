@@ -835,6 +835,62 @@ describe("replay()", () => {
     expect(state.courtesy_runners_used[0].runner_player_id).toBe("p99");
   });
 
+  it("pinch_run produces a fresh bases container and a fresh BaseRunner (no in-place mutation)", () => {
+    // Invariant guard: the replay engine is supposed to be pure (every
+    // reducer call returns a fresh state). If a future refactor turns the
+    // spread into `bases[base].player_id = newId`, the prior state's
+    // BaseRunner would be silently mutated and undo/correction flows
+    // would see corrupted history.
+    const beforeSub = replay([
+      startGame({ we_are_home: false, opponent_starting_pitcher_id: "opp_starter" }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+    ]);
+    const afterSub = applyEvent(
+      beforeSub,
+      evt("substitution", {
+        out_player_id: "p1",
+        in_player_id: "p99",
+        batting_order: 1,
+        position: null,
+        sub_type: "pinch_run",
+        original_base: "first",
+      }),
+    );
+    expect(afterSub).not.toBe(beforeSub);
+    expect(afterSub.bases).not.toBe(beforeSub.bases);
+    expect(afterSub.bases.first).not.toBe(beforeSub.bases.first);
+    // Pre-sub state untouched.
+    expect(beforeSub.bases.first?.player_id).toBe("p1");
+  });
+
+  it("courtesy_run produces a fresh bases container and a fresh BaseRunner (no in-place mutation)", () => {
+    const beforeSub = replay([
+      startGame({ we_are_home: false, starting_pitcher_id: "p1", league_type: "nfhs" }),
+      evt("at_bat", atBat({
+        half: "top", result: "1B", batter_id: "p1",
+        runner_advances: [{ from: "batter", to: "first", player_id: "p1" }],
+      })),
+    ]);
+    const afterSub = applyEvent(
+      beforeSub,
+      evt("substitution", {
+        out_player_id: "p1",
+        in_player_id: "p99",
+        batting_order: 0,
+        position: null,
+        sub_type: "courtesy_run",
+        original_base: "first",
+      }),
+    );
+    expect(afterSub).not.toBe(beforeSub);
+    expect(afterSub.bases).not.toBe(beforeSub.bases);
+    expect(afterSub.bases.first).not.toBe(beforeSub.bases.first);
+    expect(beforeSub.bases.first?.player_id).toBe("p1");
+  });
+
   it("courtesy_run is rejected when league_type is 'mlb' (default)", () => {
     const state = replay([
       startGame({ we_are_home: false, starting_pitcher_id: "p1" }),
