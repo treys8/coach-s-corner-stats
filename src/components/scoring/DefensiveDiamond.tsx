@@ -88,6 +88,20 @@ const ZONE_HIT_RADIUS = 5.5;
 // for the existing RunnerActionDialog.
 const RUNNER_DRAG_THRESHOLD = 2.5;
 
+// Shared palette for overlay elements. Kept in sync with the cross-component
+// design language used by MiniBases / FieldBackground / LiveSprayChart.
+const PALETTE = {
+  baseFill: "#f8f8f4",
+  baseHighlight: "#ffffff",
+  baseStroke: "#b8b09e",
+  occupiedTop: "#f59d4a",
+  occupiedBottom: "#d96a1f",
+  chalk: "#f5f5f0",
+  teamTop: "#1f4fb8",
+  teamBottom: "#0b2a72",
+  fielderInk: "#0e1a14",
+} as const;
+
 function lastNameOf(full: string): string {
   // names are formatted "#5 Koester" or "Koester Smith" — strip a leading
   // jersey token, then take the last whitespace-separated word.
@@ -335,32 +349,79 @@ export function DefensiveDiamond({
     >
       <FieldBackground idSuffix="defense" />
 
-      {/* Batter chip — placed in the foul-territory pocket between 1B (or
-          3B) and home plate, mirroring GameChanger's "Boyd #2" badge that
-          floats prominently in the field rather than at the very bottom.
-          Right side when we are batting, left side when we are fielding,
-          so the AB visually swaps each half-inning. */}
+      <defs>
+        <filter id="dd-soft-shadow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="0.45" />
+          <feOffset dx="0" dy="0.35" result="offsetBlur" />
+          <feComponentTransfer>
+            <feFuncA type="linear" slope="0.55" />
+          </feComponentTransfer>
+          <feMerge>
+            <feMergeNode />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <filter id="dd-text-shadow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="0.18" />
+          <feOffset dx="0" dy="0.22" result="offsetBlur" />
+          <feComponentTransfer>
+            <feFuncA type="linear" slope="0.7" />
+          </feComponentTransfer>
+          <feMerge>
+            <feMergeNode />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <linearGradient id="dd-base-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={PALETTE.baseHighlight} />
+          <stop offset="55%" stopColor={PALETTE.baseFill} />
+          <stop offset="100%" stopColor="#e8e3d4" />
+        </linearGradient>
+        <linearGradient id="dd-base-occupied" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#ffb774" />
+          <stop offset="55%" stopColor={PALETTE.occupiedTop} />
+          <stop offset="100%" stopColor={PALETTE.occupiedBottom} />
+        </linearGradient>
+        <radialGradient id="dd-position-dot" cx="40%" cy="35%" r="75%">
+          <stop offset="0%" stopColor="#5b86e0" />
+          <stop offset="55%" stopColor={PALETTE.teamTop} />
+          <stop offset="100%" stopColor={PALETTE.teamBottom} />
+        </radialGradient>
+        <radialGradient id="dd-runner-dot" cx="40%" cy="35%" r="75%">
+          <stop offset="0%" stopColor="#ffc38a" />
+          <stop offset="55%" stopColor={PALETTE.occupiedTop} />
+          <stop offset="100%" stopColor={PALETTE.occupiedBottom} />
+        </radialGradient>
+        <linearGradient id="dd-batter-chip" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#3a6dd1" />
+          <stop offset="100%" stopColor={PALETTE.teamBottom} />
+        </linearGradient>
+      </defs>
+
       {currentBatterId && (() => {
         const label = batterChipLabel(currentBatterId, names, weAreBatting, state.opposing_lineup);
-        // Width scales loosely with label length so longer names don't clip.
         const w = Math.max(12, Math.min(20, label.length * 1.2 + 3));
-        // Push the chip well off-center, and up into the lower-infield
-        // area so it doesn't get lost near the catcher.
         const cx = weAreBatting ? 72 : 28;
         const cy = 80;
         return (
-          <g pointerEvents="none">
+          <g pointerEvents="none" filter="url(#dd-soft-shadow)">
             <rect
               x={cx - w / 2} y={cy - 2.4}
-              width={w} height={4.8} rx={1.0}
-              fill="#1d6fb8" stroke="#fff" strokeWidth={0.35}
+              width={w} height={4.8} rx={1.4}
+              fill="url(#dd-batter-chip)"
+              stroke={PALETTE.chalk} strokeWidth={0.35}
+            />
+            <rect
+              x={cx - w / 2 + 0.25} y={cy - 2.15}
+              width={w - 0.5} height={1.4} rx={1.0}
+              fill={PALETTE.baseHighlight} opacity={0.18}
             />
             <text
               x={cx} y={cy + 1.0}
               textAnchor="middle"
               fontSize={2.5}
               fontWeight={700}
-              fill="#fff"
+              fill={PALETTE.chalk}
             >
               {label}
             </text>
@@ -368,20 +429,22 @@ export function DefensiveDiamond({
         );
       })()}
 
-      {/* Bases (rotated squares; orange when occupied). The runner chip
-          is rendered as a separate layer below so it can pick up its own
-          pointer events for the Stage 4 drag-with-SAFE/OUT flow. */}
       {(["first", "second", "third"] as const).map((b) => {
         const [bx, by] = BASE_XY[b];
         const runner = state.bases[b];
         const occupied = runner !== null;
         return (
-          <g key={b} data-base={b}>
+          <g key={b} data-base={b} filter="url(#dd-soft-shadow)">
             <g transform={`translate(${bx} ${by}) rotate(45)`}>
               <rect
-                x={-2.6} y={-2.6} width={5.2} height={5.2}
-                fill={occupied ? "#ee8233" : "#fff"}
-                stroke="#1f3252" strokeWidth="0.35"
+                x={-2.6} y={-2.6} width={5.2} height={5.2} rx={0.35}
+                fill={occupied ? "url(#dd-base-occupied)" : "url(#dd-base-fill)"}
+                stroke={occupied ? "#9a4a14" : PALETTE.baseStroke}
+                strokeWidth="0.4"
+              />
+              <rect
+                x={-2.2} y={-2.2} width={4.4} height={1.4} rx={0.25}
+                fill={PALETTE.baseHighlight} opacity={0.4}
               />
             </g>
           </g>
@@ -485,18 +548,25 @@ export function DefensiveDiamond({
             onPointerCancel={runnerDrag?.from === b ? endRunnerDrag : undefined}
           >
             {tappable && <title>Drag to SAFE/OUT or tap to record action</title>}
-            <circle
-              cx={0} cy={0} r={dragging ? 3.2 : 2.8}
-              fill="#ee8233"
-              stroke={dragging ? "#fff" : "#1f3252"}
-              strokeWidth={dragging ? 0.55 : 0.35}
-            />
+            <g filter="url(#dd-soft-shadow)">
+              <circle
+                cx={0} cy={0} r={dragging ? 3.2 : 2.8}
+                fill="url(#dd-runner-dot)"
+                stroke={dragging ? PALETTE.chalk : "#7a3a0e"}
+                strokeWidth={dragging ? 0.55 : 0.4}
+              />
+              <ellipse
+                cx={0} cy={-0.85} rx={1.55} ry={0.6}
+                fill={PALETTE.baseHighlight} opacity={0.45}
+                pointerEvents="none"
+              />
+            </g>
             <text
               x={0} y={labelFont / 3}
               textAnchor="middle"
               fontSize={labelFont}
               fontWeight="700"
-              fill="#fff"
+              fill={PALETTE.chalk}
               pointerEvents="none"
             >
               {label}
@@ -533,17 +603,21 @@ export function DefensiveDiamond({
           {/* Numbered chips at each drop spot */}
           {markerCoords.map((c, i) => {
             const isErr = errorStepIndex === i;
-            const fill = isErr ? "#ef4444" : "#1f3252";
+            const fill = isErr ? "#ef4444" : PALETTE.teamBottom;
             return (
-              <g key={`chain-marker-${i}`}>
-                <circle cx={c.x} cy={c.y} r={2.4} fill={fill} stroke="#fff" strokeWidth={0.4} />
+              <g key={`chain-marker-${i}`} filter="url(#dd-soft-shadow)">
+                <circle cx={c.x} cy={c.y} r={2.4} fill={fill} stroke={PALETTE.chalk} strokeWidth={0.45} />
+                <ellipse
+                  cx={c.x} cy={c.y - 0.75} rx={1.3} ry={0.5}
+                  fill={PALETTE.baseHighlight} opacity={0.35}
+                />
                 <text
                   x={c.x}
                   y={c.y + 0.9}
                   textAnchor="middle"
                   fontSize={2.4}
                   fontWeight={700}
-                  fill="#fff"
+                  fill={PALETTE.chalk}
                 >
                   {i + 1}
                 </text>
@@ -553,46 +627,40 @@ export function DefensiveDiamond({
         </g>
       )}
 
-      {/* Ghost markers at canonical positions while dragging — show where each
-          fielder started so the user has spatial context as they pull one out. */}
       {dragMode && drag && FIELDER_POSITIONS.map((pos) => {
         const [px, py] = POSITION_XY[pos];
         if (pos === drag.position) {
           return (
-            <circle
-              key={`ghost-${pos}`}
-              cx={px} cy={py} r="3.2"
-              fill="none" stroke="#1f3252" strokeWidth="0.4"
-              strokeDasharray="1 1" opacity="0.5"
-              pointerEvents="none"
-            />
+            <g key={`ghost-${pos}`} pointerEvents="none" opacity="0.55">
+              <circle
+                cx={px} cy={py} r="3.4"
+                fill="none" stroke={PALETTE.baseHighlight} strokeWidth="0.45"
+                strokeDasharray="1 1"
+              />
+              <circle
+                cx={px} cy={py} r="3.4"
+                fill="none" stroke={PALETTE.teamBottom} strokeWidth="0.3"
+                strokeDasharray="1 1"
+              />
+            </g>
           );
         }
         return null;
       })}
 
-      {/* Fielder markers — small player-name text floating on the field
-          like GameChanger, no big circle background. When we're fielding,
-          we resolve names from `our_lineup` by position. When we're
-          batting (opposing fielders, no name data), fall back to the
-          position abbreviation. The hit target stays a transparent
-          circle so the drag-glove flow still works. */}
       {FIELDER_POSITIONS.map((pos) => {
         const [px, py] = POSITION_XY[pos];
         const isDragging = drag?.position === pos;
         const cx = isDragging ? drag!.x : px;
         const cy = isDragging ? drag!.y : py;
         const grabbable = dragMode;
-        // Resolve label: prefer player name when fielding, else the
-        // position abbreviation.
         const slot = !weAreBatting
           ? state.our_lineup.find((s) => s.position === pos)
           : undefined;
         const playerName = slot?.player_id ? names.get(slot.player_id) : null;
         const label = playerName ? fielderNameLabel(playerName) : pos;
-        // Slightly smaller font for the longer name labels so they don't
-        // collide with neighboring fielders.
-        const fontSize = label === pos ? 3.0 : (label.length > 8 ? 2.4 : 2.7);
+        const showsPositionOnly = label === pos;
+        const fontSize = showsPositionOnly ? 2.4 : (label.length > 8 ? 2.4 : 2.7);
         return (
           <g
             key={pos}
@@ -602,24 +670,53 @@ export function DefensiveDiamond({
             onPointerCancel={isDragging ? endDrag : undefined}
             style={grabbable ? { cursor: isDragging ? "grabbing" : "grab" } : undefined}
           >
-            {/* Transparent hit target for drag-and-drop. */}
-            <circle
-              cx={cx} cy={cy} r="4"
-              fill={isDragging ? "#ee8233" : "transparent"}
-              stroke={isDragging ? "#fff" : "none"}
-              strokeWidth={isDragging ? 0.4 : 0}
-            />
-            {/* Label — small dark text with a white halo for readability
-                on the diamond-checker grass. */}
+            {isDragging ? (
+              <g filter="url(#dd-soft-shadow)">
+                <circle
+                  cx={cx} cy={cy} r="3.4"
+                  fill="url(#dd-runner-dot)"
+                  stroke={PALETTE.chalk} strokeWidth="0.45"
+                />
+                <ellipse
+                  cx={cx} cy={cy - 1.05} rx={1.9} ry={0.7}
+                  fill={PALETTE.baseHighlight} opacity={0.45}
+                />
+              </g>
+            ) : showsPositionOnly ? (
+              <>
+                <circle cx={cx} cy={cy} r="4" fill="transparent" />
+                <g filter="url(#dd-soft-shadow)" pointerEvents="none">
+                  <circle
+                    cx={cx} cy={cy} r="2.9"
+                    fill={PALETTE.baseHighlight} opacity={0.85}
+                  />
+                  <circle
+                    cx={cx} cy={cy} r="2.4"
+                    fill="url(#dd-position-dot)"
+                    stroke={PALETTE.teamBottom} strokeWidth="0.3"
+                  />
+                  <ellipse
+                    cx={cx} cy={cy - 0.75} rx={1.35} ry={0.55}
+                    fill={PALETTE.baseHighlight} opacity={0.35}
+                  />
+                </g>
+              </>
+            ) : (
+              <circle
+                cx={cx} cy={cy} r="4"
+                fill="transparent"
+              />
+            )}
             <text
               x={cx} y={cy + fontSize / 3}
               textAnchor="middle"
               fontSize={fontSize}
               fontWeight="700"
-              fill={isDragging ? "#fff" : "#0e1a14"}
-              stroke="#fff"
-              strokeWidth="0.55"
+              fill={isDragging || showsPositionOnly ? PALETTE.chalk : PALETTE.fielderInk}
+              stroke={isDragging || showsPositionOnly ? "none" : PALETTE.baseHighlight}
+              strokeWidth={isDragging || showsPositionOnly ? 0 : 0.55}
               paintOrder="stroke fill"
+              filter={isDragging || showsPositionOnly ? undefined : "url(#dd-text-shadow)"}
               pointerEvents="none"
             >
               {label}
