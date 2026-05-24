@@ -40,6 +40,7 @@ export function useLiveScoring({
   const {
     state,
     events,
+    queued,
     lastSeq,
     loading,
     submitting,
@@ -48,9 +49,10 @@ export function useLiveScoring({
     applyPostResult,
     applyOptimistic,
     rollbackOptimistic,
+    discardQueued,
   } = gameEvents;
 
-  const derived = useReplayState({ state, events, roster });
+  const derived = useReplayState({ state, events, queued, roster });
   const { names, weAreBatting, currentSlot, currentOppSlot, currentOpponentBatterId, lastUndoableEvent } = derived;
 
   const atBatActions = useAtBatActions({
@@ -87,6 +89,7 @@ export function useLiveScoring({
     submitting,
     setSubmitting,
     applyPostResult,
+    discardQueued,
     onFinalized,
   });
 

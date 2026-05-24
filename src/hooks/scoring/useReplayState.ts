@@ -23,6 +23,10 @@ function nameById(roster: RosterDisplay[]): Map<string, string> {
 export interface UseReplayStateArgs {
   state: ReplayState;
   events: GameEventRecord[];
+  /** Synthetic records for still-queued outbox entries. Treated as the
+   *  most-recent slice of the log (after `events`) so undo targets the
+   *  genuinely-latest action, even when it hasn't synced. */
+  queued?: GameEventRecord[];
   roster: RosterDisplay[];
 }
 
@@ -43,6 +47,7 @@ export interface UseReplayStateResult {
 export function useReplayState({
   state,
   events,
+  queued,
   roster,
 }: UseReplayStateArgs): UseReplayStateResult {
   const names = useMemo(() => nameById(roster), [roster]);
@@ -62,27 +67,10 @@ export function useReplayState({
     ? currentOppSlot?.opponent_player_id ?? null
     : null;
 
-  // Walks the event log backwards, skipping void/correction events and
-  // events already superseded by a prior correction. `game_started` is
-  // intentionally not undoable from the live screen (un-finalize lives on
-  // the FinalStub).
-  const lastUndoableEvent = useMemo(() => {
-    const supersededIds = new Set<string>();
-    for (const ev of events) {
-      if (ev.event_type === "correction") {
-        const p = ev.payload as CorrectionPayload;
-        supersededIds.add(p.superseded_event_id);
-      }
-    }
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i];
-      if (ev.event_type === "correction") continue;
-      if (supersededIds.has(ev.id)) continue;
-      if (ev.event_type === "game_started") return null;
-      return ev;
-    }
-    return null;
-  }, [events]);
+  const lastUndoableEvent = useMemo(
+    () => deriveLastUndoableEvent(events, queued),
+    [events, queued],
+  );
 
   return {
     names,
@@ -92,4 +80,38 @@ export function useReplayState({
     currentOpponentBatterId,
     lastUndoableEvent,
   };
+}
+
+/**
+ * Pure helper for the undo flow: walks the event log newest-first, skipping
+ * corrections and already-superseded events. `game_started` is intentionally
+ * not undoable from the live screen (un-finalize lives on the FinalStub).
+ *
+ * Queued synths are appended after `events` so they're scanned first.
+ * Without this, undo would target the last server-acked event and ignore
+ * anything the user tapped while offline.
+ *
+ * Exported so the regression test can pin the behavior without mounting
+ * React. Kept here (not in the engine) because it's a UI-layer concern.
+ */
+export function deriveLastUndoableEvent(
+  events: GameEventRecord[],
+  queued?: GameEventRecord[],
+): GameEventRecord | null {
+  const supersededIds = new Set<string>();
+  for (const ev of events) {
+    if (ev.event_type === "correction") {
+      const p = ev.payload as CorrectionPayload;
+      supersededIds.add(p.superseded_event_id);
+    }
+  }
+  const ordered = queued && queued.length > 0 ? [...events, ...queued] : events;
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    const ev = ordered[i];
+    if (ev.event_type === "correction") continue;
+    if (supersededIds.has(ev.id)) continue;
+    if (ev.event_type === "game_started") return null;
+    return ev;
+  }
+  return null;
 }
