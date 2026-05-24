@@ -38,26 +38,29 @@ import type {
   NonPaRun,
 } from "./types";
 
-/** Results where the play itself is a defensive failure that allowed the
- *  batter to reach. result === 'E' on its own only marks the batter as
- *  reached-on-error; the play would have been an out in reconstruction. */
-const HIT_RESULTS: ReadonlySet<AtBatResult> = new Set(["1B", "2B", "3B", "HR"]);
+/** Results where the batter reached safely AND a throwing error on the
+ *  same play robbed the defense of a would-be retire. For hits (1B/2B/3B),
+ *  the would-be out is commonly the batter thrown out trying to stretch.
+ *  For FC, the would-be out is the forced runner the throw was meant to
+ *  retire. In both cases reconstruction credits +1 phantom out when the
+ *  play recorded zero actual outs. */
+const SAFE_RESULTS_WITH_THROW_ERROR: ReadonlySet<AtBatResult> = new Set([
+  "1B",
+  "2B",
+  "3B",
+  "HR",
+  "FC",
+]);
 
 /** Compute the phantom-out delta for a single at_bat. */
 export function phantomOutsForAtBat(ab: DerivedAtBat): number {
   // 'E' is the canonical "would-have-been out" play.
   if (ab.result === "E" && ab.outs_recorded === 0) return 1;
 
-  // A hit (1B/2B/3B) with an error_step_index on the throw chain — the
-  // hit lands cleanly, but a fielder's throw error let a runner advance
-  // OR the batter take an extra base. In reconstruction the throw succeeds
-  // and would have produced an out (commonly: batter thrown out trying to
-  // stretch). Only count it when the play didn't already record an out
-  // for that would-be retire.
   if (
     ab.error_step_index !== null &&
     ab.error_step_index !== undefined &&
-    HIT_RESULTS.has(ab.result) &&
+    SAFE_RESULTS_WITH_THROW_ERROR.has(ab.result) &&
     ab.outs_recorded === 0
   ) {
     return 1;

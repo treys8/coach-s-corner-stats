@@ -17,7 +17,7 @@ describe("hashFileBuffer", () => {
   });
 
   it("matches the known SHA-256 of an empty buffer", async () => {
-    const h = await hashFileBuffer(new ArrayBuffer(0));
+    const h = await hashFileBuffer(toBuf(""));
     expect(h).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   });
 

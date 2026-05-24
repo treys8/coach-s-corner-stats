@@ -81,6 +81,26 @@ describe("phantomOutsForAtBat", () => {
       ),
     ).toBe(0);
   });
+
+  it("FC with throwing error and 0 outs → 1 phantom out", () => {
+    // Forced runner reached safely because of the bad throw; the throw
+    // would have retired them in reconstruction.
+    expect(
+      phantomOutsForAtBat(ab({ result: "FC", error_step_index: 1, outs_recorded: 0 })),
+    ).toBe(1);
+  });
+
+  it("clean FC (no error, force succeeded) → 0 phantom outs", () => {
+    expect(phantomOutsForAtBat(ab({ result: "FC", outs_recorded: 1 }))).toBe(0);
+  });
+
+  it("FC with throwing error but the force itself succeeded → 0 phantom outs", () => {
+    // Force at 2nd recorded; the bad throw was a secondary play that
+    // didn't cost an additional out.
+    expect(
+      phantomOutsForAtBat(ab({ result: "FC", error_step_index: 1, outs_recorded: 1 })),
+    ).toBe(0);
+  });
 });
 
 describe("applyErReconstructionToHalf", () => {
