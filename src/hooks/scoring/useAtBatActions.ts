@@ -55,9 +55,12 @@ export interface UseAtBatActionsArgs {
 /** Additive fields the In Play sheet can attach to an armed result. Threaded
  *  from `onOutcomePicked` through `armedExtras` to the final `submitAtBat`
  *  call so the drag-to-fielder flow preserves them. `foul_out` is a notation
- *  hint (renders F2(f) / F7(f) on the chain). */
+ *  hint (renders F2(f) / F7(f) on the chain). `batted_ball_type` is an
+ *  explicit coach pick — used by the "Bunt single" button to tag a 1B as a
+ *  bunt; otherwise the type is smart-defaulted from result. */
 export interface AtBatExtras {
   foul_out?: boolean;
+  batted_ball_type?: BattedBallType;
 }
 
 export interface UseAtBatActionsResult {
@@ -340,10 +343,13 @@ export function useAtBatActions({
       // them through to submitAtBat.
       setArmedResult(result);
       setArmedExtras(extras ?? null);
-      // Smart-default the batted-ball-type chip from the picked outcome
-      // (FO→fly, LO→line, PO→pop, SF→fly, SAC→bunt). Coach can override
-      // in the rail before committing.
-      setBattedBallType((cur) => cur ?? defaultBattedBallType(result));
+      // Explicit bbt from extras (e.g. "Bunt single" → bunt) always wins;
+      // otherwise smart-default from outcome (FO→fly, SAC→bunt, …). Reset
+      // from the new outcome rather than preserving the prior arm's value
+      // — switching Bunt single → Single must not carry "bunt" into a
+      // plain hit. (defaultBattedBallType returns null for hit outcomes,
+      // which is the correct "no inferred type" answer.)
+      setBattedBallType(extras?.batted_ball_type ?? defaultBattedBallType(result));
       return;
     }
     // Non-in-play outcome (K, BB, HBP, etc.) clears any IN_PLAY_PENDING
@@ -434,10 +440,12 @@ export function useAtBatActions({
       armedResult === "IF";
     const firstAction: FielderTouch["action"] = isOf && looksFly ? "caught" : "fielded";
 
-    if (armedResult === "DP" || armedResult === "TP") {
+    if (armedResult === "DP" || armedResult === "TP" || armedResult === "FC") {
       // Multi-step: append, defer commit. First step uses the same
       // fielded/caught action rules; subsequent steps are throw-receivers
-      // snapped to the nearest base.
+      // snapped to the nearest base. FC is treated as a 1-out multi-step
+      // (fielder + receiver at the force base) so the cascade can place
+      // the batter on first and force-out the lead runner.
       const isFirstStep = pendingChain.length === 0;
       const target = isFirstStep ? undefined : nearestBaseFromNormalized(x, y);
       const action: FielderTouch["action"] = isFirstStep
@@ -492,16 +500,16 @@ export function useAtBatActions({
 
   const commitChain = () => {
     if (submitting) return;
-    if (armedResult !== "DP" && armedResult !== "TP") return;
+    if (armedResult !== "DP" && armedResult !== "TP" && armedResult !== "FC") return;
     if (pendingChain.length === 0) return;
     const startBases = chainStartBases ?? state.bases;
     const spray = chainStartSpray ?? { x: 0.5, y: 0.5 };
     const advances = buildChainAdvances(pendingChain, startBases);
     // Defense in depth: even if a caller invokes commitChain without
-    // checking canCommitChain, refuse to ship a DP/TP that doesn't
+    // checking canCommitChain, refuse to ship a DP/TP/FC that doesn't
     // enumerate enough outs — the at_bat would land with a wrong
-    // base/out state.
-    const requiredOuts = armedResult === "DP" ? 2 : 3;
+    // base/out state (e.g. an FC with 0 outs == the current phantom-FC bug).
+    const requiredOuts = armedResult === "TP" ? 3 : armedResult === "DP" ? 2 : 1;
     if (advances.filter((a) => a.to === "out").length < requiredOuts) return;
     const firstStep = pendingChain[0];
     const bbt = battedBallType ?? defaultBattedBallType(armedResult);
@@ -519,12 +527,14 @@ export function useAtBatActions({
     );
   };
 
-  // Commit gate for multi-step DP/TP. The chain is incomplete until it
-  // enumerates DEFAULT_OUTS_FOR[result] real outs in the derived advances
+  // Commit gate for multi-step DP/TP/FC. The chain is incomplete until it
+  // enumerates the required number of real outs in the derived advances
   // (a "tagged" step with no `target` doesn't count, since it attributes
   // no out). The Commit button stays disabled until then so the coach
-  // doesn't accidentally record a DP that only retired one runner.
-  const chainOutsRequired = armedResult === "DP" ? 2 : armedResult === "TP" ? 3 : 0;
+  // doesn't accidentally record a DP that only retired one runner — or an
+  // FC with no force-out (which used to land as a phantom play).
+  const chainOutsRequired =
+    armedResult === "TP" ? 3 : armedResult === "DP" ? 2 : armedResult === "FC" ? 1 : 0;
   const chainOuts =
     chainOutsRequired > 0 && chainStartBases && pendingChain.length >= 2
       ? buildChainAdvances(pendingChain, chainStartBases).filter((a) => a.to === "out").length

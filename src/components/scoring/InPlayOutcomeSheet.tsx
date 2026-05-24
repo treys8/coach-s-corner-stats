@@ -19,12 +19,12 @@ import type { AtBatExtras } from "@/hooks/scoring/useAtBatActions";
  * Sectioned per the locked v2 spec ([[live_scoring_v2_ux_direction]]):
  *   HITS     — 1B, 2B, 3B, HR
  *   OUTS     — Out at first, Fly out, Line out, Pop out, Foul out, Sac fly*
- *   COMPOUND — FC, DP, TP*, Error, Sac bunt*
+ *   COMPOUND — FC*, DP*, TP*, Error, Sac bunt*, Bunt single
  *   More ▾   — CI, IFR  (GRD / Obstruction / Intentional drop deferred to
  *              Stage 5/6 when umpire_call events ship)
  *
  * *contextual via `canRecord(result, state)` from at-bat-helpers — SAC/SF/
- *  DP/TP buttons render dimmed-disabled when the state doesn't support them.
+ *  DP/TP/FC buttons render dimmed-disabled when the state doesn't support them.
  *
  * "Out at first" arms `GO` for Stage 2 (most-common case). Stage 3's drag
  * chain refines to FO/LO/PO/etc when the fielder chain ends at first.
@@ -69,6 +69,7 @@ const COMPOUND: SectionButton[] = [
   { key: "TP", label: "Triple play", result: "TP" },
   { key: "E", label: "Error", result: "E" },
   { key: "SAC", label: "Sac bunt", result: "SAC", title: "Bunt out advancing a runner (PDF §9.08)" },
+  { key: "BUNT_1B", label: "Bunt single", result: "1B", extras: { batted_ball_type: "bunt" }, title: "Bunt that reaches safely — tagged as a bunt in batted-ball stats" },
 ];
 
 const MORE: SectionButton[] = [

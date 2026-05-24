@@ -151,8 +151,9 @@ function runnerChipLabel(
   return BASE_GENERIC[base];
 }
 
-// Batter chip label = "#NN Last" when both are known, "Last" or "#NN" alone
-// when only one is, falling back to "AB" if nothing can be resolved.
+// Compact batter chip label — jersey number when known (prefixed with #),
+// otherwise last-name initial, with "AB" as a final fallback. The chip lives
+// inside the batter's box at home plate so it has to stay tiny (2–3 chars).
 function batterChipLabel(
   playerId: string,
   names: Map<string, string>,
@@ -162,15 +163,14 @@ function batterChipLabel(
   if (weAreBatting) {
     const full = names.get(playerId);
     if (!full) return "AB";
-    const jerseyMatch = full.match(/^#(\S+)\s+(.*)$/);
-    if (jerseyMatch) return `#${jerseyMatch[1]} ${lastNameOf(jerseyMatch[2])}`;
-    return lastNameOf(full);
+    const jerseyMatch = full.match(/^#(\S+)\s+/);
+    if (jerseyMatch) return `#${jerseyMatch[1]}`;
+    return lastNameOf(full).slice(0, 1).toUpperCase() || "AB";
   }
   const slot = opposingLineup.find((s) => s.opponent_player_id === playerId);
   if (!slot) return "AB";
-  if (slot.jersey_number && slot.last_name) return `#${slot.jersey_number} ${slot.last_name}`;
-  if (slot.last_name) return slot.last_name;
   if (slot.jersey_number) return `#${slot.jersey_number}`;
+  if (slot.last_name) return slot.last_name.slice(0, 1).toUpperCase();
   return "AB";
 }
 
@@ -400,26 +400,30 @@ export function DefensiveDiamond({
 
       {currentBatterId && (() => {
         const label = batterChipLabel(currentBatterId, names, weAreBatting, state.opposing_lineup);
-        const w = Math.max(12, Math.min(20, label.length * 1.2 + 3));
-        const cx = weAreBatting ? 72 : 28;
-        const cy = 80;
+        // Sit the chip inside the left batter's box (RHB stance). Box geometry
+        // lives in FieldBackground: x=43.4..47, y=91.2..96.6. Chip width grows
+        // with label length but stays inside the box.
+        const w = Math.min(3.4, Math.max(2.4, label.length * 0.85 + 1));
+        const h = 2.0;
+        const cx = 45.2;
+        const cy = 93.9;
         return (
           <g pointerEvents="none" filter="url(#dd-soft-shadow)">
             <rect
-              x={cx - w / 2} y={cy - 2.4}
-              width={w} height={4.8} rx={1.4}
+              x={cx - w / 2} y={cy - h / 2}
+              width={w} height={h} rx={0.55}
               fill="url(#dd-batter-chip)"
-              stroke={PALETTE.chalk} strokeWidth={0.35}
+              stroke={PALETTE.chalk} strokeWidth={0.22}
             />
             <rect
-              x={cx - w / 2 + 0.25} y={cy - 2.15}
-              width={w - 0.5} height={1.4} rx={1.0}
-              fill={PALETTE.baseHighlight} opacity={0.18}
+              x={cx - w / 2 + 0.18} y={cy - h / 2 + 0.18}
+              width={w - 0.36} height={0.55} rx={0.4}
+              fill={PALETTE.baseHighlight} opacity={0.22}
             />
             <text
-              x={cx} y={cy + 1.0}
+              x={cx} y={cy + 0.55}
               textAnchor="middle"
-              fontSize={2.5}
+              fontSize={1.55}
               fontWeight={700}
               fill={PALETTE.chalk}
             >

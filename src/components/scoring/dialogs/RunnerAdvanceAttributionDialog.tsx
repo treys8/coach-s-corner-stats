@@ -95,7 +95,7 @@ export function RunnerAdvanceAttributionDialog({
           <DialogDescription>
             {errorKind
               ? "Tap the fielder who committed the error."
-              : "The batter's hit stands. This pick only attributes the advance to the right play."}
+              : "Hit stands — pick how the runner advanced."}
           </DialogDescription>
         </DialogHeader>
 

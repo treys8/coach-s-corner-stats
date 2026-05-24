@@ -60,6 +60,13 @@ export function canRecord(result: AtBatResult, state: ReplayState): boolean {
       // Sacrifice bunt: at least one runner to advance, less than 2 outs
       // (the sac-out can't be the third out — that's just a bunt out).
       return runnerCount > 0 && outs < 2;
+    case "FC":
+      // Fielder's choice: defense chose to put out a runner instead of the
+      // batter, so we need a runner to put out and < 2 outs (a 3rd-out FC
+      // would just be a regular ground out). Tag-out FCs (rare — runner
+      // not forced) aren't modeled by the chain cascade; coach falls back
+      // to Edit Last Play for those.
+      return runnerCount > 0 && outs < 2;
     case "SF":
       // Sacrifice fly (MLB rule 9.08): batter flies out, runner scores
       // from third, fewer than two outs. We only require runner-on-third
@@ -231,7 +238,12 @@ export function chainNotation(
 }
 
 /**
- * Derive `RunnerAdvance[]` from a captured DP/TP fielder chain.
+ * Derive `RunnerAdvance[]` from a captured DP/TP/FC fielder chain.
+ *
+ * FC uses the same cascade as DP/TP — the only difference is the gate in
+ * `useAtBatActions.commitChain` (FC requires 1 out, DP=2, TP=3). The cascade
+ * naturally places the batter on first when no chain step targets "first"
+ * (the normal FC shape: force out at 2nd/3rd/home with the batter safe).
  *
  * Two play-shape branches:
  *

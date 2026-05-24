@@ -216,8 +216,8 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
       </g>
 
       <g>
-        <rect x="41.3" y="90.6" width="4.2" height="6.4" fill="none" stroke="#f5f5f0" strokeWidth="0.3" opacity="0.9" />
-        <rect x="54.5" y="90.6" width="4.2" height="6.4" fill="none" stroke="#f5f5f0" strokeWidth="0.3" opacity="0.9" />
+        <rect x="43.4" y="91.2" width="3.6" height="5.4" fill="none" stroke="#f5f5f0" strokeWidth="0.28" opacity="0.9" />
+        <rect x="53" y="91.2" width="3.6" height="5.4" fill="none" stroke="#f5f5f0" strokeWidth="0.28" opacity="0.9" />
       </g>
 
       <g>
@@ -226,10 +226,10 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
       </g>
 
       <polygon
-        points="46.5,91 53.5,91 54.5,94 50,96.5 45.5,94"
+        points="48.1,92 51.9,92 52.3,93.6 50,95.2 47.7,93.6"
         fill="#f5f5f0"
         stroke="#1f3252"
-        strokeWidth="0.45"
+        strokeWidth="0.32"
       />
     </>
   );

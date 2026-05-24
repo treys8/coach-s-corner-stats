@@ -67,6 +67,14 @@ describe("canRecord", () => {
       canRecord("TP", state({ first: runner("a"), second: runner("b"), outs: 1 })),
     ).toBe(false);
   });
+
+  it("FC requires a runner to put out and <2 outs", () => {
+    // Empty bases: defense has no one to choose to put out — FC is meaningless.
+    expect(canRecord("FC", state({}))).toBe(false);
+    expect(canRecord("FC", state({ first: runner("a") }))).toBe(true);
+    // 2-out FC would just be a 3rd-out ground out.
+    expect(canRecord("FC", state({ first: runner("a"), outs: 2 }))).toBe(false);
+  });
 });
 
 describe("chainNotation", () => {
@@ -299,6 +307,38 @@ describe("buildChainAdvances", () => {
     ];
     expect(buildChainAdvances(chain, bases({ second: runner("r2") }))).toEqual([
       { from: "batter", to: "out", player_id: null },
+    ]);
+  });
+
+  // ---- FC scenarios -------------------------------------------------------
+  // FC uses the same cascade as DP — the only difference is the chain stops
+  // at one out and "first" is never in playBases, so the batter falls through
+  // to first safely. These tests pin that shape so the FC path can't silently
+  // regress to a DP-shaped advance set (which would put the batter out).
+
+  it("FC 6-4 with R1 → batter safe at 1st, R1 forced out at 2nd", () => {
+    // Typical FC: SS fields, throws to 2B who tags second base for the force.
+    // No throw to 1st — defense chose the lead runner instead of the batter.
+    const chain = [t("SS", "fielded"), t("2B", "received", "second")];
+    expect(buildChainAdvances(chain, bases({ first: runner("r1") }))).toEqual([
+      { from: "batter", to: "first", player_id: null },
+      { from: "first", to: "out", player_id: "r1" },
+    ]);
+  });
+
+  it("FC 1-2 force at home with bases loaded → R3 out at home, R1/R2 advance, batter on 1st", () => {
+    // Pitcher fields a comebacker, throws home to nail the lead runner.
+    // Force cascade still pushes R1→2nd and R2→3rd safely; batter to 1st.
+    const chain = [t("P", "fielded"), t("C", "received", "home")];
+    const result = buildChainAdvances(
+      chain,
+      bases({ first: runner("r1"), second: runner("r2"), third: runner("r3") }),
+    );
+    expect(result).toEqual([
+      { from: "batter", to: "first", player_id: null },
+      { from: "first", to: "second", player_id: "r1" },
+      { from: "second", to: "third", player_id: "r2" },
+      { from: "third", to: "out", player_id: "r3" },
     ]);
   });
 });

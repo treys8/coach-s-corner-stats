@@ -413,7 +413,7 @@ function ArmedDragBody({
   chainOuts,
   chainOutsRequired,
 }: ArmedDragBodyProps) {
-  const isMultiStep = armedResult === "DP" || armedResult === "TP";
+  const isMultiStep = armedResult === "DP" || armedResult === "TP" || armedResult === "FC";
   const chainLen = pendingChain.length;
 
   if (isMultiStep && chainLen > 0) {
@@ -479,7 +479,9 @@ function ArmedDragBody({
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           {isMultiStep
-            ? "Drag the fielder who first touched the ball. Then drag each receiving fielder onto the bag covered."
+            ? armedResult === "FC"
+              ? "Drag the fielder who fielded the ball. Then drag the fielder who received at the force base."
+              : "Drag the fielder who first touched the ball. Then drag each receiving fielder onto the bag covered."
             : `Drag the fielder to where the ball was ${isCaughtOutcome(armedResult) ? "caught" : "hit"}.`}
         </p>
       </div>
