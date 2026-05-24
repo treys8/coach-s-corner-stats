@@ -309,9 +309,10 @@ export function useFlowActions({
 
   // One-tap undo. Two paths depending on whether the most recent action
   // has been acked by the server:
-  //   - Pending (still in the outbox): drop the queue entry. Posting a
-  //     supersede would 400 since the synth's `pending-…` id isn't a UUID;
-  //     and there's nothing on the server yet to supersede anyway.
+  //   - Pending (still in the outbox): drop the queue entry. The server
+  //     hasn't seen this event yet — there's nothing to supersede, and
+  //     posting a correction with the synth's `pending-…` id would be a
+  //     silent no-op (no real event matches that id in replay).
   //   - Server-acked: post a void correction. Undoing a corrected at_bat
   //     removes BOTH the original and the correction from replay.
   const submitUndo = async () => {
