@@ -3,7 +3,9 @@
 // lead-change caused by a non-PA event is attributed to the pitcher who
 // was actually on the mound at that moment, not whoever pitched the next
 // at-bat. NFHS 4-inning starter eligibility (vs MLB 5-inning)
-// parameterized by `leagueType`.
+// parameterized by `leagueType` — required so a caller that forgets to
+// thread the team's setting through silently doesn't run MLB rules on
+// NFHS data.
 
 import type { DerivedAtBat, NonPaRun, ReplayState } from "../types";
 
@@ -33,7 +35,7 @@ export function computeWLS(
   weAreHome: boolean,
   finalTeamScore: number,
   finalOpponentScore: number,
-  leagueType: LeagueType = "mlb",
+  leagueType: LeagueType,
 ): WLSResult {
   if (finalTeamScore === finalOpponentScore) return { W: null, L: null, SV: null };
   const weWon = finalTeamScore > finalOpponentScore;

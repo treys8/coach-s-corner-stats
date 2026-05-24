@@ -54,7 +54,7 @@ const r = (playerId: string, pitcherId: string | null = null, reachedOnError = f
 });
 describe("computeWLS", () => {
   it("returns no W/L/SV for a tie game", () => {
-    const result = computeWLS([], [], true, 3, 3);
+    const result = computeWLS([], [], true, 3, 3, "mlb");
     expect(result).toEqual({ W: null, L: null, SV: null });
   });
 
@@ -89,7 +89,7 @@ describe("computeWLS", () => {
         }));
       }
     }
-    const wls = computeWLS(atBats, [], true, 4, 0);
+    const wls = computeWLS(atBats, [], true, 4, 0, "mlb");
     expect(wls.W).toBe("ace");
     expect(wls.L).toBeNull();
   });
@@ -104,7 +104,7 @@ describe("computeWLS", () => {
       }),
     ];
     // We are home, never score. We lose 0-1.
-    const wls = computeWLS(atBats, [], true, 0, 1);
+    const wls = computeWLS(atBats, [], true, 0, 1, "mlb");
     expect(wls.L).toBe("starter");
     expect(wls.W).toBeNull();
   });
@@ -139,7 +139,40 @@ describe("computeWLS", () => {
         }));
       }
     }
-    const wls = computeWLS(atBats, [], true, 1, 0);
+    const wls = computeWLS(atBats, [], true, 1, 0, "mlb");
+    expect(wls.W).toBe("reliever");
+  });
+
+  it("MLB starter who pitches exactly 4 IP (12 outs) is NOT eligible — W shifts to the reliever", () => {
+    // Regression for the silent "mlb" default in computeWLS: if a caller
+    // forgot to thread leagueType and the team is actually MLB, an NFHS-
+    // eligible 4-IP start would have wrongly been awarded the W. Verifies
+    // that under MLB rules the 5-IP threshold still applies.
+    const atBats: DerivedAtBat[] = [];
+    atBats.push(ab({
+      batter_id: "x", half: "bottom", inning: 1, result: "HR",
+      runs_scored_on_play: 1,
+      runner_advances: [{ from: "batter", to: "home", player_id: "x" }],
+      pitcher_id: "starter", pitcher_of_record_id: "starter",
+    }));
+    for (let i = 1; i <= 4; i++) {
+      for (let o = 0; o < 3; o++) {
+        atBats.push(ab({
+          pitcher_id: "starter", pitcher_of_record_id: "starter",
+          half: "top", inning: i, result: "GO", outs_recorded: 1,
+        }));
+      }
+    }
+    // Reliever finishes from the 5th onward (15 outs).
+    for (let i = 5; i <= 9; i++) {
+      for (let o = 0; o < 3; o++) {
+        atBats.push(ab({
+          pitcher_id: "reliever", pitcher_of_record_id: "reliever",
+          half: "top", inning: i, result: "GO", outs_recorded: 1,
+        }));
+      }
+    }
+    const wls = computeWLS(atBats, [], true, 1, 0, "mlb");
     expect(wls.W).toBe("reliever");
   });
 
@@ -232,7 +265,7 @@ describe("computeWLS", () => {
       }));
     }
     // Starter total: 6 outs (ineligible for MLB 15). Reliever: 15 outs.
-    const wls = computeWLS(atBats, [], true, 1, 0);
+    const wls = computeWLS(atBats, [], true, 1, 0, "mlb");
     expect(wls.W).toBe("reliever");
   });
 
@@ -273,7 +306,7 @@ describe("computeWLS", () => {
       event_id: "wp1", pitcher_id: "pitcherA", runs: 1,
       source: "wild_pitch" as const, sequence: 3, inning: 2, half: "top" as const,
     }];
-    const wls = computeWLS(atBats, nonPaRuns, true, 1, 3);
+    const wls = computeWLS(atBats, nonPaRuns, true, 1, 3, "mlb");
     expect(wls.L).toBe("pitcherA");
   });
 
@@ -306,7 +339,7 @@ describe("computeWLS", () => {
         half: "top", inning: 7, result: "GO", outs_recorded: 1,
       }));
     }
-    const wls = computeWLS(atBats, [], true, 2, 1);
+    const wls = computeWLS(atBats, [], true, 2, 1, "mlb");
     expect(wls.W).toBe("starter");
     expect(wls.SV).toBe("closer");
   });

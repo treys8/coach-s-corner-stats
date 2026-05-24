@@ -558,11 +558,17 @@ function applySubstitution(state: ReplayState, p: SubstitutionPayload): ReplaySt
       return { ...state, bases, our_lineup };
     }
     case "courtesy_run": {
-      // NFHS only — reject for MLB rule sets. Courtesy runner replaces
-      // the runner on a base *temporarily*; the original player (pitcher
-      // or catcher) stays in the lineup and bats next time their slot
-      // comes up. So we mutate bases but NOT our_lineup. Track usage.
-      if (state.league_type !== "nfhs") return state;
+      // NFHS only — throw on non-NFHS rule sets so a slipped event
+      // surfaces instead of silently corrupting attribution. Courtesy
+      // runner replaces the runner on a base *temporarily*; the original
+      // player (pitcher or catcher) stays in the lineup and bats next
+      // time their slot comes up. So we mutate bases but NOT our_lineup.
+      // Track usage.
+      if (state.league_type !== "nfhs") {
+        throw new Error(
+          `courtesy_run is NFHS-only (league_type=${state.league_type})`,
+        );
+      }
       const base = p.original_base;
       const bases: Bases = { ...state.bases };
       if (base && bases[base]) {

@@ -1005,8 +1005,11 @@ describe("replay()", () => {
     expect(beforeSub.bases.first?.player_id).toBe("p1");
   });
 
-  it("courtesy_run is rejected when league_type is 'mlb' (default)", () => {
-    const state = replay([
+  it("courtesy_run on a non-NFHS game throws (strict rejection — defense in depth)", () => {
+    // Pre-fix the engine silently no-oped, which corrupted stats when a
+    // misconfigured team or stale UI slipped an MLB-rules CR through.
+    // Throwing surfaces the data-quality issue at apply time instead.
+    const events = [
       startGame({ we_are_home: false, starting_pitcher_id: "p1" }),
       evt("at_bat", atBat({
         half: "top", result: "1B", batter_id: "p1",
@@ -1020,10 +1023,8 @@ describe("replay()", () => {
         sub_type: "courtesy_run",
         original_base: "first",
       }),
-    ]);
-    // CR rejected → original runner still on first; no usage logged.
-    expect(state.bases.first?.player_id).toBe("p1");
-    expect(state.courtesy_runners_used).toHaveLength(0);
+    ];
+    expect(() => replay(events)).toThrow(/courtesy_run is NFHS-only/);
   });
 
   it("re_entry: starter A subbed out and back in at original slot, sets re_entered=true", () => {
