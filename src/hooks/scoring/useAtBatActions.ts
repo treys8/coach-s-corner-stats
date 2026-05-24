@@ -73,19 +73,13 @@ export interface UseAtBatActionsResult {
     advancesOverride?: RunnerAdvance[],
   ) => Promise<void>;
   submitPitch: (pitchType: PitchType) => Promise<void>;
-  /** Drag-and-drop callback from the diamond. v2 auto-commit: one drop
-   *  = one play. The drop position is captured as spray (where the ball
-   *  was hit/caught), the fielder is the first-touch fielder, and the
-   *  at-bat is submitted immediately with a single-step chain. Corrections
+  /** Drag-and-drop callback from the diamond. Auto-commit: one drop = one
+   *  play. The drop position is captured as spray (where the ball was
+   *  hit/caught), the fielder is the first-touch fielder, and the at-bat
+   *  is submitted immediately with a single-step chain. DP/TP append to
+   *  `pendingChain` instead and wait for an explicit Commit. Corrections
    *  go through the top-bar Undo or Edit last play. */
   onFielderDrop: (x: number, y: number, fielder: FielderPosition) => void;
-  /** Legacy v1 path: same drop-and-commit semantics but without the
-   *  fielder_chain extras. Still used by v1's LiveScoring shell. */
-  legacyDirectDrop: (x: number, y: number, fielder: FielderPosition) => void;
-  /** Commit the armed result with no spray and no chain. Used by v1's
-   *  "Skip location" footer button. v2 never exposes this — every in-play
-   *  outcome requires a fielder drag. No-op if no live arm. */
-  skipLocation: () => void;
   /** Smart-default batted-ball-type. Set by `onOutcomePicked` and consumed
    *  by `onFielderDrop` when building the auto-commit chain. */
   battedBallType: BattedBallType | null;
@@ -525,18 +519,6 @@ export function useAtBatActions({
     );
   };
 
-  // Legacy v1 path — drop-and-commit without the chain extras. Pre-Stage-3
-  // event shape preserved for the legacy rollup.
-  const legacyDirectDrop = (x: number, y: number, fielder: FielderPosition) => {
-    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
-    void submitAtBat(armedResult, { x, y, fielder }, undefined, armedExtras ?? undefined);
-  };
-
-  const skipLocation = () => {
-    if (!armedResult || armedResult === ARMED_IN_PLAY_PENDING) return;
-    void submitAtBat(armedResult, null, undefined, armedExtras ?? undefined);
-  };
-
   // Commit gate for multi-step DP/TP. The chain is incomplete until it
   // enumerates DEFAULT_OUTS_FOR[result] real outs in the derived advances
   // (a "tagged" step with no `target` doesn't count, since it attributes
@@ -556,8 +538,6 @@ export function useAtBatActions({
     submitAtBat,
     submitPitch,
     onFielderDrop,
-    legacyDirectDrop,
-    skipLocation,
     battedBallType,
     setBattedBallType,
     pendingChain,

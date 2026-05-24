@@ -218,7 +218,10 @@ function StateChip({
       </span>
       <OutsDots outs={outs} />
       {showCount && (
-        <span className="font-mono-stat text-base md:text-lg text-sa-blue-deep whitespace-nowrap">
+        // Hidden on lg+ — the PitchRail rail carries the giant standalone
+        // count badge there, so this chip would be a redundant second copy.
+        // On <lg this chip is the only count surface (dock has no badge).
+        <span className="lg:hidden font-mono-stat text-base md:text-lg text-sa-blue-deep whitespace-nowrap">
           {balls}-{strikes}
         </span>
       )}

@@ -50,6 +50,11 @@ interface PitchRailProps {
   chainOuts: number;
   /** Required force-outs for the armed result (2 for DP, 3 for TP). */
   chainOutsRequired: number;
+  /** Layout variant. `rail` (default) is the tablet-landscape left column —
+   *  vertical buttons, big count badge. `dock` is the phone/portrait footer
+   *  — horizontal pitch row, count folds into the status bar. Mode bodies
+   *  (pickContact / armedDrag) render the same shared internals either way. */
+  layout?: "rail" | "dock";
 }
 
 type Mode = "pitchPad" | "armedDrag" | "pickContact";
@@ -63,17 +68,19 @@ const PRIMARY: { type: PitchType; label: string; cls: string }[] = [
 ];
 
 /**
- * Vertical pitch rail for the v2 three-column tablet shell. Replaces the
- * v1 bottom-bar PaActionFooter — the rail is the left column and swaps
- * between three modes the same way the footer did, keeping the diamond
- * fully visible in the center column at all times:
- *  - `pitchPad`     — count badge + primary pitch buttons + More ▾ +
- *                      Direct outcome → toggle.
- *  - `pickContact`  — OutcomeGrid takes the rail (entered after In play
- *                      or via the Direct outcome toggle).
+ * Pitch UI for the scoring shell, with two layouts that share the same
+ * three internal modes:
+ *  - `pitchPad`     — count badge (rail only) + primary pitch buttons +
+ *                      More ▾ + Direct outcome → toggle.
+ *  - `pickContact`  — OutcomeGrid replaces the pitch buttons (entered
+ *                      after "In play" or via the Direct outcome toggle).
  *  - `armedDrag`    — drag-prompt + Cancel after an in-play outcome is
  *                      picked. Dropping a fielder on the diamond auto-
  *                      commits the at-bat (no Commit button).
+ *
+ * `layout="rail"` is the lg+ tablet-landscape left column (vertical buttons,
+ * big count badge). `layout="dock"` is the <lg phone/portrait footer
+ * (horizontal pitch grid, no count badge — the status bar carries it).
  */
 export function PitchRail({
   balls,
@@ -96,10 +103,12 @@ export function PitchRail({
   canCommitChain,
   chainOuts,
   chainOutsRequired,
+  layout = "rail",
 }: PitchRailProps) {
   const [showOutcomesManually, setShowOutcomesManually] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const disabled = submitting || outs >= 3;
+  const isDock = layout === "dock";
 
   const mode: Mode =
     armedResult === ARMED_IN_PLAY_PENDING
@@ -115,107 +124,128 @@ export function PitchRail({
     if (armedResult === ARMED_IN_PLAY_PENDING) setArmedResult(null);
   };
 
+  // Container chrome differs between layouts: rail = full-height left column
+  // with a right border; dock = bottom-pinned footer with a top border and a
+  // height cap so it doesn't eat the diamond.
+  const containerCls = isDock
+    ? "flex flex-col border-t bg-background max-h-[55vh]"
+    : "flex flex-col h-full min-h-0 border-r bg-background";
+
   return (
-    <div className="flex flex-col h-full min-h-0 border-r bg-background">
-      {/* Count badge — always visible across all rail modes */}
-      <div className="px-3 pt-3 pb-2 border-b">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Count
-          </span>
-          <span className="font-mono-stat text-[64px] leading-none text-sa-blue-deep tabular-nums">
-            {balls}-{strikes}
-          </span>
+    <div className={containerCls}>
+      {/* Count badge — only the rail layout owns the big standalone badge.
+          In dock mode the GameStatusBar carries the count instead. */}
+      {!isDock && (
+        <div className="px-3 pt-3 pb-2 border-b">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Count
+            </span>
+            <span className="font-mono-stat text-[64px] leading-none text-sa-blue-deep tabular-nums">
+              {balls}-{strikes}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Mode-specific body */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-3">
+      <div className={`flex-1 min-h-0 overflow-y-auto ${isDock ? "px-3 py-2" : "p-3"}`}>
         {mode === "pitchPad" && (
-          <div className="flex flex-col gap-2">
-            {PRIMARY.map((p) => (
-              <Button
-                key={p.type}
-                disabled={disabled}
-                onClick={() => onPitch(p.type)}
-                className={`h-14 text-base font-bold ${p.cls}`}
-              >
-                {p.label}
-              </Button>
-            ))}
-
-            <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-              <PopoverTrigger asChild>
+          isDock ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-5 gap-1.5">
+                {PRIMARY.map((p) => (
+                  <Button
+                    key={p.type}
+                    disabled={disabled}
+                    onClick={() => onPitch(p.type)}
+                    className={`h-12 text-sm font-bold px-1 ${p.cls}`}
+                  >
+                    {p.label}
+                  </Button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      disabled={disabled}
+                      className="h-9 text-xs"
+                    >
+                      More ▾
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-52 p-2" align="start" side="top">
+                    <MoreMenu
+                      disabled={disabled}
+                      hasRunners={hasRunners}
+                      onClose={() => setMoreOpen(false)}
+                      onPitch={onPitch}
+                      onIntentionalWalk={onIntentionalWalk}
+                      onBalk={onBalk}
+                    />
+                  </PopoverContent>
+                </Popover>
                 <Button
-                  variant="outline"
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-9 px-2 text-xs text-muted-foreground"
+                  onClick={() => setShowOutcomesManually(true)}
                   disabled={disabled}
-                  className="h-10 text-sm"
                 >
-                  More ▾
+                  Direct outcome →
                 </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-52 p-2" align="start" side="right">
-                <div className="flex flex-col gap-2">
-                  <Button
-                    variant="outline"
-                    disabled={disabled}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      onPitch("hbp");
-                    }}
-                    className="h-9 text-sm font-semibold text-foreground justify-start"
-                  >
-                    HBP
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={disabled}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      onPitch("pitchout");
-                    }}
-                    className="h-9 text-sm font-semibold text-foreground justify-start"
-                  >
-                    Pitchout
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={disabled}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      onIntentionalWalk();
-                    }}
-                    className="h-9 text-sm font-semibold text-foreground justify-start"
-                  >
-                    Intentional walk
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={disabled || !hasRunners}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      onBalk();
-                    }}
-                    className="h-9 text-sm font-semibold text-foreground justify-start"
-                    title={hasRunners ? "All runners advance one base" : "No runners on — balk has no effect"}
-                  >
-                    Balk
-                  </Button>
-                </div>
-              </PopoverContent>
-            </Popover>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {PRIMARY.map((p) => (
+                <Button
+                  key={p.type}
+                  disabled={disabled}
+                  onClick={() => onPitch(p.type)}
+                  className={`h-14 text-base font-bold ${p.cls}`}
+                >
+                  {p.label}
+                </Button>
+              ))}
 
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2 text-xs text-muted-foreground"
-              onClick={() => setShowOutcomesManually(true)}
-              disabled={disabled}
-            >
-              Direct outcome →
-            </Button>
-          </div>
+              <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    disabled={disabled}
+                    className="h-10 text-sm"
+                  >
+                    More ▾
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-52 p-2" align="start" side="right">
+                  <MoreMenu
+                    disabled={disabled}
+                    hasRunners={hasRunners}
+                    onClose={() => setMoreOpen(false)}
+                    onPitch={onPitch}
+                    onIntentionalWalk={onIntentionalWalk}
+                    onBalk={onBalk}
+                  />
+                </PopoverContent>
+              </Popover>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs text-muted-foreground"
+                onClick={() => setShowOutcomesManually(true)}
+                disabled={disabled}
+              >
+                Direct outcome →
+              </Button>
+            </div>
+          )
         )}
 
         {mode === "pickContact" && (
@@ -277,6 +307,74 @@ export function PitchRail({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+interface MoreMenuProps {
+  disabled: boolean;
+  hasRunners: boolean;
+  onClose: () => void;
+  onPitch: (t: PitchType) => void;
+  onIntentionalWalk: () => void;
+  onBalk: () => void;
+}
+
+function MoreMenu({
+  disabled,
+  hasRunners,
+  onClose,
+  onPitch,
+  onIntentionalWalk,
+  onBalk,
+}: MoreMenuProps) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Button
+        variant="outline"
+        disabled={disabled}
+        onClick={() => {
+          onClose();
+          onPitch("hbp");
+        }}
+        className="h-9 text-sm font-semibold text-foreground justify-start"
+      >
+        HBP
+      </Button>
+      <Button
+        variant="outline"
+        disabled={disabled}
+        onClick={() => {
+          onClose();
+          onPitch("pitchout");
+        }}
+        className="h-9 text-sm font-semibold text-foreground justify-start"
+      >
+        Pitchout
+      </Button>
+      <Button
+        variant="outline"
+        disabled={disabled}
+        onClick={() => {
+          onClose();
+          onIntentionalWalk();
+        }}
+        className="h-9 text-sm font-semibold text-foreground justify-start"
+      >
+        Intentional walk
+      </Button>
+      <Button
+        variant="outline"
+        disabled={disabled || !hasRunners}
+        onClick={() => {
+          onClose();
+          onBalk();
+        }}
+        className="h-9 text-sm font-semibold text-foreground justify-start"
+        title={hasRunners ? "All runners advance one base" : "No runners on — balk has no effect"}
+      >
+        Balk
+      </Button>
     </div>
   );
 }

@@ -16,9 +16,7 @@ import { formatDatePart, formatGameTime } from "@/lib/date-display";
 import type { GameStatus, GameLocation, Json } from "@/integrations/supabase/types";
 import type { GameStartedPayload, LineupSlot, OpposingLineupSlot } from "@/lib/scoring/types";
 import { LiveScoring } from "@/components/scoring/LiveScoring";
-import { LiveScoringV2 } from "@/components/scoring/LiveScoringV2";
 import { ServiceWorkerRegistrar } from "@/components/ServiceWorkerRegistrar";
-import { useIsV2LiveScoringViewport } from "@/hooks/use-mobile";
 import { OpposingLineupPicker } from "@/components/score/OpposingLineupPicker";
 import { buildEmpty, slotHasIdentity, toLineupSlot, type OpposingSlotDraft } from "@/lib/opponents/lineup-sources";
 
@@ -60,7 +58,6 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
   const [game, setGame] = useState<GameRow | null>(null);
   const [roster, setRoster] = useState<RosterPlayer[]>([]);
   const [loading, setLoading] = useState(true);
-  const isV2Viewport = useIsV2LiveScoringViewport();
 
   useEffect(() => {
     let active = true;
@@ -129,41 +126,30 @@ export default function ScoreGamePage({ params }: { params: Promise<{ gameId: st
 
   // In-progress games take over the viewport — no constrained `<main>`
   // container or page-level GameHeader chrome competing for vertical space.
-  // Live scoring v2 (three-column tablet shell) renders at the
-  // iPad-landscape threshold; smaller viewports get the v1 bottom-bar
-  // shell during the rollout. While the viewport hook is resolving (SSR
-  // + first client render), render a neutral 100dvh placeholder so we
-  // don't flash v1 before flipping to v2.
-  // 'suspended' renders the scoring screen the same way as 'in_progress' —
-  // any new event auto-resumes the game (replay-engine spec). The tablet shows
-  // a banner so the coach knows.
+  // 'suspended' renders the same shell as 'in_progress' — any new event
+  // auto-resumes the game (replay-engine spec). A banner tells the coach.
   if (game.status === "in_progress" || game.status === "suspended") {
-    if (isV2Viewport === undefined) {
-      return <div className="h-[100dvh] bg-background" />;
-    }
-    const liveScoringProps = {
-      gameId: game.id,
-      roster,
-      teamShortLabel: school.short_name ?? school.name,
-      opponentName: game.opponent,
-      schoolId: school.id,
-      myTeamId: team.id,
-      gameDate: game.game_date,
-      opponentTeamId: game.opponent_team_id,
-      backHref: base,
-      onFinalized: () =>
-        setGame({
-          ...game,
-          status: "final" as const,
-          finalized_at: game.finalized_at ?? new Date().toISOString(),
-        }),
-    };
     return (
       <>
         <ServiceWorkerRegistrar />
-        {isV2Viewport
-          ? <LiveScoringV2 {...liveScoringProps} />
-          : <LiveScoring {...liveScoringProps} />}
+        <LiveScoring
+          gameId={game.id}
+          roster={roster}
+          teamShortLabel={school.short_name ?? school.name}
+          opponentName={game.opponent}
+          schoolId={school.id}
+          myTeamId={team.id}
+          gameDate={game.game_date}
+          opponentTeamId={game.opponent_team_id}
+          backHref={base}
+          onFinalized={() =>
+            setGame({
+              ...game,
+              status: "final" as const,
+              finalized_at: game.finalized_at ?? new Date().toISOString(),
+            })
+          }
+        />
       </>
     );
   }
