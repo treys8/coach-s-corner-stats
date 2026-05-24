@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { applyEvent, replay } from "./replay";
+import { rollupPitching } from "./rollup/pitching";
 import { INITIAL_STATE } from "./types";
 import type {
   CorrectionPayload,
@@ -697,6 +698,119 @@ describe("replay()", () => {
     // opp2 reached against the reliever.
     expect(state.bases.first?.player_id).toBe("opp2");
     expect(state.bases.first?.pitcher_of_record_id).toBe("reliever");
+  });
+
+  it("mid-PA pitching change: the relieving pitcher is credited as pitcher_of_record on the resulting BaseRunner", () => {
+    // Pitcher A throws ball, ball (count 2-0); pitching change to B; B throws
+    // ball, ball (4-0 walk). The engine attributes the PA to whoever is on
+    // the mound at the moment of resolution (state.current_pitcher_id), so
+    // the runner inherits pitcher_of_record = B.
+    //
+    // NOTE: MLB Rule 9.16(g)/(h) would charge the walk to A here because A
+    // left with more balls than strikes. The engine does not implement that
+    // rule today — see audit gap. If/when implemented, update this test to
+    // expect "pitcherA" and add a sibling test for the more-strikes-than-
+    // balls case (charged to reliever).
+    const state = replay([
+      startGame({ we_are_home: true, starting_pitcher_id: "pitcherA" }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("pitching_change", { out_pitcher_id: "pitcherA", in_pitcher_id: "pitcherB" }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("at_bat", atBat({
+        half: "top", result: "BB",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp1" }],
+      })),
+    ]);
+    expect(state.current_pitcher_id).toBe("pitcherB");
+    expect(state.bases.first?.player_id).toBe("opp1");
+    expect(state.bases.first?.pitcher_of_record_id).toBe("pitcherB");
+  });
+
+  it("mid-PA pitching change: a later inherited-runner score is attributed to the walking pitcher via rollup", () => {
+    // Full lifecycle: pitcherB walks opp1 (after the mid-PA change from A);
+    // pitching change to C; C gives up a 2B that scores opp1. rollupPitching
+    // should charge the run to B (the pitcher_of_record on the BaseRunner),
+    // not C (the pitcher who threw the scoring 2B).
+    const state = replay([
+      startGame({ we_are_home: true, starting_pitcher_id: "pitcherA" }),
+      // A → B mid-PA → walk credited to B.
+      evt("pitch", { pitch_type: "ball" }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("pitching_change", { out_pitcher_id: "pitcherA", in_pitcher_id: "pitcherB" }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("pitch", { pitch_type: "ball" }),
+      evt("at_bat", atBat({
+        half: "top", result: "BB", pitcher_id: "pitcherB",
+        runner_advances: [{ from: "batter", to: "first", player_id: "opp1" }],
+      })),
+      // B → C between PAs.
+      evt("pitching_change", { out_pitcher_id: "pitcherB", in_pitcher_id: "pitcherC" }),
+      // C gives up 2B that scores opp1.
+      evt("at_bat", atBat({
+        half: "top", result: "2B", pitcher_id: "pitcherC",
+        runner_advances: [
+          { from: "first", to: "home", player_id: "opp1" },
+          { from: "batter", to: "second", player_id: "opp2" },
+        ],
+      })),
+    ]);
+    const lines = rollupPitching(state.at_bats, state.non_pa_runs);
+    const b = lines.get("pitcherB")!;
+    const c = lines.get("pitcherC")!;
+    expect(b.R).toBe(1);
+    expect(b.ER).toBe(1);
+    expect(c.R).toBe(0);
+    expect(c.ER).toBe(0);
+    // BF still goes to C for the 2B PA (current pitcher faced this batter).
+    expect(c.BF).toBe(1);
+    expect(c.H).toBe(1);
+  });
+
+  it("courtesy runner: NFHS — CR scores; R/ER charged to the pitcher who walked the original runner", () => {
+    // We are home → top = opp batting → our pitcher.
+    // pitcherA walks opp pitcher "oppP" (on first, por=A).
+    // CR replaces oppP at first (NFHS courtesy runner).
+    // pitching change to pitcherB.
+    // B gives up 2B that scores the CR.
+    // Run/ER must be charged to A (preserved across the CR swap).
+    const state = replay([
+      startGame({
+        we_are_home: true,
+        starting_pitcher_id: "pitcherA",
+        league_type: "nfhs",
+      }),
+      evt("at_bat", atBat({
+        half: "top", result: "BB", pitcher_id: "pitcherA",
+        runner_advances: [{ from: "batter", to: "first", player_id: "oppP" }],
+      })),
+      evt("substitution", {
+        out_player_id: "oppP",
+        in_player_id: "oppCR",
+        batting_order: 0,
+        position: null,
+        sub_type: "courtesy_run",
+        original_base: "first",
+      }),
+      evt("pitching_change", { out_pitcher_id: "pitcherA", in_pitcher_id: "pitcherB" }),
+      evt("at_bat", atBat({
+        half: "top", result: "2B", pitcher_id: "pitcherB",
+        runner_advances: [
+          { from: "first", to: "home", player_id: "oppCR" },
+          { from: "batter", to: "second", player_id: "opp2" },
+        ],
+      })),
+    ]);
+    // The CR (oppCR) crossed home but pitcher_of_record was preserved across
+    // the courtesy_run substitution, so attribution still flows to A.
+    const lines = rollupPitching(state.at_bats, state.non_pa_runs);
+    const a = lines.get("pitcherA")!;
+    const b = lines.get("pitcherB")!;
+    expect(a.R).toBe(1);
+    expect(a.ER).toBe(1);
+    expect(b.R).toBe(0);
+    expect(b.ER).toBe(0);
   });
 
   it("non_pa_runs entries are tagged with their event source", () => {

@@ -101,6 +101,14 @@ describe("phantomOutsForAtBat", () => {
       phantomOutsForAtBat(ab({ result: "FC", error_step_index: 1, outs_recorded: 1 })),
     ).toBe(0);
   });
+
+  it("clean DP → 0 phantom outs (both outs were actual)", () => {
+    expect(phantomOutsForAtBat(ab({ result: "DP", outs_recorded: 2 }))).toBe(0);
+  });
+
+  it("clean TP → 0 phantom outs (all three outs were actual)", () => {
+    expect(phantomOutsForAtBat(ab({ result: "TP", outs_recorded: 3 }))).toBe(0);
+  });
 });
 
 describe("applyErReconstructionToHalf", () => {
