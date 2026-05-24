@@ -40,7 +40,7 @@ import type {
   ReplayState,
 } from "./types";
 import type { GameEventType } from "@/integrations/supabase/types";
-import { isForbiddenError } from "@/lib/api/errors";
+import { isConcurrencyConflictError, isForbiddenError } from "@/lib/api/errors";
 
 // Accepts any of the project's Supabase clients (server/SSR/admin) without
 // pinning to a specific generic instantiation, which varies between
@@ -571,18 +571,17 @@ export async function rederive(
   // fired concurrently via Promise.all and a CHECK/FK violation on one
   // table could leave the public scoreboard inconsistent across the other
   // two. Now: either all three commit or none do.
-  const derived = buildDerivedPayload(state, events);
-
-  const writeRes = await opts.userClient.rpc("write_derived_state", {
-    p_game_id: gameId,
-    p_derived: derived,
-  });
-  if (writeRes.error) {
-    if (isForbiddenError(writeRes.error)) {
-      throw new Error(`forbidden: ${writeRes.error.message ?? "unknown"}`);
-    }
-    throw new Error(`write_derived_state failed: ${writeRes.error.message}`);
-  }
+  //
+  // Concurrency: two devices scoring the same game can each insert events
+  // (safely — apply_game_events is idempotent on client_event_id) but then
+  // each end up here with a state computed against an incomplete event
+  // log. The RPC compares our expected_last_seq to the actual max(seq)
+  // under a FOR UPDATE lock; if they differ, it aborts with 40001 and we
+  // re-fetch events, re-replay, and retry. Bounded to a small attempt
+  // count — two-device contention is rare and tight retries here mask it.
+  const written = await writeDerivedWithRetry(opts.userClient, admin, gameId, state, events);
+  state = written.state;
+  events = written.events;
 
   // Tablet stat rollup. Gated to final-status writes (and corrections /
   // game_finalized events, which can transition into or out of final) so
@@ -596,6 +595,70 @@ export async function rederive(
   }
 
   return state;
+}
+
+const WRITE_DERIVED_MAX_ATTEMPTS = 3;
+
+/**
+ * Call write_derived_state with optimistic concurrency. Each attempt passes
+ * an `expected_last_seq` matching the events the state was computed against;
+ * the RPC aborts with 40001 if another writer interleaved. We catch that
+ * code, re-fetch + re-replay, and try again up to a small bound.
+ *
+ * Exported for the regression test; otherwise an implementation detail of
+ * rederive().
+ */
+export async function writeDerivedWithRetry(
+  userClient: AnyClient,
+  admin: AnyClient,
+  gameId: string,
+  initialState: ReplayState,
+  initialEvents: GameEventRecord[],
+): Promise<{ state: ReplayState; events: GameEventRecord[] }> {
+  let state = initialState;
+  let events = initialEvents;
+
+  for (let attempt = 0; attempt < WRITE_DERIVED_MAX_ATTEMPTS; attempt++) {
+    const expectedLastSeq = events.reduce(
+      (m, e) => Math.max(m, e.sequence_number),
+      0,
+    );
+    const derived = buildDerivedPayload(state, events);
+    const res = await userClient.rpc("write_derived_state", {
+      p_game_id: gameId,
+      p_derived: derived,
+      p_expected_last_seq: expectedLastSeq,
+    });
+    if (!res.error) {
+      return { state, events };
+    }
+    if (isForbiddenError(res.error)) {
+      throw new Error(`forbidden: ${res.error.message ?? "unknown"}`);
+    }
+    if (
+      !isConcurrencyConflictError(res.error) ||
+      attempt === WRITE_DERIVED_MAX_ATTEMPTS - 1
+    ) {
+      throw new Error(`write_derived_state failed: ${res.error.message}`);
+    }
+
+    // Conflict — a peer writer slipped in between our fetch/replay and the
+    // RPC. Re-fetch events, re-replay, retry with the fresh expected_seq.
+    const ev = await admin
+      .from("game_events")
+      .select(EVENT_COLUMNS)
+      .eq("game_id", gameId)
+      .order("sequence_number", { ascending: true });
+    if (ev.error) {
+      throw new Error(`game_events refetch on retry failed: ${ev.error.message}`);
+    }
+    events = (ev.data ?? []) as unknown as GameEventRecord[];
+    state = replay(events);
+  }
+
+  // Loop body always returns or throws; this is unreachable but satisfies
+  // the type checker.
+  throw new Error("write_derived_state: exhausted retry attempts");
 }
 
 /**
