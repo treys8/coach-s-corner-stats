@@ -41,6 +41,21 @@ export type RunnerAttributionChoice =
   | "passed_ball"
   | "defensive_indifference";
 
+/** Reason a runner ended up on a base behind their pre-drag position.
+ *  Most common case is the auto-advance after a hit being wrong (e.g.
+ *  R2→3rd on a single, but the coach held the runner). */
+export type RunnerBackwardChoice =
+  | "did_not_advance"
+  | "returned_on_throw"
+  | "other";
+
+/** Pending backward / hold runner drag awaiting reason. */
+export interface PendingRunnerBackward {
+  from: Base;
+  to: Base;
+  runnerId: string | null;
+}
+
 export type { RunnerDragTarget, RunnerDragVerdict };
 
 export interface RunnerActionTarget {
@@ -55,7 +70,12 @@ export interface RunnerActionTarget {
  *  modal resolves with. `"prompt_attribution"` means a between-PA forward
  *  drag triggered the SB/error/WP/PB picker — also deferred. `"noop"`
  *  means nothing was applied (e.g., submitting was already true). */
-export type RunnerDragOutcome = "committed" | "prompt_rbi" | "prompt_attribution" | "noop";
+export type RunnerDragOutcome =
+  | "committed"
+  | "prompt_rbi"
+  | "prompt_attribution"
+  | "prompt_backward"
+  | "noop";
 
 /** Pending SAFE@home drop that needs the On-Last-Play modal to resolve.
  *  Coach picks Yes (RBI to last AB) or No (steal-home, no RBI). The hook
@@ -111,6 +131,14 @@ export interface UseRunnerActionsResult {
   ) => Promise<void>;
   /** Dismiss the attribution prompt without recording a move. */
   cancelRunnerAttribution: () => void;
+  /** Backward SAFE drag awaiting reason. Null otherwise. */
+  pendingRunnerBackward: PendingRunnerBackward | null;
+  /** Resolve the backward-drag reason picker. Posts `error_advance` with
+   *  an `attribution_label` describing why the runner ended up behind
+   *  their pre-drag position. */
+  resolveRunnerBackward: (choice: RunnerBackwardChoice) => Promise<void>;
+  /** Dismiss the backward-drag prompt without recording a move. */
+  cancelRunnerBackward: () => void;
 }
 
 
@@ -132,6 +160,8 @@ export function useRunnerActions({
   const [pendingRbiPrompt, setPendingRbiPrompt] = useState<PendingRbiPrompt | null>(null);
   const [pendingRunnerAttribution, setPendingRunnerAttribution] =
     useState<PendingRunnerAttribution | null>(null);
+  const [pendingRunnerBackward, setPendingRunnerBackward] =
+    useState<PendingRunnerBackward | null>(null);
 
   const post = async (
     eventType: GameEventType,
@@ -199,6 +229,18 @@ export function useRunnerActions({
         state.current_pa_pitches.length === 0 ? "post_play" : "during_at_bat";
       setPendingRunnerAttribution({ from, to: target, runnerId, phase });
       return "prompt_attribution";
+    }
+    // SAFE backward drag — coach is undoing an auto-advance (e.g. R2→3rd
+    // applied for a single, but the runner actually held at 2nd). Prompt
+    // for the reason so the timeline gets the right label and a future
+    // stats pass can distinguish "held" from "fielding misplay".
+    if (
+      verdict === "safe" &&
+      target !== "home" &&
+      isBackward(from, target)
+    ) {
+      setPendingRunnerBackward({ from, to: target, runnerId });
+      return "prompt_backward";
     }
     setSubmitting(true);
     const mapped = mapRunnerDragToEvent(from, target, verdict, runnerId);
@@ -285,6 +327,31 @@ export function useRunnerActions({
     setPendingRunnerAttribution(null);
   };
 
+  const resolveRunnerBackward = async (choice: RunnerBackwardChoice) => {
+    const pending = pendingRunnerBackward;
+    if (!pending || submitting) return;
+    setPendingRunnerBackward(null);
+    setSubmitting(true);
+    const payload: RunnerMovePayload = {
+      advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+      attribution_label: BACKWARD_LABELS[choice],
+    };
+    const ok = await post(
+      "error_advance",
+      payload,
+      `${choice}-${pending.from}-${pending.to}`,
+    );
+    if (!ok) {
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
+  };
+
+  const cancelRunnerBackward = () => {
+    setPendingRunnerBackward(null);
+  };
+
   const resolveRbiPrompt = async (onLastPlay: boolean) => {
     const pending = pendingRbiPrompt;
     if (!pending || submitting) return;
@@ -338,6 +405,9 @@ export function useRunnerActions({
     pendingRunnerAttribution,
     resolveRunnerAttribution,
     cancelRunnerAttribution,
+    pendingRunnerBackward,
+    resolveRunnerBackward,
+    cancelRunnerBackward,
   };
 }
 
@@ -349,10 +419,16 @@ const BASE_INDEX: Record<Base | "home", number> = {
 };
 
 // True for any forward drag — forward-one (1B→2B) or multi-base (1B→3B).
-// Same-base or backward drags fall through to the existing mapper (no
-// prompt) since those are typically corrections, not advances.
+// Forward drags route to the SB/error/WP/PB attribution dialog.
 function isForward(from: Base, target: RunnerDragTarget): boolean {
   return BASE_INDEX[target] > BASE_INDEX[from];
+}
+
+// True for any backward drag (3rd→2nd, 3rd→1st, 2nd→1st). Backward
+// drags route to the "why didn't they advance" reason picker. Same-base
+// drops are not backward and fall through to the catch-all mapper.
+function isBackward(from: Base, target: RunnerDragTarget): boolean {
+  return BASE_INDEX[target] < BASE_INDEX[from];
 }
 
 const ATTRIBUTION_LABELS: Record<
@@ -362,4 +438,10 @@ const ATTRIBUTION_LABELS: Record<
   advanced_on_throw: "Advanced on the throw",
   tag_up_advance: "Tag-up advance",
   defensive_indifference: "Defensive indifference",
+};
+
+const BACKWARD_LABELS: Record<RunnerBackwardChoice, string> = {
+  did_not_advance: "Runner did not advance",
+  returned_on_throw: "Returned on the throw",
+  other: "Runner held",
 };

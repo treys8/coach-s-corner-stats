@@ -33,6 +33,7 @@ import { EditLastPlayDialog } from "@/components/scoring/dialogs/EditLastPlayDia
 import { RunnerActionDialog } from "@/components/scoring/dialogs/RunnerActionDialog";
 import { RbiOnLastPlayDialog } from "@/components/scoring/dialogs/RbiOnLastPlayDialog";
 import { RunnerAdvanceAttributionDialog } from "@/components/scoring/dialogs/RunnerAdvanceAttributionDialog";
+import { RunnerBackwardAdvanceDialog } from "@/components/scoring/dialogs/RunnerBackwardAdvanceDialog";
 import { TimingPlayDialog } from "@/components/scoring/dialogs/TimingPlayDialog";
 import { FinalizeDialog } from "@/components/scoring/dialogs/FinalizeDialog";
 
@@ -110,6 +111,9 @@ export function LiveScoring({
     pendingRunnerAttribution,
     resolveRunnerAttribution,
     cancelRunnerAttribution,
+    pendingRunnerBackward,
+    resolveRunnerBackward,
+    cancelRunnerBackward,
     pendingTimingPlay,
     resolveTimingPlay,
     endHalfInning,
@@ -450,6 +454,12 @@ export function LiveScoring({
           void resolveRunnerAttribution(choice, fielderPosition)
         }
         onCancel={cancelRunnerAttribution}
+      />
+      <RunnerBackwardAdvanceDialog
+        pending={pendingRunnerBackward}
+        disabled={submitting}
+        onResolve={(choice) => void resolveRunnerBackward(choice)}
+        onCancel={cancelRunnerBackward}
       />
       <RbiOnLastPlayDialog
         pending={pendingRbiPrompt}
