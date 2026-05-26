@@ -18,7 +18,8 @@ import {
 import type { GameEventType } from "@/integrations/supabase/types";
 import type { FielderPosition } from "@/components/scoring/diamond-geometry";
 import type { UseGameEventsResult } from "./useGameEvents";
-import { announceAutoEndHalf } from "./useGameEvents";
+import { makeWithSubmitting } from "./useGameEvents";
+import { announceAutoEndHalf } from "./announce";
 
 /** Pending runner advance awaiting attribution. `phase` is read by the
  *  dialog to gate which options are shown — pitch-required choices
@@ -133,6 +134,8 @@ export function useRunnerActions({
   const [pendingRunnerAttribution, setPendingRunnerAttribution] =
     useState<PendingRunnerAttribution | null>(null);
 
+  const withSubmitting = makeWithSubmitting(submitting, setSubmitting);
+
   const post = async (
     eventType: GameEventType,
     payload: StolenBasePayload | CaughtStealingPayload | PickoffPayload | RunnerMovePayload,
@@ -150,21 +153,14 @@ export function useRunnerActions({
     return true;
   };
 
-  const submitMidPA = async (
+  const submitMidPA = (
     eventType: GameEventType,
     payload: StolenBasePayload | CaughtStealingPayload | PickoffPayload | RunnerMovePayload,
     clientPrefix: string,
-  ) => {
-    if (submitting) return;
-    setSubmitting(true);
-    const ok = await post(eventType, payload, clientPrefix);
+  ): Promise<void> => withSubmitting<void>(undefined, async () => {
+    await post(eventType, payload, clientPrefix);
     setRunnerAction(null);
-    if (!ok) {
-      setSubmitting(false);
-      return;
-    }
-    setSubmitting(false);
-  };
+  });
 
   const submitRunnerDrag = async (
     from: Base,
@@ -172,6 +168,8 @@ export function useRunnerActions({
     verdict: RunnerDragVerdict,
     runnerId: string | null,
   ): Promise<RunnerDragOutcome> => {
+    // Gate the entire flow (including the prompt branches) on submitting so a
+    // mid-flight submission can't open an RBI / attribution dialog.
     if (submitting) return "noop";
     // SAFE@home routes through the RBI prompt before emitting an event so
     // the coach can attribute the run to the previous at_bat or stamp it
@@ -200,127 +198,118 @@ export function useRunnerActions({
       setPendingRunnerAttribution({ from, to: target, runnerId, phase });
       return "prompt_attribution";
     }
-    setSubmitting(true);
-    const mapped = mapRunnerDragToEvent(from, target, verdict, runnerId);
-    const ok = await post(mapped.eventType, mapped.payload, mapped.clientPrefix);
-    if (!ok) {
-      setSubmitting(false);
-      return "noop";
-    }
-    setSubmitting(false);
-    return "committed";
+    return withSubmitting<RunnerDragOutcome>("noop", async () => {
+      const mapped = mapRunnerDragToEvent(from, target, verdict, runnerId);
+      const ok = await post(mapped.eventType, mapped.payload, mapped.clientPrefix);
+      return ok ? "committed" : "noop";
+    });
   };
 
   const resolveRunnerAttribution = async (
     choice: RunnerAttributionChoice,
     fielderPosition: FielderPosition | null,
-  ) => {
+  ): Promise<void> => {
     const pending = pendingRunnerAttribution;
+    // Match the legacy guard: if a submission is already in flight, do
+    // nothing — don't clear the prompt, don't post. The prompt stays open
+    // so the coach's tap isn't silently dropped.
     if (!pending || submitting) return;
     setPendingRunnerAttribution(null);
-    setSubmitting(true);
-    let ok: boolean;
-    switch (choice) {
-      case "stolen_base": {
-        const payload: StolenBasePayload = {
-          runner_id: pending.runnerId,
-          from: pending.from,
-          to: pending.to,
-        };
-        ok = await post("stolen_base", payload, `sb-${pending.from}`);
-        break;
+    await withSubmitting<void>(undefined, async () => {
+      switch (choice) {
+        case "stolen_base": {
+          const payload: StolenBasePayload = {
+            runner_id: pending.runnerId,
+            from: pending.from,
+            to: pending.to,
+          };
+          await post("stolen_base", payload, `sb-${pending.from}`);
+          return;
+        }
+        case "wild_pitch":
+        case "passed_ball": {
+          const payload: RunnerMovePayload = {
+            advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+          };
+          await post(choice, payload, `${choice}-${pending.from}`);
+          return;
+        }
+        case "fielding_error":
+        case "throwing_error": {
+          const payload: RunnerMovePayload = {
+            advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+            error_fielder_position: fielderPosition ?? undefined,
+            error_type: choice === "fielding_error" ? "fielding" : "throwing",
+          };
+          await post("error_advance", payload, `err-${pending.from}-${pending.to}`);
+          return;
+        }
+        case "advanced_on_throw": {
+          // First-class event — runner takes an extra base on the throw
+          // with no error charged. Engine treats it as earned, no taint,
+          // no fielder-error attribution (WP/balk-style).
+          const payload: RunnerMovePayload = {
+            advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+            attribution_label: ATTRIBUTION_LABELS[choice],
+          };
+          await post("advance_on_throw", payload, `${choice}-${pending.from}-${pending.to}`);
+          return;
+        }
+        case "tag_up_advance":
+        case "defensive_indifference": {
+          // Pure runner-movement events — no SB credit, no error. The
+          // engine has no dedicated event types for these; they emit as
+          // error_advance with an attribution_label so the timeline
+          // description renders correctly and a future stats pass can
+          // suppress the error bookkeeping for these specific variants.
+          const payload: RunnerMovePayload = {
+            advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+            attribution_label: ATTRIBUTION_LABELS[choice],
+          };
+          await post("error_advance", payload, `${choice}-${pending.from}-${pending.to}`);
+          return;
+        }
       }
-      case "wild_pitch":
-      case "passed_ball": {
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-        };
-        ok = await post(choice, payload, `${choice}-${pending.from}`);
-        break;
-      }
-      case "fielding_error":
-      case "throwing_error": {
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-          error_fielder_position: fielderPosition ?? undefined,
-          error_type: choice === "fielding_error" ? "fielding" : "throwing",
-        };
-        ok = await post("error_advance", payload, `err-${pending.from}-${pending.to}`);
-        break;
-      }
-      case "advanced_on_throw": {
-        // First-class event — runner takes an extra base on the throw
-        // with no error charged. Engine treats it as earned, no taint,
-        // no fielder-error attribution (WP/balk-style).
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-          attribution_label: ATTRIBUTION_LABELS[choice],
-        };
-        ok = await post("advance_on_throw", payload, `${choice}-${pending.from}-${pending.to}`);
-        break;
-      }
-      case "tag_up_advance":
-      case "defensive_indifference": {
-        // Pure runner-movement events — no SB credit, no error. The
-        // engine has no dedicated event types for these; they emit as
-        // error_advance with an attribution_label so the timeline
-        // description renders correctly and a future stats pass can
-        // suppress the error bookkeeping for these specific variants.
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-          attribution_label: ATTRIBUTION_LABELS[choice],
-        };
-        ok = await post("error_advance", payload, `${choice}-${pending.from}-${pending.to}`);
-        break;
-      }
-    }
-    if (!ok) {
-      setSubmitting(false);
-      return;
-    }
-    setSubmitting(false);
+    });
   };
 
   const cancelRunnerAttribution = () => {
     setPendingRunnerAttribution(null);
   };
 
-  const resolveRbiPrompt = async (onLastPlay: boolean) => {
+  const resolveRbiPrompt = async (onLastPlay: boolean): Promise<void> => {
     const pending = pendingRbiPrompt;
+    // Same legacy semantics as resolveRunnerAttribution: don't clear or
+    // post while a submission is in flight; leave the prompt open.
     if (!pending || submitting) return;
     setPendingRbiPrompt(null);
-    setSubmitting(true);
-    let ok: boolean;
-    if (onLastPlay) {
-      // Coach said "yes, on last play" — record the run with reached_on_error
-      // bookkeeping suppressed. error_advance with explicit to:home gives
-      // the engine the runner move. Attributing the RBI to the at_bat is
-      // a separate correction step which isn't implemented yet — the run
-      // still posts; RBI attribution lands in a follow-up.
-      const payload: RunnerMovePayload = {
-        advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
-      };
-      ok = await post("error_advance", payload, `drag-${pending.from}-home`);
-    } else if (pending.from === "third") {
-      // R3 stealing home — credits SB to the runner.
-      const payload: StolenBasePayload = {
-        runner_id: pending.runnerId,
-        from: "third",
-        to: "home",
-      };
-      ok = await post("stolen_base", payload, `sb-third`);
-    } else {
-      // R1/R2 to home without RBI — multi-base advance; use error_advance.
-      const payload: RunnerMovePayload = {
-        advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
-      };
-      ok = await post("error_advance", payload, `drag-${pending.from}-home`);
-    }
-    if (!ok) {
-      setSubmitting(false);
-      return;
-    }
-    setSubmitting(false);
+    await withSubmitting<void>(undefined, async () => {
+      if (onLastPlay) {
+        // Coach said "yes, on last play" — record the run with reached_on_error
+        // bookkeeping suppressed. error_advance with explicit to:home gives
+        // the engine the runner move. Attributing the RBI to the at_bat is
+        // a separate correction step which isn't implemented yet — the run
+        // still posts; RBI attribution lands in a follow-up.
+        const payload: RunnerMovePayload = {
+          advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
+        };
+        await post("error_advance", payload, `drag-${pending.from}-home`);
+      } else if (pending.from === "third") {
+        // R3 stealing home — credits SB to the runner.
+        const payload: StolenBasePayload = {
+          runner_id: pending.runnerId,
+          from: "third",
+          to: "home",
+        };
+        await post("stolen_base", payload, `sb-third`);
+      } else {
+        // R1/R2 to home without RBI — multi-base advance; use error_advance.
+        const payload: RunnerMovePayload = {
+          advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
+        };
+        await post("error_advance", payload, `drag-${pending.from}-home`);
+      }
+    });
   };
 
   const cancelRbiPrompt = () => {

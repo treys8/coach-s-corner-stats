@@ -23,3 +23,9 @@ export const STRIKEOUT_RESULTS: ReadonlySet<string> = new Set<AtBatResult>([
 export const NON_AB_RESULTS: ReadonlySet<string> = new Set<AtBatResult>([
   "BB", "IBB", "HBP", "SAC", "SF", "CI",
 ]);
+// Batted-ball outs whose primary fielder gets the PO credit when no
+// fielder_chain is present. Includes IF (infield fly rule) — the umpire's
+// call lands on a high fly the fielder still catches.
+export const PUTOUT_FIELDER_RESULTS: ReadonlySet<string> = new Set<AtBatResult>([
+  "FO", "GO", "LO", "PO", "IF",
+]);
