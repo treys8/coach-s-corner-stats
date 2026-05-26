@@ -1,6 +1,5 @@
 "use client";
 
-import { Card } from "@/components/ui/card";
 import {
   Sheet,
   SheetContent,
@@ -8,73 +7,38 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { OpposingBatterPanel } from "@/components/score/OpposingBatterPanel";
-import { LiveSprayChart } from "@/components/scoring/LiveSprayChart";
-import { formatOpposingSlotLabel } from "@/lib/scoring/at-bat-helpers";
-import type { OpposingBatterProfile } from "@/lib/opponents/profile";
-import type { OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
-import type { SprayMarker } from "@/components/spray/SprayField";
+import {
+  RightRailContent,
+  type RightRailContentProps,
+} from "./RightRailContent";
 
-interface SidebarSheetProps {
+interface SidebarSheetProps extends RightRailContentProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  state: ReplayState;
-  weAreBatting: boolean;
-  currentOppSlot: OpposingLineupSlot | null;
-  currentOpponentBatterId: string | null;
-  currentBatterIdForChip: string | null;
-  opposingProfileCache: Map<string, OpposingBatterProfile>;
-  oppBatterCurrentGameMarkers: SprayMarker[];
-  gameDate: string;
-  gameId: string;
 }
 
+/**
+ * Phone/portrait substitute for the inline right rail. Triggered from the
+ * User icon in `GameStatusBar` (lg:hidden), it shows the same banners +
+ * opposing-batter panel + spray chart that the inline aside renders on
+ * lg+ — sourced from the shared `RightRailContent`.
+ */
 export function SidebarSheet({
   open,
   onOpenChange,
-  state,
-  weAreBatting,
-  currentOppSlot,
-  currentOpponentBatterId,
-  currentBatterIdForChip,
-  opposingProfileCache,
-  oppBatterCurrentGameMarkers,
-  gameDate,
-  gameId,
+  ...rightRailProps
 }: SidebarSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto">
         <SheetHeader>
-          <SheetTitle>Batter detail</SheetTitle>
-          <SheetDescription>Opposing batter career line and spray chart.</SheetDescription>
+          <SheetTitle>Game detail</SheetTitle>
+          <SheetDescription>
+            Banners, opposing batter, and spray chart.
+          </SheetDescription>
         </SheetHeader>
-        <div className="mt-4 space-y-4">
-          {!weAreBatting && (
-            <OpposingBatterPanel
-              opponentPlayerId={currentOpponentBatterId}
-              slotLabel={
-                currentOppSlot
-                  ? formatOpposingSlotLabel(currentOppSlot)
-                  : "Set opposing lineup to track batters."
-              }
-              cache={opposingProfileCache}
-              currentGameMarkers={oppBatterCurrentGameMarkers}
-              currentGameDate={gameDate}
-              currentGameId={gameId}
-            />
-          )}
-          {/* OpposingBatterPanel already renders the unified spray when fielding. */}
-          {weAreBatting && (
-            <Card className="p-3">
-              <h3 className="font-display text-sm uppercase tracking-wider text-sa-blue mb-2">Spray chart</h3>
-              <LiveSprayChart
-                state={state}
-                currentBatterId={currentBatterIdForChip}
-                currentBatterIsOurs={weAreBatting}
-              />
-            </Card>
-          )}
+        <div className="mt-4">
+          <RightRailContent {...rightRailProps} />
         </div>
       </SheetContent>
     </Sheet>

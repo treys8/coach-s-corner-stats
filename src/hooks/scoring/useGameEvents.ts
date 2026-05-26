@@ -10,7 +10,7 @@ import {
   registerDrainRefresher,
   type PostResult,
 } from "@/lib/scoring/events-client";
-import { drainGame } from "@/lib/outbox/drain";
+import { discardEntry, drainGame } from "@/lib/outbox/drain";
 import { listByGame } from "@/lib/outbox/store";
 import type { GameEventPayload, GameEventRecord, ReplayState } from "@/lib/scoring/types";
 import type { GameEventType } from "@/integrations/supabase/types";
@@ -30,6 +30,12 @@ export interface ApplyPostSnapshot {
 export interface UseGameEventsResult {
   state: ReplayState;
   events: GameEventRecord[];
+  /** Synthetic records for outbox entries the server hasn't acked. Mirrors
+   *  what's currently folded into `state` from the queue, so undo can target
+   *  the genuinely-most-recent action even when it hasn't synced yet. Each
+   *  record carries the `pending-<client_event_id>` id used by the synth
+   *  builder. */
+  queued: GameEventRecord[];
   lastSeq: number;
   loading: boolean;
   submitting: boolean;
@@ -45,6 +51,11 @@ export interface UseGameEventsResult {
   applyOptimistic: (synth: GameEventRecord) => void;
   /** Restore the snapshot captured by the most recent `applyOptimistic`. */
   rollbackOptimistic: () => void;
+  /** Remove a still-queued outbox entry by its client_event_id and refresh
+   *  derived state. Used by undo when the most recent action hasn't been
+   *  acked by the server yet — discarding the queue entry is the correct
+   *  semantic since there's nothing to supersede. */
+  discardQueued: (clientEventId: string) => Promise<void>;
 }
 
 /** Build a synthetic GameEventRecord from a queued outbox row. Used by cold-
@@ -74,8 +85,10 @@ function rehydrationRecord(
 
 /** Fold queued outbox entries into a base state so the local view reflects
  *  what the user has tapped but the server hasn't yet acked. Returns the
- *  folded state and the bumped lastSeq (so subsequent local nextSeq
- *  derivations don't collide with already-queued client_event_ids). */
+ *  folded state, the bumped lastSeq (so subsequent local nextSeq derivations
+ *  don't collide with already-queued client_event_ids), and the synthetic
+ *  records that were folded — undo uses the synth list to discover the
+ *  most-recent queued action even when `events` is older. */
 function foldQueued(
   game_id: string,
   base: ReplayState,
@@ -86,9 +99,10 @@ function foldQueued(
     payload: unknown;
     queued_at: number;
   }>,
-): { state: ReplayState; lastSeq: number } {
+): { state: ReplayState; lastSeq: number; synths: GameEventRecord[] } {
   let nextState = base;
   let nextLastSeq = baseLastSeq;
+  const synths: GameEventRecord[] = [];
   for (const q of queued) {
     nextLastSeq += 1;
     const synth = rehydrationRecord(
@@ -101,12 +115,14 @@ function foldQueued(
     );
     try {
       nextState = applyEvent(nextState, synth);
+      synths.push(synth);
     } catch {
       // A malformed queued payload shouldn't crash cold start / refresh.
       // The entry stays in the outbox and surfaces via the failed sheet.
+      // It's also not added to synths — undo shouldn't surface it.
     }
   }
-  return { state: nextState, lastSeq: nextLastSeq };
+  return { state: nextState, lastSeq: nextLastSeq, synths };
 }
 
 /**
@@ -118,14 +134,19 @@ function foldQueued(
 export function useGameEvents(gameId: string): UseGameEventsResult {
   const [state, setState] = useState<ReplayState>(INITIAL_STATE);
   const [events, setEvents] = useState<GameEventRecord[]>([]);
+  const [queued, setQueued] = useState<GameEventRecord[]>([]);
   const [lastSeq, setLastSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  // Pre-optimistic snapshot (state + lastSeq) kept in a ref so the rollback
-  // path doesn't race with React render scheduling. Cleared on commit
-  // (applyPostResult) or rollback. `submitting` blocks concurrent taps so
-  // depth is always 0 or 1.
-  const preOptimisticRef = useRef<{ state: ReplayState; lastSeq: number } | null>(null);
+  // Pre-optimistic snapshot (state + lastSeq + queued) kept in a ref so the
+  // rollback path doesn't race with React render scheduling. Cleared on
+  // commit (applyPostResult) or rollback. `submitting` blocks concurrent
+  // taps so depth is always 0 or 1.
+  const preOptimisticRef = useRef<{
+    state: ReplayState;
+    lastSeq: number;
+    queued: GameEventRecord[];
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -166,6 +187,7 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
       if (!active) return;
       setState(folded.state);
       setEvents(loaded);
+      setQueued(folded.synths);
       setLastSeq(folded.lastSeq);
       setLoading(false);
       recordPerf({
@@ -206,6 +228,7 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     const folded = foldQueued(gameId, baseState, baseLastSeq, stillQueued);
     setState(folded.state);
     if (!error) setEvents(refreshed);
+    setQueued(folded.synths);
     setLastSeq(folded.lastSeq);
     return { state: folded.state, events: refreshed };
   }, [gameId]);
@@ -255,6 +278,13 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     setState(result.state);
     setEvents(newEvents);
     setLastSeq(newLastSeq);
+    // Any synth waiting on this submission's client_event_id has been
+    // promoted to a real server event — drop it from queued so undo / UI
+    // dedupes against the canonical record.
+    if (result.events.length > 0) {
+      const acked = new Set(result.events.map((e) => e.client_event_id));
+      setQueued((prev) => prev.filter((s) => !acked.has(s.client_event_id)));
+    }
     // Commit: server state is authoritative, optimistic snapshot is no
     // longer needed.
     preOptimisticRef.current = null;
@@ -262,12 +292,12 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   };
 
   const applyOptimistic = (synth: GameEventRecord) => {
-    // Snapshot state + lastSeq for rollback. Phase 5: also bump lastSeq so
-    // consecutive offline submits get distinct nextSeq values even when no
-    // server ack ever arrives. The eventual `applyPostResult` (online path)
-    // overwrites lastSeq with the canonical max; the bump is only load-
-    // bearing on the queued path.
-    preOptimisticRef.current = { state, lastSeq };
+    // Snapshot state + lastSeq + queued for rollback. Phase 5: also bump
+    // lastSeq so consecutive offline submits get distinct nextSeq values
+    // even when no server ack ever arrives. The eventual `applyPostResult`
+    // (online path) overwrites lastSeq with the canonical max; the bump is
+    // only load-bearing on the queued path.
+    preOptimisticRef.current = { state, lastSeq, queued };
     setState((prev) =>
       timeSync(
         "applyOptimistic",
@@ -276,6 +306,7 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
       ),
     );
     setLastSeq((prev) => Math.max(prev, synth.sequence_number));
+    setQueued((prev) => [...prev, synth]);
   };
 
   const rollbackOptimistic = () => {
@@ -284,11 +315,31 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     preOptimisticRef.current = null;
     setState(snap.state);
     setLastSeq(snap.lastSeq);
+    setQueued(snap.queued);
   };
+
+  const discardQueued = useCallback(
+    async (clientEventId: string) => {
+      const all = await listByGame(gameId).catch(() => []);
+      const row = all.find((r) => r.client_event_id === clientEventId);
+      if (row) {
+        // discardEntry deletes the outbox row, publishes status, and
+        // triggers the registered refresher — refresh() below re-folds the
+        // (now smaller) queue and replaces queued/state.
+        await discardEntry(gameId, row.id);
+      } else {
+        // Outbox row already drained (raced with the network coming back);
+        // re-fold so the synth drops out of state and queued.
+        await refresh();
+      }
+    },
+    [gameId, refresh],
+  );
 
   return {
     state,
     events,
+    queued,
     lastSeq,
     loading,
     submitting,
@@ -297,6 +348,7 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     applyPostResult,
     applyOptimistic,
     rollbackOptimistic,
+    discardQueued,
   };
 }
 

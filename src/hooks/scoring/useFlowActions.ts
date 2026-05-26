@@ -2,7 +2,6 @@
 
 import { toast } from "sonner";
 import { postEvent, type PostResult } from "@/lib/scoring/events-client";
-import { countByGame } from "@/lib/outbox/store";
 import { describeEvent } from "@/lib/scoring/at-bat-helpers";
 import type {
   AtBatPayload,
@@ -26,6 +25,7 @@ export interface UseFlowActionsArgs {
   submitting: boolean;
   setSubmitting: UseGameEventsResult["setSubmitting"];
   applyPostResult: UseGameEventsResult["applyPostResult"];
+  discardQueued: UseGameEventsResult["discardQueued"];
   /** Called after the finalize event lands so the parent can swap to
    *  FinalStub from local state. */
   onFinalized?: () => void;
@@ -56,6 +56,7 @@ export function useFlowActions({
   submitting,
   setSubmitting,
   applyPostResult,
+  discardQueued,
   onFinalized,
 }: UseFlowActionsArgs): UseFlowActionsResult {
   const withSubmitting = makeWithSubmitting(submitting, setSubmitting);
@@ -293,28 +294,30 @@ export function useFlowActions({
     });
   };
 
-  // One-tap undo. Posts a void correction superseding the most recent live
-  // event. Undoing a corrected at_bat removes BOTH the original and the
-  // correction from replay.
+  // One-tap undo. Two paths depending on whether the most recent action
+  // has been acked by the server:
+  //   - Pending (still in the outbox): drop the queue entry. The server
+  //     hasn't seen this event yet — there's nothing to supersede, and
+  //     posting a correction with the synth's `pending-…` id would be a
+  //     silent no-op (no real event matches that id in replay).
+  //   - Server-acked: post a void correction. Undoing a corrected at_bat
+  //     removes BOTH the original and the correction from replay.
   const submitUndo = async () => {
     // Match legacy guard: a mid-flight submission short-circuits the entire
-    // body so the user's tap can't surface the "sync queue not empty" toast
-    // while another submission is in flight, and so countByGame doesn't run
-    // for nothing.
+    // body so a fast double-tap can't fire two undos in parallel.
     if (submitting || !lastUndoableEvent) return;
-    // Phase 5: undo targets the most recent server-acked event. While the
-    // outbox still has queued entries, lastUndoableEvent points BEHIND
-    // them — so undoing would void an older event from the user's POV.
-    // Gate the action and surface why; the user can resolve via the
-    // sync queue sheet (Discard) once they reach the offline pill.
-    const counts = await countByGame(gameId).catch(() => ({ pending: 0, failed: 0 }));
-    if (counts.pending > 0 || counts.failed > 0) {
-      toast.message("Sync queue not empty — undo unavailable until events sync.");
-      return;
-    }
     const target = lastUndoableEvent;
+    const label = describeEvent(target, names);
     await withSubmitting<void>(undefined, async () => {
-      const label = describeEvent(target, names);
+      if (target.id.startsWith("pending-")) {
+        // Server hasn't acked this event yet — there's nothing to supersede
+        // with a correction (the synth's `pending-…` id matches no row in
+        // replay), so discard the outbox entry instead. discardQueued
+        // triggers a refresh, which re-folds the smaller queue into state.
+        await discardQueued(target.client_event_id);
+        toast.success(`Undid: ${label}`);
+        return;
+      }
       const nextSeq = lastSeq + 1;
       const result = await postEvent(gameId, {
         client_event_id: `undo-${nextSeq}`,
@@ -327,7 +330,7 @@ export function useFlowActions({
       });
       if (!result.ok) return;
       toast.success(`Undid: ${label}`);
-      // The finally in withSubmitting holds the submitting flag through
+      // withSubmitting's finally holds the submitting flag through
       // applyPostResult, so `events` updates before a fast double-tap can
       // re-target the same event.
       applyPostResult(result);

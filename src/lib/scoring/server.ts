@@ -40,7 +40,7 @@ import type {
   ReplayState,
 } from "./types";
 import type { GameEventType } from "@/integrations/supabase/types";
-import { isForbiddenError } from "@/lib/api/errors";
+import { isConcurrencyConflictError, isForbiddenError } from "@/lib/api/errors";
 
 // Accepts any of the project's Supabase clients (server/SSR/admin) without
 // pinning to a specific generic instantiation, which varies between
@@ -571,18 +571,17 @@ export async function rederive(
   // fired concurrently via Promise.all and a CHECK/FK violation on one
   // table could leave the public scoreboard inconsistent across the other
   // two. Now: either all three commit or none do.
-  const derived = buildDerivedPayload(state, events);
-
-  const writeRes = await opts.userClient.rpc("write_derived_state", {
-    p_game_id: gameId,
-    p_derived: derived,
-  });
-  if (writeRes.error) {
-    if (isForbiddenError(writeRes.error)) {
-      throw new Error(`forbidden: ${writeRes.error.message ?? "unknown"}`);
-    }
-    throw new Error(`write_derived_state failed: ${writeRes.error.message}`);
-  }
+  //
+  // Concurrency: two devices scoring the same game can each insert events
+  // (safely — apply_game_events is idempotent on client_event_id) but then
+  // each end up here with a state computed against an incomplete event
+  // log. The RPC compares our expected_last_seq to the actual max(seq)
+  // under a FOR UPDATE lock; if they differ, it aborts with 40001 and we
+  // re-fetch events, re-replay, and retry. Bounded to a small attempt
+  // count — two-device contention is rare and tight retries here mask it.
+  const written = await writeDerivedWithRetry(opts.userClient, admin, gameId, state, events);
+  state = written.state;
+  events = written.events;
 
   // Tablet stat rollup. Gated to final-status writes (and corrections /
   // game_finalized events, which can transition into or out of final) so
@@ -592,80 +591,181 @@ export async function rederive(
   const touchSnapshots = shouldTouchTabletSnapshots(state.status, chainTypes);
 
   if (touchSnapshots) {
-    const del = await admin
-      .from("stat_snapshots")
-      .delete()
-      .eq("game_id", gameId)
-      .eq("source", "tablet");
-    if (del.error) {
-      throw new Error(`stat_snapshots tablet delete failed: ${del.error.message}`);
-    }
-
-    if (state.status === "final") {
-      const gameRow = await admin
-        .from("games")
-        .select("team_id, game_date")
-        .eq("id", gameId)
-        .single();
-      if (gameRow.error || !gameRow.data) {
-        throw new Error(
-          `games fetch for rollup failed: ${gameRow.error?.message ?? "missing"}`,
-        );
-      }
-      const team_id = gameRow.data.team_id as string;
-      const game_date = gameRow.data.game_date as string;
-
-      const batting = rollupBatting(state.at_bats, {
-        stolen_bases: state.stolen_bases,
-        caught_stealing: state.caught_stealing,
-        pickoffs: state.pickoffs,
-      });
-      const pitching = rollupPitching(state.at_bats, state.non_pa_runs);
-      const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
-        stolen_bases: state.stolen_bases,
-        caught_stealing: state.caught_stealing,
-        pickoffs: state.pickoffs,
-        passed_balls: state.passed_balls,
-        error_advance_fielders: state.error_advance_fielders,
-      });
-      const wls = computeWLS(
-        state.at_bats,
-        state.non_pa_runs,
-        state.we_are_home,
-        state.team_score,
-        state.opponent_score,
-        state.league_type,
-      );
-      if (wls.W) { const line = pitching.get(wls.W); if (line) line.W = 1; }
-      if (wls.L) { const line = pitching.get(wls.L); if (line) line.L = 1; }
-      if (wls.SV) { const line = pitching.get(wls.SV); if (line) line.SV = 1; }
-      const playerIds = new Set<string>([
-        ...batting.keys(),
-        ...pitching.keys(),
-        ...fielding.keys(),
-      ]);
-
-      if (playerIds.size > 0) {
-        const rows = [...playerIds].map((player_id) => ({
-          team_id,
-          player_id,
-          upload_date: game_date,
-          game_id: gameId,
-          source: "tablet" as const,
-          upload_id: null,
-          stats: {
-            batting: batting.get(player_id) ?? {},
-            pitching: pitching.get(player_id) ?? {},
-            fielding: fielding.get(player_id) ?? {},
-          },
-        }));
-        const ins = await admin.from("stat_snapshots").insert(rows as never[]);
-        if (ins.error) {
-          throw new Error(`stat_snapshots tablet insert failed: ${ins.error.message}`);
-        }
-      }
-    }
+    await replaceTabletSnapshots(admin, gameId, state);
   }
 
   return state;
+}
+
+const WRITE_DERIVED_MAX_ATTEMPTS = 3;
+
+/**
+ * Call write_derived_state with optimistic concurrency. Each attempt passes
+ * an `expected_last_seq` matching the events the state was computed against;
+ * the RPC aborts with 40001 if another writer interleaved. We catch that
+ * code, re-fetch + re-replay, and try again up to a small bound.
+ *
+ * Exported for the regression test; otherwise an implementation detail of
+ * rederive().
+ */
+export async function writeDerivedWithRetry(
+  userClient: AnyClient,
+  admin: AnyClient,
+  gameId: string,
+  initialState: ReplayState,
+  initialEvents: GameEventRecord[],
+): Promise<{ state: ReplayState; events: GameEventRecord[] }> {
+  let state = initialState;
+  let events = initialEvents;
+
+  for (let attempt = 0; attempt < WRITE_DERIVED_MAX_ATTEMPTS; attempt++) {
+    const expectedLastSeq = events.reduce(
+      (m, e) => Math.max(m, e.sequence_number),
+      0,
+    );
+    const derived = buildDerivedPayload(state, events);
+    const res = await userClient.rpc("write_derived_state", {
+      p_game_id: gameId,
+      p_derived: derived,
+      p_expected_last_seq: expectedLastSeq,
+    });
+    if (!res.error) {
+      return { state, events };
+    }
+    if (isForbiddenError(res.error)) {
+      throw new Error(`forbidden: ${res.error.message ?? "unknown"}`);
+    }
+    if (
+      !isConcurrencyConflictError(res.error) ||
+      attempt === WRITE_DERIVED_MAX_ATTEMPTS - 1
+    ) {
+      throw new Error(`write_derived_state failed: ${res.error.message}`);
+    }
+
+    // Conflict — a peer writer slipped in between our fetch/replay and the
+    // RPC. Re-fetch events, re-replay, retry with the fresh expected_seq.
+    const ev = await admin
+      .from("game_events")
+      .select(EVENT_COLUMNS)
+      .eq("game_id", gameId)
+      .order("sequence_number", { ascending: true });
+    if (ev.error) {
+      throw new Error(`game_events refetch on retry failed: ${ev.error.message}`);
+    }
+    events = (ev.data ?? []) as unknown as GameEventRecord[];
+    state = replay(events);
+  }
+
+  // Loop body always returns or throws; this is unreachable but satisfies
+  // the type checker.
+  throw new Error("write_derived_state: exhausted retry attempts");
+}
+
+/**
+ * DELETE-then-INSERT atomic replace for tablet stat_snapshots. Exported so
+ * the regression test can mock the supabase client and pin the contract
+ * without driving the whole rederive() pipeline.
+ *
+ * Behavior:
+ *   - state.status === "final": fetch team_id + game_date, build per-player
+ *     rollup rows, and pass everything to the RPC.
+ *   - state.status !== "final": pass `p_rows = []`. The RPC still deletes any
+ *     stale tablet rows (un-finalize case) but skips the insert.
+ *
+ * Atomicity: the RPC wraps DELETE + INSERT in one Postgres transaction. A
+ * failure on the insert side leaves the prior rows intact instead of wiping
+ * the final box score.
+ */
+export async function replaceTabletSnapshots(
+  admin: AnyClient,
+  gameId: string,
+  state: ReplayState,
+): Promise<void> {
+  let teamId: string | null = null;
+  let gameDate: string | null = null;
+  let rows: TabletSnapshotRow[] = [];
+
+  if (state.status === "final") {
+    const gameRow = await admin
+      .from("games")
+      .select("team_id, game_date")
+      .eq("id", gameId)
+      .single();
+    if (gameRow.error || !gameRow.data) {
+      throw new Error(
+        `games fetch for rollup failed: ${gameRow.error?.message ?? "missing"}`,
+      );
+    }
+    teamId = gameRow.data.team_id as string;
+    gameDate = gameRow.data.game_date as string;
+    rows = buildTabletSnapshotRows(state);
+  }
+
+  const res = await admin.rpc("replace_tablet_stat_snapshots", {
+    p_game_id: gameId,
+    p_team_id: teamId,
+    p_upload_date: gameDate,
+    p_rows: rows,
+  });
+  if (res.error) {
+    throw new Error(`replace_tablet_stat_snapshots failed: ${res.error.message}`);
+  }
+}
+
+/** One per-player tablet snapshot row, post-rollup. The RPC adds game_id,
+ *  source='tablet', upload_id=null, plus team_id/upload_date (shared across
+ *  all rows for a game), so this shape only carries the per-player parts. */
+export interface TabletSnapshotRow {
+  player_id: string;
+  stats: {
+    batting: Record<string, unknown>;
+    pitching: Record<string, unknown>;
+    fielding: Record<string, unknown>;
+  };
+}
+
+/**
+ * Pure helper: turn a finalized ReplayState into the per-player rollup rows
+ * the tablet snapshot replace RPC consumes. Split out from rederive() so a
+ * regression test can pin the rollup shape without mocking the whole supabase
+ * call chain.
+ */
+export function buildTabletSnapshotRows(state: ReplayState): TabletSnapshotRow[] {
+  const batting = rollupBatting(state.at_bats, {
+    stolen_bases: state.stolen_bases,
+    caught_stealing: state.caught_stealing,
+    pickoffs: state.pickoffs,
+  });
+  const pitching = rollupPitching(state.at_bats, state.non_pa_runs);
+  const fielding = rollupFielding(state.at_bats, state.defensive_innings_outs, {
+    stolen_bases: state.stolen_bases,
+    caught_stealing: state.caught_stealing,
+    pickoffs: state.pickoffs,
+    passed_balls: state.passed_balls,
+    error_advance_fielders: state.error_advance_fielders,
+  });
+  const wls = computeWLS(
+    state.at_bats,
+    state.non_pa_runs,
+    state.we_are_home,
+    state.team_score,
+    state.opponent_score,
+    state.league_type,
+  );
+  if (wls.W) { const line = pitching.get(wls.W); if (line) line.W = 1; }
+  if (wls.L) { const line = pitching.get(wls.L); if (line) line.L = 1; }
+  if (wls.SV) { const line = pitching.get(wls.SV); if (line) line.SV = 1; }
+  const playerIds = new Set<string>([
+    ...batting.keys(),
+    ...pitching.keys(),
+    ...fielding.keys(),
+  ]);
+  return [...playerIds].map((player_id) => ({
+    player_id,
+    stats: {
+      batting: (batting.get(player_id) ?? {}) as Record<string, unknown>,
+      pitching: (pitching.get(player_id) ?? {}) as Record<string, unknown>,
+      fielding: (fielding.get(player_id) ?? {}) as Record<string, unknown>,
+    },
+  }));
 }

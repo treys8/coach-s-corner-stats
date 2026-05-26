@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { apiError, apiErrorFromException, isForbiddenError } from "../errors";
+import {
+  apiError,
+  apiErrorFromException,
+  isConcurrencyConflictError,
+  isForbiddenError,
+} from "../errors";
 
 describe("apiError", () => {
   it("returns a NextResponse with the standard shape", async () => {
@@ -33,6 +38,30 @@ describe("isForbiddenError", () => {
     expect(isForbiddenError(new Error("constraint violation on insert"))).toBe(false);
     expect(isForbiddenError(null)).toBe(false);
     expect(isForbiddenError(undefined)).toBe(false);
+  });
+});
+
+describe("isConcurrencyConflictError", () => {
+  it("matches PostgreSQL 40001 (serialization_failure)", () => {
+    expect(isConcurrencyConflictError({ code: "40001", message: "anything" })).toBe(true);
+  });
+
+  it("matches messages mentioning concurrency_conflict", () => {
+    expect(
+      isConcurrencyConflictError(
+        new Error("concurrency_conflict: expected last_seq=5 but actual=6"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match RLS / forbidden errors", () => {
+    expect(isConcurrencyConflictError({ code: "42501", message: "x" })).toBe(false);
+    expect(isConcurrencyConflictError(new Error("forbidden"))).toBe(false);
+  });
+
+  it("does not match unrelated errors", () => {
+    expect(isConcurrencyConflictError(new Error("constraint violation"))).toBe(false);
+    expect(isConcurrencyConflictError(null)).toBe(false);
   });
 });
 

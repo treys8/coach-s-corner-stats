@@ -1,16 +1,13 @@
-// W/L/SV attribution per PDF §18-19. Walks the at-bats in order tracking
-// running score, our pitcher of record, and lead changes, then resolves
-// the win/loss/save based on the final score. NFHS 4-inning starter
-// eligibility (vs MLB 5-inning) parameterized by `leagueType`.
-//
-// Limitation: non-PA runs (WP/PB/balk/SB-home/error_advance) are not
-// interleaved with at-bats for chronology — they're assumed to occur
-// at the end of their containing half. This mis-attributes W/L only in
-// the rare case where a non-PA run causes a lead change *between*
-// at-bats. ER attribution is unaffected (it uses pitcher_of_record_id
-// directly, not chronological ordering).
+// W/L/SV attribution per PDF §18-19. Walks the at-bats and non-PA runs
+// (WP/PB/balk/SB-home/error_advance) interleaved by `sequence` so a
+// lead-change caused by a non-PA event is attributed to the pitcher who
+// was actually on the mound at that moment, not whoever pitched the next
+// at-bat. NFHS 4-inning starter eligibility (vs MLB 5-inning)
+// parameterized by `leagueType` — required so a caller that forgets to
+// thread the team's setting through silently doesn't run MLB rules on
+// NFHS data.
 
-import type { DerivedAtBat, ReplayState } from "../types";
+import type { DerivedAtBat, NonPaRun, ReplayState } from "../types";
 
 export type LeagueType = "mlb" | "nfhs";
 
@@ -38,7 +35,7 @@ export function computeWLS(
   weAreHome: boolean,
   finalTeamScore: number,
   finalOpponentScore: number,
-  leagueType: LeagueType = "mlb",
+  leagueType: LeagueType,
 ): WLSResult {
   if (finalTeamScore === finalOpponentScore) return { W: null, L: null, SV: null };
   const weWon = finalTeamScore > finalOpponentScore;
@@ -70,24 +67,36 @@ export function computeWLS(
   const ourBats = (half: "top" | "bottom") =>
     (weAreHome && half === "bottom") || (!weAreHome && half === "top");
 
-  for (const ab of atBats) {
-    if (ab.pitcher_id) ourPitcher = ab.pitcher_id;
-    const runs = ab.runs_scored_on_play;
-    const weBat = ourBats(ab.half);
-    const prevTeam = team;
-    const prevOpp = opp;
-    if (weBat) team += runs;
-    else opp += runs;
-    // Detect transition into our-lead.
-    if (team > opp && prevTeam <= prevOpp) leadCandidate = ourPitcher;
-    if (opp > team && prevOpp <= prevTeam) lossCandidate = ourPitcher;
+  type TimelineEvent =
+    | { kind: "at_bat"; entry: DerivedAtBat; sequence: number }
+    | { kind: "non_pa_run"; entry: NonPaRun; sequence: number };
+  // Interleave at-bats and non-PA runs by sequence so a WP/PB/balk that
+  // causes a lead change between at-bats is attributed to the pitcher who
+  // was actually on the mound at that moment. Entries missing a sequence
+  // sort to the end of the stream (conservative fallback for legacy data).
+  const timeline: TimelineEvent[] = [];
+  for (const a of atBats) {
+    timeline.push({ kind: "at_bat", entry: a, sequence: a.sequence ?? Number.POSITIVE_INFINITY });
   }
-  // Roll non_pa_runs in (all opp scoring against our pitcher).
-  for (const npr of nonPaRuns) {
-    if (npr.pitcher_id) ourPitcher = npr.pitcher_id;
-    const prevOpp = opp;
+  for (const n of nonPaRuns) {
+    timeline.push({ kind: "non_pa_run", entry: n, sequence: n.sequence ?? Number.POSITIVE_INFINITY });
+  }
+  timeline.sort((a, b) => a.sequence - b.sequence);
+
+  for (const item of timeline) {
     const prevTeam = team;
-    opp += npr.runs;
+    const prevOpp = opp;
+    if (item.kind === "at_bat") {
+      const a = item.entry;
+      if (a.pitcher_id) ourPitcher = a.pitcher_id;
+      if (ourBats(a.half)) team += a.runs_scored_on_play;
+      else opp += a.runs_scored_on_play;
+    } else {
+      const n = item.entry;
+      if (n.pitcher_id) ourPitcher = n.pitcher_id;
+      opp += n.runs;
+    }
+    if (team > opp && prevTeam <= prevOpp) leadCandidate = ourPitcher;
     if (opp > team && prevOpp <= prevTeam) lossCandidate = ourPitcher;
   }
 
@@ -95,20 +104,22 @@ export function computeWLS(
 
   if (weWon) {
     // Starter eligibility: must complete required innings or W shifts to
-    // most-effective reliever. We approximate "most effective" as "the
-    // pitcher in at the time we took the final lead" (which is the
-    // leadCandidate). MLB requires 5 IP (15 outs); NFHS requires 4 (12).
+    // the "most effective reliever" (Rule 9.17(c)). MLB requires 5 IP
+    // (15 outs); NFHS requires 4 (12). We approximate "most effective" as
+    // the relief pitcher with the most outs recorded — not the last
+    // finisher, because a starter who exits early and re-enters to record
+    // the final outs would otherwise be incorrectly re-awarded the W.
     const required = leagueType === "nfhs" ? 12 : 15;
     const starterOuts = starter ? (innings3.get(starter) ?? 0) : 0;
     if (starter && leadCandidate === starter && starterOuts >= required) {
       out.W = starter;
-    } else if (leadCandidate) {
+    } else if (leadCandidate && leadCandidate !== starter) {
+      // A reliever was in when we took the final lead → they get the W.
       out.W = leadCandidate;
     } else {
-      // We won without ever falling behind/tying — give it to the starter
-      // if eligible, else the lead-taking candidate (which is null here,
-      // meaning we led the whole time → also the starter if eligible).
-      out.W = starter && starterOuts >= required ? starter : starter;
+      // Either starter was leadCandidate but ineligible, or leadCandidate
+      // is null (we'd have won without scoring — not actually reachable).
+      out.W = mostEffectiveReliever(innings3, starter) ?? starter;
     }
     // Save: finishing pitcher (the one with the last out, approximated
     // as last ab.pitcher_id). Save criteria simplified: lead ≤3 AND ≥1 IP,
@@ -132,4 +143,23 @@ function lastFinisher(atBats: DerivedAtBat[]): string | null {
     if (atBats[i].pitcher_id) return atBats[i].pitcher_id;
   }
   return null;
+}
+
+/** Returns the pitcher (other than `starter`) with the most outs recorded.
+ *  Null if no such pitcher exists (starter pitched the whole game). Ties
+ *  broken by Map insertion order, which mirrors first-appearance order. */
+function mostEffectiveReliever(
+  innings3: Map<string, number>,
+  starter: string | null,
+): string | null {
+  let best: string | null = null;
+  let bestOuts = -1;
+  for (const [pitcher, outs] of innings3) {
+    if (pitcher === starter) continue;
+    if (outs > bestOuts) {
+      best = pitcher;
+      bestOuts = outs;
+    }
+  }
+  return best;
 }
