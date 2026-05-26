@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import { timeAsync } from "@/lib/perf/client";
-import { enqueue, countByGame } from "@/lib/outbox/store";
+import { enqueue, getPendingFast } from "@/lib/outbox/store";
 import { drainGame } from "@/lib/outbox/drain";
 import { publish } from "@/lib/outbox/status";
 import { registerRefresher } from "@/lib/outbox/refresh-registry";
@@ -73,8 +73,10 @@ export async function postEvent(gameId: string, body: PostBody): Promise<PostRes
       if (typeof navigator !== "undefined" && !navigator.onLine) {
         return enqueueEvent(gameId, body);
       }
-      const counts = await countByGame(gameId).catch(() => ({ pending: 0, failed: 0 }));
-      if (counts.pending > 0) {
+      // getPendingFast resolves from an in-memory counter after the first
+      // call per gameId — no IDB round-trip on the hot tap path.
+      const pending = await getPendingFast(gameId).catch(() => 0);
+      if (pending > 0) {
         return enqueueEvent(gameId, body);
       }
 

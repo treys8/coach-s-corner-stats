@@ -6,7 +6,13 @@
 
 import type { GameEventType } from "@/integrations/supabase/types";
 import type { OutboxRecord } from "./types";
-import { bumpAttempt, deleteById, listByGame } from "./store";
+import {
+  bumpAttempt,
+  deleteById,
+  listByGame,
+  notePendingResolved,
+  notePendingRetried,
+} from "./store";
 import { publish, setDraining } from "./status";
 import { triggerRefresh } from "./refresh-registry";
 
@@ -44,6 +50,7 @@ export async function drainGame(
       const outcome = await postOne(gameId, entry);
       if (outcome === "committed" || outcome === "duplicate") {
         await deleteById(entry.id);
+        notePendingResolved(gameId);
         committed += 1;
         await publish(gameId);
         continue;
@@ -53,6 +60,7 @@ export async function drainGame(
           last_error: entry.last_error ?? "rejected by server",
           failed: true,
         });
+        notePendingResolved(gameId);
         failed += 1;
         await publish(gameId);
         continue;
@@ -122,23 +130,33 @@ async function postOne(gameId: string, entry: OutboxRecord): Promise<DrainOutcom
   return "transient";
 }
 
-/** Discard a failed entry. Used by the failed-events sheet's "Discard"
- *  button. Triggers a refresh so the local state drops the discarded
- *  entry's optimistic effect (otherwise score / runners would lie). */
+/** Discard an entry. Used by the failed-events sheet's "Discard" button,
+ *  which only surfaces failed entries — but we tolerate a pending entry
+ *  here too (e.g. tests) and correctly adjust the pending counter. The
+ *  IDB lookup is one extra read on a cold path, which is fine for a user-
+ *  initiated discard. Failed entries don't move the counter because they
+ *  were already subtracted when they transitioned to `failed:true`. */
 export async function discardEntry(gameId: string, id: number): Promise<void> {
+  const all = await listByGame(gameId).catch(() => [] as OutboxRecord[]);
+  const entry = all.find((e) => e.id === id);
+  const wasPending = entry !== undefined && !entry.failed;
   await deleteById(id);
+  if (wasPending) notePendingResolved(gameId);
   await publish(gameId);
   await triggerRefresh(gameId);
 }
 
 /** Move a failed entry back to retryable state and trigger a drain. Used by
- *  the failed-events sheet's "Retry" button. */
+ *  the failed-events sheet's "Retry" button. The transition failed → pending
+ *  re-adds to the pending counter so the hot tap path correctly routes new
+ *  events through the queue while this retry is in flight. */
 export async function retryEntry(
   gameId: string,
   id: number,
   onDrained?: () => Promise<void> | void,
 ): Promise<void> {
   await bumpAttempt(id, { last_error: null, failed: false });
+  notePendingRetried(gameId);
   await publish(gameId);
   void drainGame(gameId, onDrained);
 }

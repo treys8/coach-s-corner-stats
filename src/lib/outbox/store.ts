@@ -19,6 +19,71 @@ interface OutboxSchema extends DBSchema {
 
 let dbPromise: Promise<IDBPDatabase<OutboxSchema>> | null = null;
 
+// Per-game pending counter mirrored in memory. The hot tap path needs to
+// know "is anything queued ahead of me?" to preserve FIFO; before this
+// cache it cost a full IDB read per tap. Now: one IDB read per gameId per
+// session (the init), and every subsequent check is a Map lookup.
+//
+// Invariant: this counter is a *ceiling* on the true pending count. Callers
+// must increment it before persisting a pending entry and decrement after
+// removing or failing one. A false positive (cache > truth) just routes the
+// next tap through the durable queue, which still succeeds; a false negative
+// would reorder events around in-flight work, so we never under-count.
+const pendingCache = new Map<string, number>();
+const pendingInit = new Map<string, Promise<void>>();
+
+function ensurePendingInitialized(gameId: string): Promise<void> {
+  if (pendingCache.has(gameId)) return Promise.resolve();
+  let p = pendingInit.get(gameId);
+  if (!p) {
+    p = (async () => {
+      let fromDb = 0;
+      try {
+        const all = await listByGame(gameId);
+        for (const r of all) if (!r.failed) fromDb += 1;
+      } catch {
+        // IDB unavailable — treat as empty; enqueue will still bump on first use.
+      }
+      // Merge with any increments that happened while init was in flight.
+      const existing = pendingCache.get(gameId) ?? 0;
+      pendingCache.set(gameId, Math.max(existing, fromDb));
+    })();
+    pendingInit.set(gameId, p);
+  }
+  return p;
+}
+
+function bumpPending(gameId: string, delta: number): void {
+  const next = (pendingCache.get(gameId) ?? 0) + delta;
+  pendingCache.set(gameId, next < 0 ? 0 : next);
+}
+
+/** Fast pending check used by the event POST hot path. After the first
+ *  call per gameId (which lazy-inits from IDB), subsequent calls resolve
+ *  synchronously from the in-memory map — no IDB round-trip per tap. */
+export async function getPendingFast(gameId: string): Promise<number> {
+  await ensurePendingInitialized(gameId);
+  return pendingCache.get(gameId) ?? 0;
+}
+
+/** Called by drain when a queued entry commits (or is a server-side
+ *  duplicate) or hits a permanent 4xx. Both transitions remove the entry
+ *  from the pending pool. */
+export function notePendingResolved(gameId: string): void {
+  bumpPending(gameId, -1);
+}
+
+/** Called by retryEntry when a failed entry is flipped back to pending. */
+export function notePendingRetried(gameId: string): void {
+  bumpPending(gameId, +1);
+}
+
+/** Test-only: wipe the in-memory pending cache so tests can isolate. */
+export function _resetPendingCacheForTests(): void {
+  pendingCache.clear();
+  pendingInit.clear();
+}
+
 function getDB(): Promise<IDBPDatabase<OutboxSchema>> {
   if (typeof indexedDB === "undefined") {
     return Promise.reject(new Error("IndexedDB unavailable"));
@@ -50,6 +115,7 @@ export async function _resetDbForTests(): Promise<void> {
     }
   }
   dbPromise = null;
+  _resetPendingCacheForTests();
 }
 
 export async function enqueue(input: {
@@ -70,6 +136,7 @@ export async function enqueue(input: {
     failed: false,
   };
   const id = await db.add(STORE, record as OutboxRecord);
+  bumpPending(input.game_id, +1);
   return { ...record, id: id as number };
 }
 
@@ -120,6 +187,7 @@ export async function clearGame(game_id: string): Promise<number> {
     cursor = await cursor.continue();
   }
   await tx.done;
+  pendingCache.set(game_id, 0);
   return count;
 }
 
