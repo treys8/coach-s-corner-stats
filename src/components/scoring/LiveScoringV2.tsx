@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -169,18 +169,24 @@ export function LiveScoringV2({
 
   // In-game spray markers for the opposing batter at the plate. Merged into
   // OpposingBatterPanel so the right rail shows one combined chart instead
-  // of duplicating career + current game in adjacent cards.
-  const oppBatterCurrentGameMarkers = currentOpponentBatterId
-    ? state.at_bats
-        .filter((ab) => ab.opponent_batter_id === currentOpponentBatterId)
-        .map((ab) => ({
-          id: ab.event_id,
-          result: ab.result,
-          spray_x: ab.spray_x,
-          spray_y: ab.spray_y,
-          description: ab.description,
-        }))
-    : [];
+  // of duplicating career + current game in adjacent cards. Memoized so
+  // re-renders driven by unrelated state (count, modal toggles, etc.) don't
+  // re-scan at_bats on every tap.
+  const oppBatterCurrentGameMarkers = useMemo(
+    () =>
+      currentOpponentBatterId
+        ? state.at_bats
+            .filter((ab) => ab.opponent_batter_id === currentOpponentBatterId)
+            .map((ab) => ({
+              id: ab.event_id,
+              result: ab.result,
+              spray_x: ab.spray_x,
+              spray_y: ab.spray_y,
+              description: ab.description,
+            }))
+        : [],
+    [currentOpponentBatterId, state.at_bats],
+  );
 
   const hasRunners = !!(state.bases.first || state.bases.second || state.bases.third);
 
