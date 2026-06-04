@@ -7,7 +7,10 @@ import {
   countByGame,
   deleteById,
   enqueue,
+  getPendingFast,
   listByGame,
+  notePendingResolved,
+  notePendingRetried,
 } from "@/lib/outbox/store";
 
 // Wipe the underlying IDB between tests by deleting the database. The
@@ -169,5 +172,67 @@ describe("outbox store", () => {
     await bumpAttempt(a.id, { last_error: "boom", failed: true });
     const counts = await countByGame(GAME_A);
     expect(counts).toEqual({ pending: 1, failed: 1 });
+  });
+});
+
+describe("outbox pending counter (hot-path cache)", () => {
+  it("enqueue bumps the counter; notePendingResolved drops it", async () => {
+    expect(await getPendingFast(GAME_A)).toBe(0);
+    await enqueue({ game_id: GAME_A, client_event_id: "a1", event_type: "pitch", payload: {} });
+    expect(await getPendingFast(GAME_A)).toBe(1);
+    await enqueue({ game_id: GAME_A, client_event_id: "a2", event_type: "pitch", payload: {} });
+    expect(await getPendingFast(GAME_A)).toBe(2);
+    notePendingResolved(GAME_A);
+    expect(await getPendingFast(GAME_A)).toBe(1);
+    notePendingResolved(GAME_A);
+    expect(await getPendingFast(GAME_A)).toBe(0);
+  });
+
+  it("counter is clamped at zero on over-decrement", async () => {
+    expect(await getPendingFast(GAME_A)).toBe(0);
+    notePendingResolved(GAME_A);
+    notePendingResolved(GAME_A);
+    expect(await getPendingFast(GAME_A)).toBe(0);
+  });
+
+  it("notePendingRetried adds back to the counter (failed → pending)", async () => {
+    notePendingRetried(GAME_A);
+    notePendingRetried(GAME_A);
+    expect(await getPendingFast(GAME_A)).toBe(2);
+  });
+
+  it("lazy init from IDB picks up non-failed entries from prior session", async () => {
+    // Simulate a prior session that wrote two pending + one failed entry.
+    await enqueue({ game_id: GAME_A, client_event_id: "a1", event_type: "pitch", payload: {} });
+    await enqueue({ game_id: GAME_A, client_event_id: "a2", event_type: "pitch", payload: {} });
+    const failed = await enqueue({
+      game_id: GAME_A,
+      client_event_id: "a3",
+      event_type: "pitch",
+      payload: {},
+    });
+    await bumpAttempt(failed.id, { last_error: "boom", failed: true });
+    // Drop the in-memory counter only (keep IDB) to simulate a fresh page load.
+    const { _resetPendingCacheForTests } = await import("@/lib/outbox/store");
+    _resetPendingCacheForTests();
+    // The first call must read IDB and recover the pending count (3 enqueues
+    // - 1 failed = 2 pending). After this, subsequent calls are pure cache.
+    expect(await getPendingFast(GAME_A)).toBe(2);
+  });
+
+  it("counter is per-game scoped", async () => {
+    await enqueue({ game_id: GAME_A, client_event_id: "a1", event_type: "pitch", payload: {} });
+    await enqueue({ game_id: GAME_B, client_event_id: "b1", event_type: "pitch", payload: {} });
+    await enqueue({ game_id: GAME_B, client_event_id: "b2", event_type: "pitch", payload: {} });
+    expect(await getPendingFast(GAME_A)).toBe(1);
+    expect(await getPendingFast(GAME_B)).toBe(2);
+  });
+
+  it("clearGame zeroes that game's counter without touching others", async () => {
+    await enqueue({ game_id: GAME_A, client_event_id: "a1", event_type: "pitch", payload: {} });
+    await enqueue({ game_id: GAME_B, client_event_id: "b1", event_type: "pitch", payload: {} });
+    await clearGame(GAME_A);
+    expect(await getPendingFast(GAME_A)).toBe(0);
+    expect(await getPendingFast(GAME_B)).toBe(1);
   });
 });

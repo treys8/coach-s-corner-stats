@@ -59,7 +59,6 @@ export function useTimingPlayPrompt({
   gameId,
   state,
   names,
-  submitting,
   setSubmitting,
   applyPostResult,
 }: UseTimingPlayPromptArgs): UseTimingPlayPromptResult {
@@ -105,37 +104,45 @@ export function useTimingPlayPrompt({
       setPending(null);
       return;
     }
-    // Nullify: post a correction that rewrites the home-bound advance
-    // to a returned-to-third (or "out" if no return is reasonable). For
-    // a tag-out-at-the-plate timing play, the runner is OUT; tightest
-    // representation is `to: out` with rbi recomputed and an extra out
-    // added. The inning_end already fired with the original out count,
-    // but the corrected payload's outs are still ≥ original, so the
-    // half doesn't reopen.
+    // No busy guard here — matches the legacy semantics where rapid taps
+    // could still fire the nullify post. The try/finally guarantees the
+    // submitting flag is released even if postEvent throws.
+    const target = pending;
     setSubmitting(true);
-    const corrected = nullifyScoringRunner(pending.atBat);
-    const correctionPayload: CorrectionPayload = {
-      superseded_event_id: pending.atBat.event_id,
-      corrected_event_type: "at_bat",
-      corrected_payload: corrected,
-    };
-    const result = await postEvent(gameId, {
-      client_event_id: `tp-${pending.atBat.event_id}`,
-      event_type: "correction",
-      payload: correctionPayload,
-    });
-    setSubmitting(false);
-    if (!result.ok) {
-      // Keep the prompt open on a hard error so the coach can retry. This
-      // at_bat is already in `seen`, so closing here would make the timing
-      // call unrecoverable — the watcher effect won't re-open it. postEvent
-      // already surfaces the failure toast. (Offline returns ok+queued, so
-      // this branch is only a genuine server rejection.)
-      return;
+    try {
+      // Nullify: post a correction that rewrites the home-bound advance
+      // to a returned-to-third (or "out" if no return is reasonable). For
+      // a tag-out-at-the-plate timing play, the runner is OUT; tightest
+      // representation is `to: out` with rbi recomputed and an extra out
+      // added. The inning_end already fired with the original out count,
+      // but the corrected payload's outs are still ≥ original, so the
+      // half doesn't reopen.
+      const corrected = nullifyScoringRunner(target.atBat);
+      const correctionPayload: CorrectionPayload = {
+        superseded_event_id: target.atBat.event_id,
+        corrected_event_type: "at_bat",
+        corrected_payload: corrected,
+      };
+      const result = await postEvent(gameId, {
+        client_event_id: `tp-${target.atBat.event_id}`,
+        event_type: "correction",
+        payload: correctionPayload,
+      });
+      if (!result.ok) {
+        // Keep the prompt open on a hard error so the coach can retry. This
+        // at_bat is already in `seen`, so closing here would make the timing
+        // call unrecoverable — the watcher effect won't re-open it. postEvent
+        // already surfaces the failure toast. (Offline returns ok+queued, so
+        // this branch is only a genuine server rejection.) Note: setPending
+        // is cleared only on success, NOT in finally, so the prompt survives.
+        return;
+      }
+      toast.success("Run nullified — timing play");
+      applyPostResult(result);
+      setPending(null);
+    } finally {
+      setSubmitting(false);
     }
-    toast.success("Run nullified — timing play");
-    applyPostResult(result);
-    setPending(null);
   };
 
   return { pendingTimingPlay: pending, resolveTimingPlay };

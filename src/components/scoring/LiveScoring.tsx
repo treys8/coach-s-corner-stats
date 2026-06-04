@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -144,6 +144,28 @@ export function LiveScoring({
   const [rightRailOpen, setRightRailOpen] = useState(true);
   const [sidebarSheetOpen, setSidebarSheetOpen] = useState(false);
 
+  // In-game spray markers for the opposing batter at the plate. Merged into
+  // OpposingBatterPanel so the right rail shows one combined chart instead
+  // of duplicating career + current game in adjacent cards. Memoized so
+  // re-renders driven by unrelated state (count, modal toggles, etc.) don't
+  // re-scan at_bats on every tap. Declared before the loading early return
+  // to keep hook order stable across renders.
+  const oppBatterCurrentGameMarkers = useMemo(
+    () =>
+      currentOpponentBatterId
+        ? state.at_bats
+            .filter((ab) => ab.opponent_batter_id === currentOpponentBatterId)
+            .map((ab) => ({
+              id: ab.event_id,
+              result: ab.result,
+              spray_x: ab.spray_x,
+              spray_y: ab.spray_y,
+              description: ab.description,
+            }))
+        : [],
+    [currentOpponentBatterId, state.at_bats],
+  );
+
   if (loading) {
     return (
       <div className="h-[100dvh] p-6 flex flex-col gap-3">
@@ -166,21 +188,6 @@ export function LiveScoring({
     ? currentSlot?.player_id ?? null
     : currentOpponentBatterId;
   const dragMode = !!armedResult && armedResult !== ARMED_IN_PLAY_PENDING && !submitting;
-
-  // In-game spray markers for the opposing batter at the plate. Merged into
-  // OpposingBatterPanel so the right rail shows one combined chart instead
-  // of duplicating career + current game in adjacent cards.
-  const oppBatterCurrentGameMarkers = currentOpponentBatterId
-    ? state.at_bats
-        .filter((ab) => ab.opponent_batter_id === currentOpponentBatterId)
-        .map((ab) => ({
-          id: ab.event_id,
-          result: ab.result,
-          spray_x: ab.spray_x,
-          spray_y: ab.spray_y,
-          description: ab.description,
-        }))
-    : [];
 
   const hasRunners = !!(state.bases.first || state.bases.second || state.bases.third);
 

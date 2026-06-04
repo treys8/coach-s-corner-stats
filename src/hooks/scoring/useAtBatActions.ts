@@ -27,7 +27,8 @@ import type { OpposingBatterProfile } from "@/lib/opponents/profile";
 import type { FielderPosition } from "@/components/scoring/DefensiveDiamond";
 import { nearestBaseFromNormalized } from "@/components/scoring/diamond-geometry";
 import type { UseGameEventsResult } from "./useGameEvents";
-import { announceAutoEndHalf } from "./useGameEvents";
+import { makeWithSubmitting } from "./useGameEvents";
+import { announceAutoEndHalf } from "./announce";
 
 // Sentinel marking the gap between "In play" tap on PitchPad and the user
 // picking the actual outcome. Banner + OutcomeGrid both light up to direct
@@ -181,6 +182,8 @@ export function useAtBatActions({
   const [chainStartBases, setChainStartBases] = useState<Bases | null>(null);
   const [chainStartSpray, setChainStartSpray] = useState<{ x: number; y: number } | null>(null);
 
+  const withSubmitting = makeWithSubmitting(submitting, setSubmitting);
+
   const resetChain = () => {
     setBattedBallType(null);
     setPendingChain([]);
@@ -209,16 +212,14 @@ export function useAtBatActions({
     }
   };
 
-  const submitAtBat = async (
+  const submitAtBat = (
     result: AtBatResult,
     spray: { x: number; y: number; fielder: FielderPosition } | null,
     k3Reach?: K3ReachSource,
     extras?: AtBatExtras,
     chainExtras?: ChainExtras,
     advancesOverride?: RunnerAdvance[],
-  ) => {
-    if (submitting) return;
-    setSubmitting(true);
+  ): Promise<void> => withSubmitting<void>(undefined, async () => {
     const nextSeq = lastSeq + 1;
     const ourBatterId = weAreBatting ? currentSlot?.player_id ?? null : null;
     // ID used for the runner_advance that puts the BATTER on a base.
@@ -320,7 +321,6 @@ export function useAtBatActions({
     });
     if (!postResult.ok) {
       rollbackOptimistic();
-      setSubmitting(false);
       return;
     }
     // The just-recorded PA changes this opponent's career line. Drop the
@@ -333,8 +333,7 @@ export function useAtBatActions({
     resetChain();
     applyPostResult(postResult);
     announceAutoEndHalf(postResult);
-    setSubmitting(false);
-  };
+  });
 
   const onOutcomePicked = (result: AtBatResult, extras?: AtBatExtras) => {
     if (submitting) return;
@@ -360,9 +359,8 @@ export function useAtBatActions({
     void submitAtBat(result, null, undefined, extras);
   };
 
-  const submitPitch = async (pitchType: PitchType) => {
-    if (submitting) return;
-    setSubmitting(true);
+  const submitPitch = (pitchType: PitchType): Promise<void> =>
+    withSubmitting<void>(undefined, async () => {
     const nextSeq = lastSeq + 1;
     const clientEventId = `pitch-${nextSeq}`;
     // Optimistic apply for the common case (non-closing ball/strike/foul).
@@ -393,7 +391,6 @@ export function useAtBatActions({
     });
     if (!result.ok) {
       if (optimistic) rollbackOptimistic();
-      setSubmitting(false);
       return;
     }
     // Queued (offline) path: a count-CLOSING pitch skips applyOptimistic (see
@@ -425,8 +422,7 @@ export function useAtBatActions({
     ) {
       setArmedResult(ARMED_IN_PLAY_PENDING);
     }
-    setSubmitting(false);
-  };
+  });
 
   // v2 auto-commit: one drop = one play. The drop coords become the spray
   // location, the fielder is the first-touch fielder, and submission fires

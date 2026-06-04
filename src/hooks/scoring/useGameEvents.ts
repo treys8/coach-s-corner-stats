@@ -367,14 +367,23 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   };
 }
 
-// Server-derived auto-end-half: when a tap brings outs to 3, the server
-// emits an inning_end inside the same POST chain. Toast iff one fired.
-export function announceAutoEndHalf(result: PostResult): void {
-  const ie = result.events.find((e) => e.event_type === "inning_end");
-  if (!ie || !result.state) return;
-  const payload = ie.payload as { inning?: number; half?: "top" | "bottom" };
-  const inning = payload.inning ?? result.state.inning;
-  const half = payload.half ?? result.state.half;
-  const halfLabel = half === "top" ? "Top" : "Bot";
-  toast.success(`End ${halfLabel} ${inning}. Tap Undo to revert.`);
+// Guard + lock around an async action: if a submission is already in-flight,
+// returns `whenBusy` without running `fn`. Otherwise flips the submitting
+// flag, runs the body, and clears the flag in a finally block so a throw
+// from `postEvent` (or anything else) doesn't strand the UI in the
+// disabled state. Pre-flight checks that should NOT take the lock can run
+// before the caller hands off to this helper.
+export function makeWithSubmitting(
+  submitting: boolean,
+  setSubmitting: (v: boolean) => void,
+) {
+  return async <T>(whenBusy: T, fn: () => Promise<T>): Promise<T> => {
+    if (submitting) return whenBusy;
+    setSubmitting(true);
+    try {
+      return await fn();
+    } finally {
+      setSubmitting(false);
+    }
+  };
 }

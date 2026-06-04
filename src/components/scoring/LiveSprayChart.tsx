@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { FieldBackground } from "@/components/scoring/FieldBackground";
 import type { ReplayState } from "@/lib/scoring/types";
 
@@ -67,33 +68,33 @@ export function LiveSprayChart({
   currentBatterId,
   currentBatterIsOurs,
 }: LiveSprayChartProps) {
-  const filtered = currentBatterId
-    ? state.at_bats.filter((ab) =>
-        currentBatterIsOurs
-          ? ab.batter_id === currentBatterId
-          : ab.opponent_batter_id === currentBatterId,
-      )
-    : [];
-
-  const markers: RenderMarker[] = filtered
-    .map((ab): RenderMarker | null => {
-      if (ab.spray_x === null || ab.spray_y === null) return null;
-      const kind = classify(ab.result);
-      if (!kind) return null;
-      return {
-        id: ab.event_id,
-        kind,
-        x: ab.spray_x * 100,
-        y: ab.spray_y * 100,
-        label: MARKER_STYLE[kind].label,
-        title: ab.description,
-      };
-    })
-    .filter((m): m is RenderMarker => m !== null);
-
-  const ordered = [...markers].sort(
-    (a, b) => kindZ(a.kind) - kindZ(b.kind),
-  );
+  // Filter → project → z-sort, memoized so taps that don't change at_bats or
+  // the at-plate batter (modal opens, count flips, base toggles) don't
+  // reallocate the marker array on the tablet hot path.
+  const ordered = useMemo<RenderMarker[]>(() => {
+    if (!currentBatterId) return [];
+    const filtered = state.at_bats.filter((ab) =>
+      currentBatterIsOurs
+        ? ab.batter_id === currentBatterId
+        : ab.opponent_batter_id === currentBatterId,
+    );
+    const markers = filtered
+      .map((ab): RenderMarker | null => {
+        if (ab.spray_x === null || ab.spray_y === null) return null;
+        const kind = classify(ab.result);
+        if (!kind) return null;
+        return {
+          id: ab.event_id,
+          kind,
+          x: ab.spray_x * 100,
+          y: ab.spray_y * 100,
+          label: MARKER_STYLE[kind].label,
+          title: ab.description,
+        };
+      })
+      .filter((m): m is RenderMarker => m !== null);
+    return [...markers].sort((a, b) => kindZ(a.kind) - kindZ(b.kind));
+  }, [state.at_bats, currentBatterId, currentBatterIsOurs]);
 
   const emptyMessage = currentBatterId
     ? "No batted balls yet for this hitter."

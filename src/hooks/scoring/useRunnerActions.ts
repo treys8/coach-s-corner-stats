@@ -19,7 +19,8 @@ import {
 import type { GameEventType } from "@/integrations/supabase/types";
 import type { FielderPosition } from "@/components/scoring/diamond-geometry";
 import type { UseGameEventsResult } from "./useGameEvents";
-import { announceAutoEndHalf } from "./useGameEvents";
+import { makeWithSubmitting } from "./useGameEvents";
+import { announceAutoEndHalf } from "./announce";
 
 /** Pending runner advance awaiting attribution. `phase` is read by the
  *  dialog to gate which options are shown — pitch-required choices
@@ -135,7 +136,7 @@ export interface UseRunnerActionsResult {
   cancelRunnerAttribution: () => void;
   /** Backward SAFE drag awaiting reason. Null otherwise. */
   pendingRunnerBackward: PendingRunnerBackward | null;
-  /** Resolve the backward-drag reason picker. Posts `error_advance` with
+  /** Resolve the backward-drag reason picker. Posts `advance_on_throw` with
    *  an `attribution_label` describing why the runner ended up behind
    *  their pre-drag position. */
   resolveRunnerBackward: (choice: RunnerBackwardChoice) => Promise<void>;
@@ -166,6 +167,8 @@ export function useRunnerActions({
   const [pendingRunnerBackward, setPendingRunnerBackward] =
     useState<PendingRunnerBackward | null>(null);
 
+  const withSubmitting = makeWithSubmitting(submitting, setSubmitting);
+
   const post = async (
     eventType: GameEventType,
     payload: StolenBasePayload | CaughtStealingPayload | PickoffPayload | RunnerMovePayload,
@@ -187,21 +190,14 @@ export function useRunnerActions({
     return true;
   };
 
-  const submitMidPA = async (
+  const submitMidPA = (
     eventType: GameEventType,
     payload: StolenBasePayload | CaughtStealingPayload | PickoffPayload | RunnerMovePayload,
     clientPrefix: string,
-  ) => {
-    if (submitting) return;
-    setSubmitting(true);
-    const ok = await post(eventType, payload, clientPrefix);
+  ): Promise<void> => withSubmitting<void>(undefined, async () => {
+    await post(eventType, payload, clientPrefix);
     setRunnerAction(null);
-    if (!ok) {
-      setSubmitting(false);
-      return;
-    }
-    setSubmitting(false);
-  };
+  });
 
   const submitRunnerDrag = async (
     from: Base,
@@ -209,6 +205,8 @@ export function useRunnerActions({
     verdict: RunnerDragVerdict,
     runnerId: string | null,
   ): Promise<RunnerDragOutcome> => {
+    // Gate the entire flow (including the prompt branches) on submitting so a
+    // mid-flight submission can't open an RBI / attribution dialog.
     if (submitting) return "noop";
     // SAFE@home routes through the RBI prompt before emitting an event so
     // the coach can attribute the run to the previous at_bat or stamp it
@@ -260,156 +258,139 @@ export function useRunnerActions({
       setPendingRunnerBackward({ from, to: target, runnerId });
       return "prompt_backward";
     }
-    setSubmitting(true);
-    const mapped = mapRunnerDragToEvent(from, target, verdict, runnerId);
-    const ok = await post(mapped.eventType, mapped.payload, mapped.clientPrefix);
-    if (!ok) {
-      setSubmitting(false);
-      return "noop";
-    }
-    setSubmitting(false);
-    return "committed";
+    return withSubmitting<RunnerDragOutcome>("noop", async () => {
+      const mapped = mapRunnerDragToEvent(from, target, verdict, runnerId);
+      const ok = await post(mapped.eventType, mapped.payload, mapped.clientPrefix);
+      return ok ? "committed" : "noop";
+    });
   };
 
   const resolveRunnerAttribution = async (
     choice: RunnerAttributionChoice,
     fielderPosition: FielderPosition | null,
-  ) => {
+  ): Promise<void> => {
     const pending = pendingRunnerAttribution;
+    // Match the legacy guard: if a submission is already in flight, do
+    // nothing — don't clear the prompt, don't post. The prompt stays open
+    // so the coach's tap isn't silently dropped.
     if (!pending || submitting) return;
     setPendingRunnerAttribution(null);
-    setSubmitting(true);
-    let ok: boolean;
-    switch (choice) {
-      case "stolen_base": {
-        const payload: StolenBasePayload = {
-          runner_id: pending.runnerId,
-          from: pending.from,
-          to: pending.to,
-        };
-        ok = await post("stolen_base", payload, `sb-${pending.from}`);
-        break;
+    await withSubmitting<void>(undefined, async () => {
+      switch (choice) {
+        case "stolen_base": {
+          const payload: StolenBasePayload = {
+            runner_id: pending.runnerId,
+            from: pending.from,
+            to: pending.to,
+          };
+          await post("stolen_base", payload, `sb-${pending.from}`);
+          return;
+        }
+        case "wild_pitch":
+        case "passed_ball": {
+          const payload: RunnerMovePayload = {
+            advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+          };
+          await post(choice, payload, `${choice}-${pending.from}`);
+          return;
+        }
+        case "fielding_error":
+        case "throwing_error": {
+          const payload: RunnerMovePayload = {
+            advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+            error_fielder_position: fielderPosition ?? undefined,
+            error_type: choice === "fielding_error" ? "fielding" : "throwing",
+          };
+          await post("error_advance", payload, `err-${pending.from}-${pending.to}`);
+          return;
+        }
+        case "advanced_on_throw":
+        case "tag_up_advance":
+        case "defensive_indifference": {
+          // Non-error runner movement — an extra base taken on the throw, a
+          // tag-up advance, or defensive indifference. None of these involve a
+          // charged error, so they all post as `advance_on_throw`: the engine
+          // treats that source as EARNED and does NOT taint the runner
+          // `reached_on_error` (replay.applyRunnerMove). Routing these through
+          // `error_advance` (the old behavior) wrongly flagged the runner, so
+          // any run he later scored was counted UNEARNED and silently deflated
+          // the pitcher's ERA. The attribution_label still rides along to label
+          // the play in the timeline.
+          const payload: RunnerMovePayload = {
+            advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+            attribution_label: ATTRIBUTION_LABELS[choice],
+          };
+          await post("advance_on_throw", payload, `${choice}-${pending.from}-${pending.to}`);
+          return;
+        }
       }
-      case "wild_pitch":
-      case "passed_ball": {
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-        };
-        ok = await post(choice, payload, `${choice}-${pending.from}`);
-        break;
-      }
-      case "fielding_error":
-      case "throwing_error": {
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-          error_fielder_position: fielderPosition ?? undefined,
-          error_type: choice === "fielding_error" ? "fielding" : "throwing",
-        };
-        ok = await post("error_advance", payload, `err-${pending.from}-${pending.to}`);
-        break;
-      }
-      case "advanced_on_throw":
-      case "tag_up_advance":
-      case "defensive_indifference": {
-        // Non-error runner movement — an extra base taken on the throw, a
-        // tag-up advance, or defensive indifference. None of these involve a
-        // charged error, so they all post as `advance_on_throw`: the engine
-        // treats that source as EARNED and does NOT taint the runner
-        // `reached_on_error` (replay.applyRunnerMove). Routing these through
-        // `error_advance` (the old behavior) wrongly flagged the runner, so
-        // any run he later scored was counted UNEARNED and silently deflated
-        // the pitcher's ERA. The attribution_label still rides along to label
-        // the play in the timeline.
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-          attribution_label: ATTRIBUTION_LABELS[choice],
-        };
-        ok = await post("advance_on_throw", payload, `${choice}-${pending.from}-${pending.to}`);
-        break;
-      }
-    }
-    if (!ok) {
-      setSubmitting(false);
-      return;
-    }
-    setSubmitting(false);
+    });
   };
 
   const cancelRunnerAttribution = () => {
     setPendingRunnerAttribution(null);
   };
 
-  const resolveRunnerBackward = async (choice: RunnerBackwardChoice) => {
+  const resolveRunnerBackward = async (choice: RunnerBackwardChoice): Promise<void> => {
     const pending = pendingRunnerBackward;
     if (!pending || submitting) return;
     setPendingRunnerBackward(null);
-    setSubmitting(true);
-    const payload: RunnerMovePayload = {
-      advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-      attribution_label: BACKWARD_LABELS[choice],
-    };
-    // A held / un-advanced runner is NOT a defensive error — post as the
-    // untainted `advance_on_throw` source so the engine doesn't stamp the
-    // runner `reached_on_error` (which would make a later run UNEARNED).
-    // The move is backward (never to home/out), so it credits zero runs and
-    // zero outs; the only effect is clearing the taint. attribution_label
-    // carries the reason for the timeline.
-    const ok = await post(
-      "advance_on_throw",
-      payload,
-      `${choice}-${pending.from}-${pending.to}`,
-    );
-    if (!ok) {
-      setSubmitting(false);
-      return;
-    }
-    setSubmitting(false);
+    await withSubmitting<void>(undefined, async () => {
+      const payload: RunnerMovePayload = {
+        advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
+        attribution_label: BACKWARD_LABELS[choice],
+      };
+      // A held / un-advanced runner is NOT a defensive error — post as the
+      // untainted `advance_on_throw` source so the engine doesn't stamp the
+      // runner `reached_on_error` (which would make a later run UNEARNED).
+      // The move is backward (never to home/out), so it credits zero runs and
+      // zero outs; the only effect is clearing the taint. attribution_label
+      // carries the reason for the timeline.
+      await post("advance_on_throw", payload, `${choice}-${pending.from}-${pending.to}`);
+    });
   };
 
   const cancelRunnerBackward = () => {
     setPendingRunnerBackward(null);
   };
 
-  const resolveRbiPrompt = async (onLastPlay: boolean) => {
+  const resolveRbiPrompt = async (onLastPlay: boolean): Promise<void> => {
     const pending = pendingRbiPrompt;
+    // Same legacy semantics as resolveRunnerAttribution: don't clear or
+    // post while a submission is in flight; leave the prompt open.
     if (!pending || submitting) return;
     setPendingRbiPrompt(null);
-    setSubmitting(true);
-    let ok: boolean;
-    if (onLastPlay) {
-      // Coach said "yes, on last play" — a clean run scored as a direct
-      // result of the previous at-bat (waved around / delayed advance on the
-      // throw). It is EARNED, so post `advance_on_throw` rather than
-      // `error_advance`: the latter is excluded from EARNED_NON_PA_SOURCES
-      // and would charge the run as UNEARNED against the pitcher. Attributing
-      // the RBI back onto the at_bat is a separate correction step not yet
-      // implemented — the run still posts; RBI attribution lands in a
-      // follow-up.
-      const payload: RunnerMovePayload = {
-        advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
-        attribution_label: "Scored on last play",
-      };
-      ok = await post("advance_on_throw", payload, `drag-${pending.from}-home`);
-    } else if (pending.from === "third") {
-      // R3 stealing home — credits SB to the runner.
-      const payload: StolenBasePayload = {
-        runner_id: pending.runnerId,
-        from: "third",
-        to: "home",
-      };
-      ok = await post("stolen_base", payload, `sb-third`);
-    } else {
-      // R1/R2 to home without RBI — multi-base advance; use error_advance.
-      const payload: RunnerMovePayload = {
-        advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
-      };
-      ok = await post("error_advance", payload, `drag-${pending.from}-home`);
-    }
-    if (!ok) {
-      setSubmitting(false);
-      return;
-    }
-    setSubmitting(false);
+    await withSubmitting<void>(undefined, async () => {
+      if (onLastPlay) {
+        // Coach said "yes, on last play" — a clean run scored as a direct
+        // result of the previous at-bat (waved around / delayed advance on the
+        // throw). It is EARNED, so post `advance_on_throw` rather than
+        // `error_advance`: the latter is excluded from EARNED_NON_PA_SOURCES
+        // and would charge the run as UNEARNED against the pitcher. Attributing
+        // the RBI back onto the at_bat is a separate correction step not yet
+        // implemented — the run still posts; RBI attribution lands in a
+        // follow-up.
+        const payload: RunnerMovePayload = {
+          advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
+          attribution_label: "Scored on last play",
+        };
+        await post("advance_on_throw", payload, `drag-${pending.from}-home`);
+      } else if (pending.from === "third") {
+        // R3 stealing home — credits SB to the runner.
+        const payload: StolenBasePayload = {
+          runner_id: pending.runnerId,
+          from: "third",
+          to: "home",
+        };
+        await post("stolen_base", payload, `sb-third`);
+      } else {
+        // R1/R2 to home without RBI — multi-base advance; use error_advance.
+        const payload: RunnerMovePayload = {
+          advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
+        };
+        await post("error_advance", payload, `drag-${pending.from}-home`);
+      }
+    });
   };
 
   const cancelRbiPrompt = () => {

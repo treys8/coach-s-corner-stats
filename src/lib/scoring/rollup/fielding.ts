@@ -8,7 +8,11 @@
 // the A/PO line and credits it as E. Legacy events without a chain still
 // flow through the `fielder_position` path.
 
-import type { AtBatResult, DerivedAtBat } from "../types";
+import type { DerivedAtBat, FielderTouch } from "../types";
+import {
+  PUTOUT_FIELDER_RESULTS,
+  STRIKEOUT_RESULTS,
+} from "../at-bat-classifications";
 
 export interface FieldingLine {
   TC: number;
@@ -59,11 +63,6 @@ export interface CatcherEventLog {
   error_advance_fielders?: { fielder_player_id: string }[];
 }
 
-const STRIKEOUT_RESULTS: ReadonlySet<AtBatResult> = new Set(["K_swinging", "K_looking"]);
-const PUTOUT_FIELDER_RESULTS: ReadonlySet<AtBatResult> = new Set([
-  "FO", "GO", "LO", "PO", "IF",
-]);
-
 const FIELDING_POSITIONS = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"] as const;
 
 function emptyFielding(): FieldingLine {
@@ -77,22 +76,60 @@ function emptyFielding(): FieldingLine {
   };
 }
 
-// Credit A on every non-terminal step of a CS/PO fielder chain and PO on
-// the terminal step. CS and PO always produce an out, so the terminal
-// step is always a putout — no chain-ends-without-out branch like at-bats
-// have. Catcher-specific CS/PIK credit is independent and handled by
-// the caller.
-function creditRunningEventChain(
+// Walk a fielder chain and credit A/PO/E per step.
+//
+// Default behavior (CS/PO running events): A on every non-terminal step,
+// PO on the terminal step. CS and PO always produce an out so the terminal
+// step is always a putout — no chain-ends-without-out branch.
+//
+// At-bat chains pass extra context:
+//   - `errorStepIndex` swaps PO/A on that step for E.
+//   - `terminalIsOut === false` collapses the terminal step to A (or skips
+//     it entirely if it's a solo chain) — used when the chain ends without
+//     retiring anyone (hit, FC, error).
+//   - `isDpOrTp` + `chain` enables the non-terminal-receiver bonus: on
+//     DP/TP a non-terminal `received` step on a base is itself a force-out,
+//     so the fielder gets both PO (retire) and A (throw to next).
+function creditFielderChain(
   chainIds: (string | null)[] | undefined,
   ensure: (id: string) => FieldingLine,
+  opts: {
+    chain?: FielderTouch[];
+    errorStepIndex?: number | null;
+    terminalIsOut?: boolean;
+    isDpOrTp?: boolean;
+  } = {},
 ): void {
   if (!chainIds || chainIds.length === 0) return;
+  const {
+    chain,
+    errorStepIndex = null,
+    terminalIsOut = true,
+    isDpOrTp = false,
+  } = opts;
   const lastIdx = chainIds.length - 1;
   for (let i = 0; i < chainIds.length; i++) {
     const pid = chainIds[i];
     if (!pid) continue;
-    if (i === lastIdx) ensure(pid).PO += 1;
-    else ensure(pid).A += 1;
+    if (errorStepIndex === i) {
+      ensure(pid).E += 1;
+    } else if (i === lastIdx) {
+      if (terminalIsOut) {
+        ensure(pid).PO += 1;
+      } else if (lastIdx > 0) {
+        ensure(pid).A += 1;
+      }
+    } else {
+      ensure(pid).A += 1;
+      if (
+        isDpOrTp &&
+        chain &&
+        chain[i].action === "received" &&
+        chain[i].target
+      ) {
+        ensure(pid).PO += 1;
+      }
+    }
   }
 }
 
@@ -163,51 +200,19 @@ export function rollupFielding(
       continue;
     }
 
-    // Stage 3 path: when a fielder_chain is present, credit A on every
-    // non-terminal step and PO on the terminal step. An `error_step_index`
-    // pulls that step out of the A/PO line and credits it as E instead.
-    // Result-level overlays (DP/TP) still increment on the primary fielder.
+    // Stage 3 path: when a fielder_chain is present, walk the chain via
+    // the shared helper. Result-level overlays (DP/TP) still credit the
+    // primary fielder for the existing column counts.
     const chain = ab.fielder_chain;
     const chainIds = ab.fielder_chain_player_ids;
     const isDpOrTp = ab.result === "DP" || ab.result === "TP";
     if (chain && chain.length > 0 && chainIds && chainIds.length === chain.length) {
-      const lastIdx = chain.length - 1;
-      const errIdx = ab.error_step_index ?? null;
-      for (let i = 0; i < chain.length; i++) {
-        const pid = chainIds[i];
-        if (!pid) continue;
-        if (errIdx === i) {
-          ensure(pid).E += 1;
-        } else if (i === lastIdx) {
-          // Terminal step is the PO — but only when the play produced an
-          // out. On a hit (1B/2B/3B/HR) or FC where the chain ends with no
-          // out, terminal counts as an A (the fielder handled the ball
-          // but didn't retire anyone). E results also skip the terminal-
-          // PO credit; the E credit lands via error_step_index.
-          if (ab.outs_recorded > 0 && ab.result !== "E") {
-            ensure(pid).PO += 1;
-          } else if (lastIdx > 0) {
-            ensure(pid).A += 1;
-          }
-        } else {
-          // Non-terminal step: always +1 A. On a DP/TP, a non-terminal
-          // `received` step on a base is itself a force-out — credit
-          // both PO (the retire at that bag) and A (the throw to the
-          // next fielder). Scoped to DP/TP so non-DP chains (FC, hits
-          // with throws) don't over-credit a receiver who didn't retire
-          // anyone.
-          ensure(pid).A += 1;
-          if (
-            isDpOrTp &&
-            chain[i].action === "received" &&
-            chain[i].target
-          ) {
-            ensure(pid).PO += 1;
-          }
-        }
-      }
-      // DP/TP overlay credit still goes to the primary fielder so the
-      // existing FieldingLine columns stay populated.
+      creditFielderChain(chainIds, ensure, {
+        chain,
+        errorStepIndex: ab.error_step_index ?? null,
+        terminalIsOut: ab.outs_recorded > 0 && ab.result !== "E",
+        isDpOrTp,
+      });
       if (ab.fielder_player_id) {
         if (ab.result === "DP") ensure(ab.fielder_player_id).DP += 1;
         else if (ab.result === "TP") ensure(ab.fielder_player_id).TP += 1;
@@ -240,11 +245,11 @@ export function rollupFielding(
   }
   for (const ev of catcherEvents.caught_stealing) {
     if (ev.catcher_id) ensure(ev.catcher_id).CS += 1;
-    creditRunningEventChain(ev.fielder_chain_player_ids, ensure);
+    creditFielderChain(ev.fielder_chain_player_ids, ensure);
   }
   for (const ev of catcherEvents.pickoffs) {
     if (ev.catcher_id) ensure(ev.catcher_id).PIK += 1;
-    creditRunningEventChain(ev.fielder_chain_player_ids, ensure);
+    creditFielderChain(ev.fielder_chain_player_ids, ensure);
   }
   for (const ev of catcherEvents.error_advance_fielders ?? []) {
     ensure(ev.fielder_player_id).E += 1;
