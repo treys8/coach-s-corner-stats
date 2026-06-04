@@ -126,7 +126,11 @@ export function useTimingPlayPrompt({
     });
     setSubmitting(false);
     if (!result.ok) {
-      setPending(null);
+      // Keep the prompt open on a hard error so the coach can retry. This
+      // at_bat is already in `seen`, so closing here would make the timing
+      // call unrecoverable — the watcher effect won't re-open it. postEvent
+      // already surfaces the failure toast. (Offline returns ok+queued, so
+      // this branch is only a genuine server rejection.)
       return;
     }
     toast.success("Run nullified — timing play");

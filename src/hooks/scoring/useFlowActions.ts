@@ -1,7 +1,7 @@
 "use client";
 
 import { toast } from "sonner";
-import { postEvent, type PostResult } from "@/lib/scoring/events-client";
+import { postEvent, type PostBody, type PostResult } from "@/lib/scoring/events-client";
 import { describeEvent } from "@/lib/scoring/at-bat-helpers";
 import type {
   AtBatPayload,
@@ -25,6 +25,7 @@ export interface UseFlowActionsArgs {
   setSubmitting: UseGameEventsResult["setSubmitting"];
   applyPostResult: UseGameEventsResult["applyPostResult"];
   discardQueued: UseGameEventsResult["discardQueued"];
+  bumpLastSeq: UseGameEventsResult["bumpLastSeq"];
   /** Called after the finalize event lands so the parent can swap to
    *  FinalStub from local state. */
   onFinalized?: () => void;
@@ -56,13 +57,26 @@ export function useFlowActions({
   setSubmitting,
   applyPostResult,
   discardQueued,
+  bumpLastSeq,
   onFinalized,
 }: UseFlowActionsArgs): UseFlowActionsResult {
+  // Wrap postEvent so the QUEUED (offline) path advances lastSeq. Without it,
+  // two consecutive offline flow actions of the same type reuse `lastSeq + 1`
+  // → identical client_event_id → the second is silently dropped as a
+  // duplicate by the outbox/server. bumpLastSeq is a Math.max no-op once a
+  // server fold lands. Pass the nextSeq the body's id was built from.
+  // (Idempotent ids like finalize's `gf-<gameId>` don't need this.)
+  const postFlow = async (nextSeq: number, body: PostBody): Promise<PostResult> => {
+    const result = await postEvent(gameId, body);
+    if (result.ok && !result.state) bumpLastSeq(nextSeq);
+    return result;
+  };
+
   const endHalfInning = async () => {
     if (submitting) return;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const result = await postEvent(gameId, {
+    const result = await postFlow(nextSeq, {
       client_event_id: `ie-${state.inning}-${state.half}-${nextSeq}`,
       event_type: "inning_end",
       payload: { inning: state.inning, half: state.half },
@@ -111,7 +125,7 @@ export function useFlowActions({
     let nextSeq = lastSeq + 1;
     let subResult: PostResult | null = null;
     if (leadingSub) {
-      subResult = await postEvent(gameId, {
+      subResult = await postFlow(nextSeq, {
         client_event_id: `sub-pc-${nextSeq}`,
         event_type: "substitution",
         payload: leadingSub,
@@ -127,7 +141,7 @@ export function useFlowActions({
       out_pitcher_id: state.current_pitcher_id,
       in_pitcher_id: newPitcherId,
     };
-    const result = await postEvent(gameId, {
+    const result = await postFlow(nextSeq, {
       client_event_id: `pc-${nextSeq}`,
       event_type: "pitching_change",
       payload,
@@ -152,7 +166,7 @@ export function useFlowActions({
     if (submitting || !state.current_pitcher_id) return { forcedRemoval: false };
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const result = await postEvent(gameId, {
+    const result = await postFlow(nextSeq, {
       client_event_id: `dc-${nextSeq}`,
       event_type: "defensive_conference",
       payload: {
@@ -194,7 +208,7 @@ export function useFlowActions({
     if (submitting) return false;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const result = await postEvent(gameId, {
+    const result = await postFlow(nextSeq, {
       client_event_id: `uc-${nextSeq}`,
       event_type: "umpire_call",
       payload,
@@ -219,7 +233,7 @@ export function useFlowActions({
     if (submitting) return false;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const result = await postEvent(gameId, {
+    const result = await postFlow(nextSeq, {
       client_event_id: `sub-${nextSeq}`,
       event_type: "substitution",
       payload,
@@ -255,7 +269,7 @@ export function useFlowActions({
       corrected_payload: correctedAtBat,
     };
     const nextSeq = lastSeq + 1;
-    const result = await postEvent(gameId, {
+    const result = await postFlow(nextSeq, {
       client_event_id: `corr-${nextSeq}`,
       event_type: "correction",
       payload: correction,
@@ -295,7 +309,7 @@ export function useFlowActions({
     if (state.status === "suspended" || state.status === "final") return false;
     setSubmitting(true);
     const nextSeq = lastSeq + 1;
-    const result = await postEvent(gameId, {
+    const result = await postFlow(nextSeq, {
       client_event_id: `gs-${nextSeq}`,
       event_type: "game_suspended",
       payload,
@@ -329,7 +343,7 @@ export function useFlowActions({
         return;
       }
       const nextSeq = lastSeq + 1;
-      const result = await postEvent(gameId, {
+      const result = await postFlow(nextSeq, {
         client_event_id: `undo-${nextSeq}`,
         event_type: "correction",
         payload: {

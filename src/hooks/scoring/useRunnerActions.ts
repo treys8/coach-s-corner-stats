@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { postEvent } from "@/lib/scoring/events-client";
 import type {
   Base,
@@ -92,6 +93,7 @@ export interface UseRunnerActionsArgs {
   submitting: boolean;
   setSubmitting: UseGameEventsResult["setSubmitting"];
   applyPostResult: UseGameEventsResult["applyPostResult"];
+  bumpLastSeq: UseGameEventsResult["bumpLastSeq"];
 }
 
 export interface UseRunnerActionsResult {
@@ -155,6 +157,7 @@ export function useRunnerActions({
   submitting,
   setSubmitting,
   applyPostResult,
+  bumpLastSeq,
 }: UseRunnerActionsArgs): UseRunnerActionsResult {
   const [runnerAction, setRunnerAction] = useState<RunnerActionTarget | null>(null);
   const [pendingRbiPrompt, setPendingRbiPrompt] = useState<PendingRbiPrompt | null>(null);
@@ -175,6 +178,10 @@ export function useRunnerActions({
       payload,
     });
     if (!result.ok) return false;
+    // Queued (offline) path: applyPostResult can't advance lastSeq (no server
+    // state), so do it here — otherwise the next same-type runner action
+    // reuses this client_event_id and gets dropped as a duplicate.
+    if (!result.state) bumpLastSeq(nextSeq);
     applyPostResult(result);
     announceAutoEndHalf(result);
     return true;
@@ -239,6 +246,17 @@ export function useRunnerActions({
       target !== "home" &&
       isBackward(from, target)
     ) {
+      // A backward drag onto a base that's already occupied would silently
+      // erase the runner sitting there — applyAdvances does a blind
+      // `next[to] = {…}` with no occupancy check (replay.ts), so the prior
+      // occupant vanishes from the bases for the rest of the inning. Refuse
+      // the gesture and point the coach at Edit last play, which can
+      // re-derive the full multi-runner reshuffle. (`target` is a base name
+      // here — home/out were handled above.)
+      if (state.bases[target as Base]) {
+        toast.error("That base is occupied — use Edit last play to fix the runners.");
+        return "noop";
+      }
       setPendingRunnerBackward({ from, to: target, runnerId });
       return "prompt_backward";
     }
@@ -290,29 +308,23 @@ export function useRunnerActions({
         ok = await post("error_advance", payload, `err-${pending.from}-${pending.to}`);
         break;
       }
-      case "advanced_on_throw": {
-        // First-class event — runner takes an extra base on the throw
-        // with no error charged. Engine treats it as earned, no taint,
-        // no fielder-error attribution (WP/balk-style).
+      case "advanced_on_throw":
+      case "tag_up_advance":
+      case "defensive_indifference": {
+        // Non-error runner movement — an extra base taken on the throw, a
+        // tag-up advance, or defensive indifference. None of these involve a
+        // charged error, so they all post as `advance_on_throw`: the engine
+        // treats that source as EARNED and does NOT taint the runner
+        // `reached_on_error` (replay.applyRunnerMove). Routing these through
+        // `error_advance` (the old behavior) wrongly flagged the runner, so
+        // any run he later scored was counted UNEARNED and silently deflated
+        // the pitcher's ERA. The attribution_label still rides along to label
+        // the play in the timeline.
         const payload: RunnerMovePayload = {
           advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
           attribution_label: ATTRIBUTION_LABELS[choice],
         };
         ok = await post("advance_on_throw", payload, `${choice}-${pending.from}-${pending.to}`);
-        break;
-      }
-      case "tag_up_advance":
-      case "defensive_indifference": {
-        // Pure runner-movement events — no SB credit, no error. The
-        // engine has no dedicated event types for these; they emit as
-        // error_advance with an attribution_label so the timeline
-        // description renders correctly and a future stats pass can
-        // suppress the error bookkeeping for these specific variants.
-        const payload: RunnerMovePayload = {
-          advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
-          attribution_label: ATTRIBUTION_LABELS[choice],
-        };
-        ok = await post("error_advance", payload, `${choice}-${pending.from}-${pending.to}`);
         break;
       }
     }
@@ -336,8 +348,14 @@ export function useRunnerActions({
       advances: [{ from: pending.from, to: pending.to, player_id: pending.runnerId }],
       attribution_label: BACKWARD_LABELS[choice],
     };
+    // A held / un-advanced runner is NOT a defensive error — post as the
+    // untainted `advance_on_throw` source so the engine doesn't stamp the
+    // runner `reached_on_error` (which would make a later run UNEARNED).
+    // The move is backward (never to home/out), so it credits zero runs and
+    // zero outs; the only effect is clearing the taint. attribution_label
+    // carries the reason for the timeline.
     const ok = await post(
-      "error_advance",
+      "advance_on_throw",
       payload,
       `${choice}-${pending.from}-${pending.to}`,
     );
@@ -359,15 +377,19 @@ export function useRunnerActions({
     setSubmitting(true);
     let ok: boolean;
     if (onLastPlay) {
-      // Coach said "yes, on last play" — record the run with reached_on_error
-      // bookkeeping suppressed. error_advance with explicit to:home gives
-      // the engine the runner move. Attributing the RBI to the at_bat is
-      // a separate correction step which isn't implemented yet — the run
-      // still posts; RBI attribution lands in a follow-up.
+      // Coach said "yes, on last play" — a clean run scored as a direct
+      // result of the previous at-bat (waved around / delayed advance on the
+      // throw). It is EARNED, so post `advance_on_throw` rather than
+      // `error_advance`: the latter is excluded from EARNED_NON_PA_SOURCES
+      // and would charge the run as UNEARNED against the pitcher. Attributing
+      // the RBI back onto the at_bat is a separate correction step not yet
+      // implemented — the run still posts; RBI attribution lands in a
+      // follow-up.
       const payload: RunnerMovePayload = {
         advances: [{ from: pending.from, to: "home", player_id: pending.runnerId }],
+        attribution_label: "Scored on last play",
       };
-      ok = await post("error_advance", payload, `drag-${pending.from}-home`);
+      ok = await post("advance_on_throw", payload, `drag-${pending.from}-home`);
     } else if (pending.from === "third") {
       // R3 stealing home — credits SB to the runner.
       const payload: StolenBasePayload = {

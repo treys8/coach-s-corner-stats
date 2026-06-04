@@ -50,6 +50,7 @@ export function useLiveScoring({
     applyOptimistic,
     rollbackOptimistic,
     discardQueued,
+    bumpLastSeq,
   } = gameEvents;
 
   const derived = useReplayState({ state, events, queued, roster });
@@ -68,6 +69,7 @@ export function useLiveScoring({
     applyPostResult,
     applyOptimistic,
     rollbackOptimistic,
+    bumpLastSeq,
     opposingProfileCache,
   });
 
@@ -78,6 +80,7 @@ export function useLiveScoring({
     submitting,
     setSubmitting,
     applyPostResult,
+    bumpLastSeq,
   });
 
   const flowActions = useFlowActions({
@@ -90,6 +93,7 @@ export function useLiveScoring({
     setSubmitting,
     applyPostResult,
     discardQueued,
+    bumpLastSeq,
     onFinalized,
   });
 

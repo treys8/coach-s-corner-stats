@@ -56,6 +56,14 @@ export interface UseGameEventsResult {
    *  acked by the server yet — discarding the queue entry is the correct
    *  semantic since there's nothing to supersede. */
   discardQueued: (clientEventId: string) => Promise<void>;
+  /** Advance lastSeq to at least `seq` (monotonic via Math.max). Used by the
+   *  non-optimistic emitters (runner / flow / timing / closing-pitch events)
+   *  on the QUEUED offline path, where `applyPostResult` can't bump because it
+   *  has no server state to fold. Without it, two consecutive offline actions
+   *  of the same type reuse the same `lastSeq + 1` → identical client_event_id
+   *  → the second is silently dropped as a duplicate by the outbox/server.
+   *  A no-op once the server fold (or an optimistic apply) lands. */
+  bumpLastSeq: (seq: number) => void;
 }
 
 /** Build a synthetic GameEventRecord from a queued outbox row. Used by cold-
@@ -318,6 +326,12 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     setQueued(snap.queued);
   };
 
+  // Mirror applyOptimistic's lastSeq bump for emitters that DON'T apply an
+  // optimistic synth (runner/flow/timing/closing-pitch). Math.max keeps it
+  // monotonic, so calling it on the queued path then later folding the server
+  // response is always safe. See bumpLastSeq doc on UseGameEventsResult.
+  const bumpLastSeq = (seq: number) => setLastSeq((prev) => Math.max(prev, seq));
+
   const discardQueued = useCallback(
     async (clientEventId: string) => {
       const all = await listByGame(gameId).catch(() => []);
@@ -349,6 +363,7 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     applyOptimistic,
     rollbackOptimistic,
     discardQueued,
+    bumpLastSeq,
   };
 }
 

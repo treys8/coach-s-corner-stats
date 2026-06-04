@@ -243,6 +243,16 @@ export function EditLastPlayDialog({
       inning: lastAtBat.inning,
       half: lastAtBat.half,
       batter_id: lastAtBat.batter_id,
+      // A correction REPLACES the original event payload wholesale (the
+      // engine re-dispatches corrected_payload with no field merge), so
+      // every field that isn't re-stated here is destroyed. Carry through
+      // the attribution fields the editor doesn't expose — otherwise a
+      // routine count fix silently wipes opponent identity (and may fail
+      // the batter_id XOR opponent_batter_id DB CHECK on opposing PAs),
+      // the fielding chain (losing A/PO/E credit + 6-4-3 notation), the
+      // dropped-3rd-strike reach (changing earned/unearned bookkeeping),
+      // and the batted-ball type.
+      opponent_batter_id: lastAtBat.opponent_batter_id,
       pitcher_id: lastAtBat.pitcher_id,
       opponent_pitcher_id: lastAtBat.opponent_pitcher_id,
       batting_order: lastAtBat.batting_order,
@@ -256,6 +266,10 @@ export function EditLastPlayDialog({
       fielder_position: lastAtBat.fielder_position,
       runner_advances: newAdvances,
       description: describePlay(result, rbi, lastAtBat.batter_id, names),
+      batter_reached_on_k3: lastAtBat.batter_reached_on_k3,
+      fielder_chain: lastAtBat.fielder_chain,
+      batted_ball_type: lastAtBat.batted_ball_type,
+      error_step_index: lastAtBat.error_step_index ?? null,
     };
     onSubmit(lastAtBat.event_id, corrected);
   };

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { Base, FielderTouch, OpposingLineupSlot, ReplayState } from "@/lib/scoring/types";
-import { BASE_XY, FIELDER_POSITIONS, POSITION_XY, type FielderPosition } from "./diamond-geometry";
+import { BASE_XY, FIELDER_POSITIONS, HOME_XY, POSITION_XY, type FielderPosition } from "./diamond-geometry";
 import { FieldBackground } from "./FieldBackground";
 
 export { FIELDER_POSITIONS, type FielderPosition };
@@ -60,8 +60,8 @@ const BASE_GENERIC: Record<"first" | "second" | "third", string> = {
 // only as a destination (you can't drag a runner from home).
 const DROP_BASES: (Base | "home")[] = ["first", "second", "third", "home"];
 
-// Center of home plate in SVG coords (matches FieldBackground geometry).
-const HOME_XY: [number, number] = [50, 92];
+// `HOME_XY` (center of home plate) is imported from ./diamond-geometry so the
+// diamond, MiniBases, and base-snapping all read one source of truth.
 
 // 2D offsets for SAFE/OUT zones placed relative to each base. SAFE sits
 // on the "forward / center-field" side, OUT on the "back / foul" side,
@@ -208,15 +208,20 @@ export function DefensiveDiamond({
     y: number;
   } | null>(null);
   const [runnerDrag, setRunnerDrag] = useState<RunnerDragState | null>(null);
-  // Per-step drop coordinates for the chain markers. Kept in sync with
-  // `chain` length: appended on each drop (via endDrag), truncated when
-  // the hook shrinks chain (undo step), cleared when chain is empty
-  // (commit / cancel).
-  const [markerCoords, setMarkerCoords] = useState<{ x: number; y: number }[]>([]);
-  const chainLen = chain?.length ?? 0;
-  useEffect(() => {
-    setMarkerCoords((prev) => (prev.length > chainLen ? prev.slice(0, chainLen) : prev));
-  }, [chainLen]);
+
+  // Chain badges anchor to the fielder's canonical position (for the
+  // first-touch fielded/caught step) or to the target bag (for subsequent
+  // throw-receiver steps that snapped to a base). Anchoring on semantic
+  // landmarks — not the free-floating pointer drop — keeps the "1 stays
+  // with the 3B" mental model intact and makes 5-4-3 / 6-4-3 sequences
+  // read like the textbook diagrams.
+  const chainAnchor = (step: FielderTouch): readonly [number, number] => {
+    if (step.target) {
+      return step.target === "home" ? HOME_XY : BASE_XY[step.target];
+    }
+    const pos = step.position as FielderPosition;
+    return POSITION_XY[pos] ?? [50, 50];
+  };
 
   const svgCoords = (clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -257,11 +262,6 @@ export function DefensiveDiamond({
     const c = svgCoords(e.clientX, e.clientY) ?? { x: drag.x, y: drag.y };
     const { position } = drag;
     setDrag(null);
-    // Optimistically record the drop in our local marker list. If the
-    // parent rejects the drop (no-op), the chain prop won't grow and the
-    // useEffect above will trim this entry on the next render — markers
-    // stay in sync with the canonical chain.
-    setMarkerCoords((prev) => [...prev, { x: c.x, y: c.y }]);
     onFielderDrop?.(c.x / 100, c.y / 100, position);
   };
 
@@ -579,58 +579,6 @@ export function DefensiveDiamond({
         );
       })}
 
-      {/* Chain markers + arrows — one numbered chip per chain step at its
-          drop spot. Drawn before the fielders so the floating name labels
-          stay readable. Arrow segments connect consecutive drops so the
-          coach sees the sequence at a glance. */}
-      {chain && chain.length > 0 && markerCoords.length === chain.length && (
-        <g pointerEvents="none">
-          {/* Connecting segments between drop spots */}
-          {markerCoords.map((c, i) => {
-            if (i === 0) return null;
-            const prev = markerCoords[i - 1];
-            const isErr = errorStepIndex === i;
-            return (
-              <line
-                key={`chain-link-${i}`}
-                x1={prev.x}
-                y1={prev.y}
-                x2={c.x}
-                y2={c.y}
-                stroke={isErr ? "#ef4444" : "#1f3252"}
-                strokeWidth={0.55}
-                strokeDasharray={isErr ? "1.2 0.8" : undefined}
-                opacity={0.85}
-              />
-            );
-          })}
-          {/* Numbered chips at each drop spot */}
-          {markerCoords.map((c, i) => {
-            const isErr = errorStepIndex === i;
-            const fill = isErr ? "#ef4444" : PALETTE.teamBottom;
-            return (
-              <g key={`chain-marker-${i}`} filter="url(#dd-soft-shadow)">
-                <circle cx={c.x} cy={c.y} r={2.4} fill={fill} stroke={PALETTE.chalk} strokeWidth={0.45} />
-                <ellipse
-                  cx={c.x} cy={c.y - 0.75} rx={1.3} ry={0.5}
-                  fill={PALETTE.baseHighlight} opacity={0.35}
-                />
-                <text
-                  x={c.x}
-                  y={c.y + 0.9}
-                  textAnchor="middle"
-                  fontSize={2.4}
-                  fontWeight={700}
-                  fill={PALETTE.chalk}
-                >
-                  {i + 1}
-                </text>
-              </g>
-            );
-          })}
-        </g>
-      )}
-
       {dragMode && drag && FIELDER_POSITIONS.map((pos) => {
         const [px, py] = POSITION_XY[pos];
         if (pos === drag.position) {
@@ -728,6 +676,59 @@ export function DefensiveDiamond({
           </g>
         );
       })}
+
+      {/* Chain markers + arrows — one numbered chip per chain step, anchored
+          to the fielder (for the first-touch fielded/caught step) or to the
+          target bag (for throw-receiver steps). Drawn after the fielders so
+          the badge sits on top of the position label. Lines connect chips
+          in order so 5-4-3 / 6-4-3 chains read like a textbook diagram. */}
+      {chain && chain.length > 0 && (
+        <g pointerEvents="none">
+          {chain.map((step, i) => {
+            if (i === 0) return null;
+            const [x2, y2] = chainAnchor(step);
+            const [x1, y1] = chainAnchor(chain[i - 1]);
+            const isErr = errorStepIndex === i;
+            return (
+              <line
+                key={`chain-link-${i}`}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={isErr ? "#ef4444" : "#1f3252"}
+                strokeWidth={0.55}
+                strokeDasharray={isErr ? "1.2 0.8" : undefined}
+                opacity={0.9}
+              />
+            );
+          })}
+          {chain.map((step, i) => {
+            const [cx, cy] = chainAnchor(step);
+            const isErr = errorStepIndex === i;
+            const fill = isErr ? "#ef4444" : PALETTE.teamBottom;
+            return (
+              <g key={`chain-marker-${i}`} filter="url(#dd-soft-shadow)">
+                <circle cx={cx} cy={cy} r={2.7} fill={fill} stroke={PALETTE.chalk} strokeWidth={0.5} />
+                <ellipse
+                  cx={cx} cy={cy - 0.85} rx={1.45} ry={0.55}
+                  fill={PALETTE.baseHighlight} opacity={0.4}
+                />
+                <text
+                  x={cx}
+                  y={cy + 1.0}
+                  textAnchor="middle"
+                  fontSize={2.7}
+                  fontWeight={700}
+                  fill={PALETTE.chalk}
+                >
+                  {i + 1}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      )}
     </svg>
   );
 }

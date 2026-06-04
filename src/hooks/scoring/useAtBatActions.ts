@@ -49,6 +49,7 @@ export interface UseAtBatActionsArgs {
   applyPostResult: UseGameEventsResult["applyPostResult"];
   applyOptimistic: UseGameEventsResult["applyOptimistic"];
   rollbackOptimistic: UseGameEventsResult["rollbackOptimistic"];
+  bumpLastSeq: UseGameEventsResult["bumpLastSeq"];
   opposingProfileCache?: Map<string, OpposingBatterProfile>;
 }
 
@@ -95,8 +96,9 @@ export interface UseAtBatActionsResult {
    *  outs from each step's snapped base + the snapshot of bases captured
    *  at chain start. No-op when armedResult isn't multi-step. */
   commitChain: () => void;
-  /** Pop the last step off the pending chain. Diamond's marker layer trims
-   *  itself via the chain-length effect. */
+  /** Pop the last step off the pending chain. The diamond re-renders its
+   *  chain badges directly from the `pendingChain` prop, so the markers
+   *  follow automatically (no marker-sync effect anymore). */
   popChainStep: () => void;
   /** Clear the pending chain and disarm the outcome. */
   cancelChain: () => void;
@@ -159,6 +161,7 @@ export function useAtBatActions({
   applyPostResult,
   applyOptimistic,
   rollbackOptimistic,
+  bumpLastSeq,
   opposingProfileCache,
 }: UseAtBatActionsArgs): UseAtBatActionsResult {
   const [armedResult, setArmedResult] = useState<ArmedState | null>(null);
@@ -393,6 +396,12 @@ export function useAtBatActions({
       setSubmitting(false);
       return;
     }
+    // Queued (offline) path: a count-CLOSING pitch skips applyOptimistic (see
+    // shouldOptimisticPitch) and applyPostResult can't bump without server
+    // state — so advance lastSeq here. Otherwise the next offline pitch reuses
+    // `pitch-${nextSeq}` and is dropped as a duplicate. No-op when optimistic
+    // already bumped or when the server fold lands (both use Math.max).
+    if (!result.state) bumpLastSeq(nextSeq);
     // Invalidate cached opposing profile when the chain produced an at_bat
     // — same trigger as submitAtBat, so a 9-deep lineup cycle doesn't
     // surface stale career lines.
