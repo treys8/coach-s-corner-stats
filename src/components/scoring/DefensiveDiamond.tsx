@@ -396,6 +396,12 @@ export function DefensiveDiamond({
           <stop offset="0%" stopColor="#3a6dd1" />
           <stop offset="100%" stopColor={PALETTE.teamBottom} />
         </linearGradient>
+        {/* Soft radial glow for occupied bases — gradient (no filter) so the
+            breathing pulse stays cheap on low-end tablets. */}
+        <radialGradient id="dd-base-glow-grad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor={PALETTE.occupiedTop} stopOpacity="0.85" />
+          <stop offset="100%" stopColor={PALETTE.occupiedTop} stopOpacity="0" />
+        </radialGradient>
       </defs>
 
       {currentBatterId && (() => {
@@ -438,8 +444,18 @@ export function DefensiveDiamond({
         const runner = state.bases[b];
         const occupied = runner !== null;
         return (
-          <g key={b} data-base={b} filter="url(#dd-soft-shadow)">
-            <g transform={`translate(${bx} ${by}) rotate(45)`}>
+          <g key={b} data-base={b}>
+            {occupied && (
+              <circle
+                cx={bx}
+                cy={by}
+                r={5}
+                fill="url(#dd-base-glow-grad)"
+                className="animate-glow-pulse"
+                style={{ transformBox: "fill-box", transformOrigin: "center" }}
+              />
+            )}
+            <g filter="url(#dd-soft-shadow)" transform={`translate(${bx} ${by}) rotate(45)`}>
               <rect
                 x={-2.6} y={-2.6} width={5.2} height={5.2} rx={0.35}
                 fill={occupied ? "url(#dd-base-occupied)" : "url(#dd-base-fill)"}

@@ -60,6 +60,8 @@ export default {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        xl: "calc(var(--radius) + 4px)",
+        "2xl": "calc(var(--radius) + 10px)",
       },
       keyframes: {
         "accordion-down": {
@@ -70,6 +72,21 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        "glow-pulse": {
+          "0%, 100%": { opacity: "0.55", transform: "scale(1)" },
+          "50%": { opacity: "1", transform: "scale(1.06)" },
+        },
+        "armed-pulse": {
+          // Self-contained breathing ring: 2px white offset gap (contrast on
+          // any button color) + an orange ring that expands 5px->8px. Drives
+          // box-shadow directly, so it needs no Tailwind ring beneath it.
+          "0%, 100%": { boxShadow: "0 0 0 2px hsl(0 0% 100%), 0 0 0 5px hsl(var(--sa-orange) / 0.9)" },
+          "50%": { boxShadow: "0 0 0 2px hsl(0 0% 100%), 0 0 0 8px hsl(var(--sa-orange) / 0.35)" },
+        },
+        "pop-in": {
+          "0%": { opacity: "0", transform: "scale(0.96)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
       },
       fontFamily: {
         display: ['"Bebas Neue"', "Inter", "sans-serif"],
@@ -79,6 +96,9 @@ export default {
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "glow-pulse": "glow-pulse 2.4s ease-in-out infinite",
+        "armed-pulse": "armed-pulse 1.6s ease-in-out infinite",
+        "pop-in": "pop-in 200ms var(--ease-out-quint)",
       },
     },
   },

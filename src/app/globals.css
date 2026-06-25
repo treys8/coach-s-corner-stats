@@ -59,6 +59,32 @@
     --shadow-card: 0 1px 2px hsl(224 100% 18% / 0.06), 0 4px 16px hsl(224 100% 18% / 0.06);
     --shadow-elevated: 0 8px 32px hsl(224 100% 18% / 0.12);
     --shadow-orange: 0 8px 24px hsl(16 100% 50% / 0.28);
+
+    /* Premium elevation scale — neutral, tuned for a bright daylight theme */
+    --shadow-e1: 0 1px 2px hsl(224 40% 20% / 0.08), 0 1px 1px hsl(224 40% 20% / 0.04);
+    --shadow-e2: 0 2px 4px hsl(224 40% 20% / 0.08), 0 4px 8px hsl(224 40% 20% / 0.06);
+    --shadow-e3: 0 4px 8px hsl(224 40% 20% / 0.10), 0 12px 24px hsl(224 40% 20% / 0.10);
+    --shadow-e4: 0 8px 16px hsl(224 40% 20% / 0.12), 0 24px 48px hsl(224 40% 20% / 0.14);
+    --shadow-pressed: inset 0 2px 4px hsl(224 40% 20% / 0.18);
+    /* Brand glows — derived from sa-* so they re-theme per school */
+    --glow-accent: 0 0 0 1px hsl(var(--sa-orange) / 0.35), 0 6px 18px hsl(var(--sa-orange) / 0.30);
+    --glow-primary: 0 0 0 1px hsl(var(--sa-blue) / 0.30), 0 6px 18px hsl(var(--sa-blue-deep) / 0.28);
+
+    /* Motion tokens */
+    --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --dur-fast: 120ms;
+    --dur-base: 200ms;
+    --dur-slow: 320ms;
+
+    /* Tactile button-surface gradients — per-school safe (derived from sa-*) */
+    /* Top stop is the base accent (not the lighter glow) so white-text contrast
+       is no worse than the pre-redesign solid button; bottom darkens for a
+       top-lit key. color-mix keeps it per-school (mixes the themed accent). */
+    --gradient-accent-btn: linear-gradient(180deg, hsl(var(--sa-orange)) 0%, color-mix(in srgb, hsl(var(--sa-orange)), #000 14%) 100%);
+    --gradient-primary-btn: linear-gradient(180deg, hsl(var(--sa-blue)) 0%, hsl(var(--sa-blue-deep)) 100%);
+    --gradient-neutral-btn: linear-gradient(180deg, hsl(var(--muted)) 0%, hsl(220 14% 92%) 100%);
+    --gradient-count: linear-gradient(160deg, hsl(var(--sa-blue) / 0.08) 0%, hsl(var(--sa-blue-deep) / 0.02) 100%);
   }
 
   .dark {
@@ -99,6 +125,15 @@
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
   }
+
+  /* Global reduced-motion guard — neutralizes pulses, lifts, and transitions */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 @layer utilities {
@@ -109,4 +144,24 @@
   .shadow-elevated { box-shadow: var(--shadow-elevated); }
   .shadow-orange { box-shadow: var(--shadow-orange); }
   .text-balance { text-wrap: balance; }
+
+  /* Premium elevation + glow utilities */
+  .shadow-e1 { box-shadow: var(--shadow-e1); }
+  .shadow-e2 { box-shadow: var(--shadow-e2); }
+  .shadow-e3 { box-shadow: var(--shadow-e3); }
+  .shadow-e4 { box-shadow: var(--shadow-e4); }
+  .shadow-pressed { box-shadow: var(--shadow-pressed); }
+  .glow-accent { box-shadow: var(--glow-accent); }
+  .glow-primary { box-shadow: var(--glow-primary); }
+
+  /* Tactile button-surface gradients */
+  .bg-gradient-accent-btn { background: var(--gradient-accent-btn); }
+  .bg-gradient-primary-btn { background: var(--gradient-primary-btn); }
+  .bg-gradient-neutral-btn { background: var(--gradient-neutral-btn); }
+  .bg-gradient-count { background: var(--gradient-count); }
+
+  /* Type ramp */
+  .text-eyebrow { @apply text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground; }
+  .text-stat-xl { @apply leading-none font-bold tabular-nums; font-family: 'JetBrains Mono', monospace; }
+  .text-label { @apply text-xs font-medium tracking-tight; }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
@@ -85,7 +85,7 @@ export function InPlayOutcomeSheet({ disabled, onPick, canRecord }: Props) {
       <Section
         heading="Hits"
         buttons={HITS}
-        cls="bg-sa-orange hover:bg-sa-orange/90 text-white"
+        variant="outcomeHit"
         disabled={disabled}
         onPick={onPick}
         canRecord={canRecord}
@@ -93,7 +93,7 @@ export function InPlayOutcomeSheet({ disabled, onPick, canRecord }: Props) {
       <Section
         heading="Outs"
         buttons={OUTS}
-        cls="bg-muted hover:bg-muted/80 text-foreground"
+        variant="outcomeOut"
         disabled={disabled}
         onPick={onPick}
         canRecord={canRecord}
@@ -101,7 +101,7 @@ export function InPlayOutcomeSheet({ disabled, onPick, canRecord }: Props) {
       <Section
         heading="Compound"
         buttons={COMPOUND}
-        cls="bg-sa-blue-deep/80 hover:bg-sa-blue-deep text-white"
+        variant="outcomeOther"
         disabled={disabled}
         onPick={onPick}
         canRecord={canRecord}
@@ -143,32 +143,32 @@ export function InPlayOutcomeSheet({ disabled, onPick, canRecord }: Props) {
 function Section({
   heading,
   buttons,
-  cls,
+  variant,
   disabled,
   onPick,
   canRecord,
 }: {
   heading: string;
   buttons: SectionButton[];
-  cls: string;
+  variant: ButtonProps["variant"];
   disabled: boolean;
   onPick: (r: AtBatResult, extras?: AtBatExtras) => void;
   canRecord: (r: AtBatResult) => boolean;
 }) {
   return (
     <div className="space-y-1.5">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-0.5">
-        {heading}
-      </div>
+      <div className="text-eyebrow px-0.5">{heading}</div>
       <div className="grid grid-cols-2 gap-2">
         {buttons.map((b) => {
           const contextDisabled = !canRecord(b.result);
           return (
             <Button
               key={b.key}
+              variant={variant}
+              size="outcomeSm"
               disabled={disabled || contextDisabled}
               onClick={() => onPick(b.result, b.extras)}
-              className={`h-11 text-sm font-bold ${cls}${contextDisabled ? " opacity-40" : ""}`}
+              className={contextDisabled ? "opacity-40" : ""}
               title={b.title}
             >
               {b.label}

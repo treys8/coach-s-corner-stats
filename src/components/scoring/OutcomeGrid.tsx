@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   HITS,
@@ -16,6 +16,12 @@ import {
 } from "@/lib/scoring/at-bat-helpers";
 import type { AtBatResult, K3ReachSource } from "@/lib/scoring/types";
 import { ARMED_IN_PLAY_PENDING, type ArmedState } from "@/hooks/scoring/useAtBatActions";
+
+// Armed-outcome affordance: a breathing ring under normal motion, plus a
+// static outline fallback (via motion-reduce:) so reduced-motion users still
+// get a clear "this outcome is selected" indicator instead of nothing.
+const ARMED_RING =
+  "animate-armed-pulse motion-reduce:animate-none motion-reduce:outline motion-reduce:outline-2 motion-reduce:outline-offset-2 motion-reduce:outline-sa-orange";
 
 interface Props {
   disabled: boolean;
@@ -74,7 +80,6 @@ function NonContactRow({
   dimNonInPlay?: boolean;
 }) {
   const [overflowOpen, setOverflowOpen] = useState(false);
-  const cls = "bg-sa-blue hover:bg-sa-blue/90 text-white";
   return (
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
       {NON_CONTACT.map((r) => {
@@ -83,9 +88,11 @@ function NonContactRow({
         return (
           <Button
             key={r}
+            variant="outcomeBase"
+            size="outcome"
             disabled={disabled || (armedResult !== null && !isArmed)}
             onClick={() => onPick(r)}
-            className={`h-12 text-base font-bold ${cls} ${isArmed ? "ring-4 ring-sa-blue-deep ring-offset-2" : ""}${dim ? " opacity-40" : ""}`}
+            className={`${isArmed ? ARMED_RING : ""}${dim ? " opacity-40" : ""}`}
             title={RESULT_DESC[r] ?? r}
           >
             {RESULT_LABEL[r]}
@@ -96,8 +103,9 @@ function NonContactRow({
         <PopoverTrigger asChild>
           <Button
             variant="outline"
+            size="outcome"
             disabled={disabled}
-            className={`h-12 text-base font-bold${dimNonInPlay ? " opacity-40" : ""}`}
+            className={dimNonInPlay ? "opacity-40" : ""}
             title="Rare outcomes (CI, IBB)"
           >
             More
@@ -108,12 +116,13 @@ function NonContactRow({
             {RARE_OUTCOMES.map((r) => (
               <Button
                 key={r}
+                variant="outcomeBase"
                 disabled={disabled}
                 onClick={() => {
                   setOverflowOpen(false);
                   onPick(r);
                 }}
-                className={`h-10 text-sm font-bold ${cls}`}
+                className="h-10 text-sm font-bold"
                 title={RESULT_DESC[r] ?? r}
               >
                 {RESULT_LABEL[r]}
@@ -179,14 +188,14 @@ function ButtonRow({
   dimNonInPlay?: boolean;
   canRecord: (r: AtBatResult) => boolean;
 }) {
-  const cls =
+  const btnVariant: ButtonProps["variant"] =
     variant === "hit"
-      ? "bg-sa-orange hover:bg-sa-orange/90 text-white"
+      ? "outcomeHit"
       : variant === "out"
-        ? "bg-muted hover:bg-muted/80 text-foreground"
+        ? "outcomeOut"
         : variant === "other"
-          ? "bg-sa-blue-deep/80 hover:bg-sa-blue-deep text-white"
-          : "bg-sa-blue hover:bg-sa-blue/90 text-white";
+          ? "outcomeOther"
+          : "outcomeBase";
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
       {results.map((r) => {
@@ -196,9 +205,11 @@ function ButtonRow({
         return (
           <Button
             key={r}
+            variant={btnVariant}
+            size="outcome"
             disabled={disabled || contextDisabled || (armedResult !== null && !isArmed)}
             onClick={() => onPick(r)}
-            className={`h-12 text-base font-bold ${cls} ${isArmed ? "ring-4 ring-sa-blue-deep ring-offset-2" : ""}${dim ? " opacity-40" : ""}`}
+            className={`${isArmed ? ARMED_RING : ""}${dim ? " opacity-40" : ""}`}
             title={RESULT_DESC[r] ?? r}
           >
             {RESULT_LABEL[r]}

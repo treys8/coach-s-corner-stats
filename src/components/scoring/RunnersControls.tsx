@@ -64,7 +64,7 @@ export function RunnersControls({
 
   return (
     <div className="space-y-3">
-      <h3 className="text-xs uppercase tracking-wider text-sa-blue font-semibold">Runners</h3>
+      <h3 className="text-[10px] font-bold uppercase tracking-[0.12em] text-sa-blue">Runners</h3>
       <div className="space-y-3">
         {occupied.map((b) => {
           const runner = bases[b]!;
@@ -73,16 +73,16 @@ export function RunnersControls({
             : "Runner";
           return (
             <div key={b} className="space-y-1">
-              <p className="text-xs">
-                <span className="font-mono-stat font-bold text-sa-blue-deep mr-2">{BASE_SHORT[b]}</span>
+              <p className="flex items-center text-xs">
+                <span className="inline-block rounded bg-sa-orange/10 px-1.5 py-0.5 text-stat-xl text-sm text-sa-blue-deep mr-2">{BASE_SHORT[b]}</span>
                 <span>{playerName}</span>
               </p>
               <div className="grid grid-cols-3 gap-2">
                 <Button
                   size="sm"
+                  variant="pitchStrike"
                   disabled={disabled}
                   onClick={() => steal(b, runner.player_id)}
-                  className="bg-sa-orange hover:bg-sa-orange/90 text-white"
                 >
                   {STEAL_LABEL[b]}
                 </Button>
@@ -98,7 +98,7 @@ export function RunnersControls({
         })}
       </div>
       <div className="space-y-1 pt-1 border-t">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground">Advance all</p>
+        <p className="text-eyebrow">Advance all</p>
         <div className="grid grid-cols-3 gap-2">
           <Button size="sm" variant="outline" disabled={disabled} onClick={() => allUp("wild_pitch", "wp")}>
             WP

@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { PitchType } from "@/lib/scoring/types";
 
@@ -12,13 +12,13 @@ interface Props {
 }
 
 export function PitchPad({ balls, strikes, disabled, onPitch }: Props) {
-  const pitches: { type: PitchType; label: string; cls: string }[] = [
-    { type: "ball", label: "Ball", cls: "bg-sa-blue hover:bg-sa-blue/90 text-white" },
-    { type: "called_strike", label: "Called K", cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
-    { type: "swinging_strike", label: "Swing K", cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
-    { type: "foul", label: "Foul", cls: "bg-muted hover:bg-muted/80 text-foreground" },
-    { type: "in_play", label: "In play", cls: "bg-sa-blue-deep/80 hover:bg-sa-blue-deep text-white" },
-    { type: "hbp", label: "HBP", cls: "bg-muted hover:bg-muted/80 text-foreground" },
+  const pitches: { type: PitchType; label: string; variant: ButtonProps["variant"] }[] = [
+    { type: "ball", label: "Ball", variant: "pitchBall" },
+    { type: "called_strike", label: "Called K", variant: "pitchStrike" },
+    { type: "swinging_strike", label: "Swing K", variant: "pitchStrike" },
+    { type: "foul", label: "Foul", variant: "pitchNeutral" },
+    { type: "in_play", label: "In play", variant: "pitchInPlay" },
+    { type: "hbp", label: "HBP", variant: "pitchNeutral" },
   ];
   // Less-common pitch types tucked into a secondary row to keep the primary pad uncluttered.
   // Foul-tip-caught is a strike (and records K at 2 strikes); pitchout and intentional_ball
@@ -38,9 +38,10 @@ export function PitchPad({ balls, strikes, disabled, onPitch }: Props) {
         {pitches.map((p) => (
           <Button
             key={p.type}
+            variant={p.variant}
+            size="pitchSm"
             disabled={disabled}
             onClick={() => onPitch(p.type)}
-            className={`h-12 text-sm font-bold ${p.cls}`}
           >
             {p.label}
           </Button>

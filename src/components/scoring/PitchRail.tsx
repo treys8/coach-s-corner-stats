@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
@@ -59,12 +59,12 @@ interface PitchRailProps {
 
 type Mode = "pitchPad" | "armedDrag" | "pickContact";
 
-const PRIMARY: { type: PitchType; label: string; cls: string }[] = [
-  { type: "ball",            label: "Ball",     cls: "bg-sa-blue hover:bg-sa-blue/90 text-white" },
-  { type: "called_strike",   label: "Called K", cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
-  { type: "swinging_strike", label: "Swing K",  cls: "bg-sa-orange hover:bg-sa-orange/90 text-white" },
-  { type: "in_play",         label: "In play",  cls: "bg-sa-blue-deep/80 hover:bg-sa-blue-deep text-white" },
-  { type: "foul",            label: "Foul",     cls: "bg-muted hover:bg-muted/80 text-foreground" },
+const PRIMARY: { type: PitchType; label: string; variant: ButtonProps["variant"] }[] = [
+  { type: "ball",            label: "Ball",     variant: "pitchBall" },
+  { type: "called_strike",   label: "Called K", variant: "pitchStrike" },
+  { type: "swinging_strike", label: "Swing K",  variant: "pitchStrike" },
+  { type: "in_play",         label: "In play",  variant: "pitchInPlay" },
+  { type: "foul",            label: "Foul",     variant: "pitchNeutral" },
 ];
 
 /**
@@ -128,8 +128,8 @@ export function PitchRail({
   // with a right border; dock = bottom-pinned footer with a top border and a
   // height cap so it doesn't eat the diamond.
   const containerCls = isDock
-    ? "flex flex-col border-t bg-background max-h-[55vh]"
-    : "flex flex-col h-full min-h-0 border-r bg-background";
+    ? "relative z-10 flex flex-col border-t bg-background max-h-[55vh] rounded-t-2xl shadow-[0_-10px_28px_-14px_hsl(224_40%_20%/0.22)]"
+    : "relative z-10 flex flex-col h-full min-h-0 border-r bg-background shadow-[8px_0_24px_-14px_hsl(224_40%_20%/0.22)]";
 
   return (
     <div className={containerCls}>
@@ -137,19 +137,25 @@ export function PitchRail({
           In dock mode the GameStatusBar carries the count instead. */}
       {!isDock && (
         <div className="px-3 pt-3 pb-2 border-b">
-          <div className="flex items-baseline justify-between">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Count
-            </span>
-            <span className="font-mono-stat text-[64px] leading-none text-sa-blue-deep tabular-nums">
-              {balls}-{strikes}
-            </span>
+          <div
+            className={`rounded-2xl border border-sa-blue/15 bg-gradient-count px-4 py-3 shadow-e2${
+              balls === 3 && strikes === 2
+                ? " animate-armed-pulse motion-reduce:animate-none motion-reduce:outline motion-reduce:outline-2 motion-reduce:outline-offset-2 motion-reduce:outline-sa-orange"
+                : ""
+            }`}
+          >
+            <div className="flex items-baseline justify-between">
+              <span className="text-eyebrow">Count</span>
+              <span className="text-stat-xl text-[72px] text-sa-blue-deep [text-shadow:0_2px_8px_hsl(var(--sa-blue-deep)/0.18)]">
+                {balls}-{strikes}
+              </span>
+            </div>
           </div>
         </div>
       )}
 
       {/* Mode-specific body */}
-      <div className={`flex-1 min-h-0 overflow-y-auto ${isDock ? "px-3 py-2" : "p-3"}`}>
+      <div className={`flex-1 min-h-0 overflow-y-auto ${isDock ? "px-4 py-3" : "p-3"}`}>
         {mode === "pitchPad" && (
           isDock ? (
             <div className="space-y-2">
@@ -157,9 +163,10 @@ export function PitchRail({
                 {PRIMARY.map((p) => (
                   <Button
                     key={p.type}
+                    variant={p.variant}
+                    size="pitchSm"
                     disabled={disabled}
                     onClick={() => onPitch(p.type)}
-                    className={`h-12 text-sm font-bold px-1 ${p.cls}`}
                   >
                     {p.label}
                   </Button>
@@ -204,9 +211,10 @@ export function PitchRail({
               {PRIMARY.map((p) => (
                 <Button
                   key={p.type}
+                  variant={p.variant}
+                  size="pitch"
                   disabled={disabled}
                   onClick={() => onPitch(p.type)}
-                  className={`h-14 text-base font-bold ${p.cls}`}
                 >
                   {p.label}
                 </Button>
@@ -451,7 +459,8 @@ function ArmedDragBody({
             Undo drop
           </Button>
           <Button
-            className="w-full bg-sa-orange hover:bg-sa-orange/90 text-white"
+            variant="commit"
+            className="w-full"
             onClick={commitChain}
             disabled={submitting || !canCommitChain}
           >

@@ -67,8 +67,8 @@ export function GameStatusBar({
       : "(no pitcher)";
 
   const containerCls = bleed
-    ? "sticky top-0 z-20 -mx-6 px-6 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b"
-    : "px-3 sm:px-4 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b";
+    ? "sticky top-0 z-20 -mx-6 px-6 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b shadow-e2"
+    : "px-3 sm:px-4 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b shadow-e2";
 
   return (
     <div className={containerCls}>
@@ -177,21 +177,19 @@ function ScoreLine({
   teamScore: number;
   opponentScore: number;
 }) {
+  const teamLeading = teamScore > opponentScore;
+  const oppLeading = opponentScore > teamScore;
   return (
-    <div className="font-mono-stat flex items-baseline gap-2 min-w-0">
-      <span className="text-xs uppercase tracking-wider text-muted-foreground truncate max-w-[8ch]">
-        {teamShortLabel}
-      </span>
-      <span className="text-2xl md:text-3xl text-sa-blue-deep font-bold">
+    <div className="flex items-baseline gap-2 min-w-0">
+      <span className="text-eyebrow truncate max-w-[8ch]">{teamShortLabel}</span>
+      <span className={`text-stat-xl text-3xl md:text-4xl ${teamLeading ? "text-sa-orange" : "text-sa-blue-deep"}`}>
         {teamScore}
       </span>
       <span className="text-muted-foreground">–</span>
-      <span className="text-2xl md:text-3xl text-sa-blue-deep font-bold">
+      <span className={`text-stat-xl text-3xl md:text-4xl ${oppLeading ? "text-sa-orange" : "text-sa-blue-deep"}`}>
         {opponentScore}
       </span>
-      <span className="text-xs uppercase tracking-wider text-muted-foreground truncate max-w-[12ch]">
-        {opponentName}
-      </span>
+      <span className="text-eyebrow truncate max-w-[12ch]">{opponentName}</span>
     </div>
   );
 }
@@ -213,7 +211,7 @@ function StateChip({
 }) {
   return (
     <div className="flex items-center gap-2 text-sm shrink-0">
-      <span className="font-semibold text-sa-blue uppercase tracking-wider whitespace-nowrap">
+      <span className="font-bold text-sa-blue uppercase tracking-wider whitespace-nowrap">
         {halfLabel} {inning}
       </span>
       <OutsDots outs={outs} />
@@ -221,7 +219,11 @@ function StateChip({
         // Hidden on lg+ — the PitchRail rail carries the giant standalone
         // count badge there, so this chip would be a redundant second copy.
         // On <lg this chip is the only count surface (dock has no badge).
-        <span className="lg:hidden font-mono-stat text-base md:text-lg text-sa-blue-deep whitespace-nowrap">
+        <span
+          className={`lg:hidden font-mono-stat text-base md:text-lg whitespace-nowrap ${
+            balls === 3 && strikes === 2 ? "text-sa-orange font-bold" : "text-sa-blue-deep"
+          }`}
+        >
           {balls}-{strikes}
         </span>
       )}
@@ -231,17 +233,20 @@ function StateChip({
 
 function OutsDots({ outs }: { outs: number }) {
   return (
-    <span className="inline-flex items-center gap-1" aria-label={`${outs} out${outs === 1 ? "" : "s"}`}>
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className={
-            i < outs
-              ? "w-2 h-2 rounded-full bg-sa-blue-deep"
-              : "w-2 h-2 rounded-full border border-sa-blue-deep/40"
-          }
-        />
-      ))}
+    <span className="inline-flex items-center gap-1.5" aria-label={`${outs} out${outs === 1 ? "" : "s"}`}>
+      {[0, 1, 2].map((i) => {
+        const filled = i < outs;
+        return (
+          <span
+            key={i}
+            className={
+              filled
+                ? `w-2.5 h-2.5 rounded-full bg-sa-orange shadow-[0_0_0_2px_hsl(var(--sa-orange)/0.25)]${outs === 2 ? " animate-glow-pulse" : ""}`
+                : "w-2.5 h-2.5 rounded-full border-2 border-sa-blue-deep/30"
+            }
+          />
+        );
+      })}
     </span>
   );
 }

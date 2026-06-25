@@ -267,7 +267,7 @@ export function LiveScoring({
           <PitchRail layout="rail" {...pitchRailProps} />
         </div>
 
-        <div className="relative h-full min-h-0 flex items-center justify-center overflow-hidden p-2">
+        <div className="relative h-full min-h-0 flex items-center justify-center overflow-hidden p-3 lg:p-4">
           {!rightRailOpen && (
             <Button
               size="sm"
@@ -296,7 +296,7 @@ export function LiveScoring({
         </div>
 
         {rightRailOpen && (
-          <aside className="hidden lg:flex flex-col overflow-y-auto border-l p-3 space-y-3">
+          <aside className="relative z-10 hidden lg:flex flex-col overflow-y-auto border-l p-4 space-y-4 shadow-[-8px_0_24px_-14px_hsl(224_40%_20%/0.22)]">
             <div className="flex justify-end">
               <Button
                 size="sm"

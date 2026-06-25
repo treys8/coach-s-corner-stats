@@ -39,38 +39,42 @@ export function LineScore({ state }: { state: ReplayState }) {
     { usR: 0, oppR: 0, usH: 0, oppH: 0, usE: 0, oppE: 0 },
   );
 
+  // Highlight the column for the inning in progress.
+  const currentIdx = state.inning - 1;
+  const colHi = (i: number) => (i === currentIdx ? " bg-sa-orange/10" : "");
+
   return (
-    <Card className="p-3 overflow-x-auto">
+    <Card className="p-3 overflow-x-auto rounded-xl shadow-e2">
       <table className="font-mono-stat text-sm w-full min-w-max">
         <thead>
-          <tr className="text-xs uppercase tracking-wider text-muted-foreground">
-            <th className="text-left pr-3 font-semibold w-12"></th>
+          <tr className="text-eyebrow">
+            <th className="text-left pr-3 w-12"></th>
             {cells.map((_, i) => (
-              <th key={i} className="px-2 text-center">{i + 1}</th>
+              <th key={i} className={`px-2.5 py-1.5 text-center${colHi(i)}`}>{i + 1}</th>
             ))}
-            <th className="px-2 text-center border-l">R</th>
-            <th className="px-2 text-center">H</th>
-            <th className="px-2 text-center">E</th>
+            <th className="px-2.5 py-1.5 text-center border-l text-sa-blue font-bold">R</th>
+            <th className="px-2.5 py-1.5 text-center text-sa-blue font-bold">H</th>
+            <th className="px-2.5 py-1.5 text-center text-sa-blue font-bold">E</th>
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td className="pr-3 text-xs uppercase tracking-wider text-sa-blue font-semibold">us</td>
+          <tr className="odd:bg-muted/30 hover:bg-sa-blue/5">
+            <td className="pr-3 text-[10px] font-bold uppercase tracking-[0.12em] text-sa-blue">us</td>
             {cells.map((c, i) => (
-              <td key={i} className="px-2 text-center text-sa-blue-deep">{c.usR}</td>
+              <td key={i} className={`px-2.5 py-1.5 text-center text-sa-blue-deep${colHi(i)}`}>{c.usR}</td>
             ))}
-            <td className="px-2 text-center text-sa-blue-deep border-l">{totals.usR}</td>
-            <td className="px-2 text-center text-sa-blue-deep">{totals.usH}</td>
-            <td className="px-2 text-center text-sa-blue-deep">{totals.usE}</td>
+            <td className="px-2.5 py-1.5 text-center text-stat-xl text-base text-sa-blue border-l">{totals.usR}</td>
+            <td className="px-2.5 py-1.5 text-center text-stat-xl text-base text-sa-blue-deep">{totals.usH}</td>
+            <td className="px-2.5 py-1.5 text-center text-stat-xl text-base text-sa-blue-deep">{totals.usE}</td>
           </tr>
-          <tr>
-            <td className="pr-3 text-xs uppercase tracking-wider text-muted-foreground font-semibold">opp</td>
+          <tr className="odd:bg-muted/30 hover:bg-sa-blue/5">
+            <td className="pr-3 text-eyebrow">opp</td>
             {cells.map((c, i) => (
-              <td key={i} className="px-2 text-center text-sa-blue-deep">{c.oppR}</td>
+              <td key={i} className={`px-2.5 py-1.5 text-center text-sa-blue-deep${colHi(i)}`}>{c.oppR}</td>
             ))}
-            <td className="px-2 text-center text-sa-blue-deep border-l">{totals.oppR}</td>
-            <td className="px-2 text-center text-sa-blue-deep">{totals.oppH}</td>
-            <td className="px-2 text-center text-sa-blue-deep">{totals.oppE}</td>
+            <td className="px-2.5 py-1.5 text-center text-stat-xl text-base text-sa-blue border-l">{totals.oppR}</td>
+            <td className="px-2.5 py-1.5 text-center text-stat-xl text-base text-sa-blue-deep">{totals.oppH}</td>
+            <td className="px-2.5 py-1.5 text-center text-stat-xl text-base text-sa-blue-deep">{totals.oppE}</td>
           </tr>
         </tbody>
       </table>

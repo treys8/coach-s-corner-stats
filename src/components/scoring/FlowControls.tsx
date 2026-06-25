@@ -48,7 +48,7 @@ export function FlowControls({
   return (
     <div className="flex flex-col gap-2">
       {outs >= 3 && (
-        <p className="text-xs uppercase tracking-wider text-sa-orange font-semibold">
+        <p className="rounded-md border border-sa-orange/30 bg-sa-orange/10 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-sa-orange">
           3 outs — end the half-inning to continue
         </p>
       )}
@@ -102,7 +102,7 @@ export function FlowControls({
         variant="outline"
         disabled={disabled}
         onClick={onFinalize}
-        className="justify-start border-sa-orange text-sa-orange hover:bg-sa-orange hover:text-white"
+        className="justify-start border-sa-orange text-sa-orange shadow-e1 hover:bg-sa-orange hover:text-white"
       >
         Finalize game
       </Button>
