@@ -111,7 +111,10 @@ export function GameStatusBar({
             showCount={showCount}
           />
 
-          <MiniBases bases={state.bases} className="shrink-0" />
+          {/* Redundant with the base runners shown on the diamond directly
+              below, so hidden on phones to give the team names room; shown
+              from sm+ where the header has space. */}
+          <MiniBases bases={state.bases} className="hidden sm:block shrink-0" />
         </div>
 
         <div className="flex items-center gap-1 md:gap-3 w-full md:w-auto justify-between md:justify-start order-2 shrink-0">
@@ -189,17 +192,36 @@ function ScoreLine({
 }) {
   const teamLeading = teamScore > opponentScore;
   const oppLeading = opponentScore > teamScore;
+  // Stacked mini-scoreboard: one row per team (name + score) so the full team
+  // names stay readable on a phone. The old inline `LBL 0 – 0 LBL` layout had
+  // to truncate the names to ~3.5ch to fit the score + state on one line.
   return (
-    <div className="flex items-baseline gap-2 min-w-0">
-      <span className="text-eyebrow truncate max-w-[3.5ch] sm:max-w-[8ch]">{teamShortLabel}</span>
-      <span className={`text-stat-xl text-3xl md:text-4xl ${teamLeading ? "text-sa-orange" : "text-sa-blue-deep"}`}>
-        {teamScore}
+    <div className="flex flex-col gap-0.5 min-w-0 w-full">
+      <ScoreRow label={teamShortLabel} score={teamScore} leading={teamLeading} />
+      <ScoreRow label={opponentName} score={opponentScore} leading={oppLeading} />
+    </div>
+  );
+}
+
+function ScoreRow({
+  label,
+  score,
+  leading,
+}: {
+  label: string;
+  score: number;
+  leading: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="text-eyebrow truncate min-w-0 flex-1">{label}</span>
+      <span
+        className={`text-stat-xl text-xl md:text-2xl leading-none tabular-nums text-right min-w-[1.25ch] ${
+          leading ? "text-sa-orange" : "text-sa-blue-deep"
+        }`}
+      >
+        {score}
       </span>
-      <span className="text-muted-foreground">–</span>
-      <span className={`text-stat-xl text-3xl md:text-4xl ${oppLeading ? "text-sa-orange" : "text-sa-blue-deep"}`}>
-        {opponentScore}
-      </span>
-      <span className="text-eyebrow truncate max-w-[3.5ch] sm:max-w-[12ch]">{opponentName}</span>
     </div>
   );
 }
