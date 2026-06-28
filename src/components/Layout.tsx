@@ -97,27 +97,31 @@ export function Layout({
             </button>
           </nav>
         </div>
-        <nav className="lg:hidden border-t border-white/10 px-4 py-2 flex gap-2 overflow-x-auto [mask-image:linear-gradient(to_right,#000_88%,transparent)] [-webkit-mask-image:linear-gradient(to_right,#000_88%,transparent)]">
-          {nav.map((n) => {
-            const active = isActive(pathname, n.href, n.exact);
-            return (
-              <Link
-                key={n.href}
-                href={n.href}
-                ref={active ? activeMobileTabRef : undefined}
-                className={cn(
-                  "inline-flex items-center min-h-[44px] px-3 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap",
-                  active ? "bg-sa-orange text-white" : "text-white/80",
-                )}
-              >
-                {n.label}
-              </Link>
-            );
-          })}
+        <nav className="lg:hidden border-t border-white/10 px-4 py-2 flex items-center gap-2">
+          {/* Scrollable tab group — the right-edge fade hints more tabs. Kept
+              separate from Sign out so the action never sits under the fade. */}
+          <div className="flex gap-2 overflow-x-auto min-w-0 flex-1 [mask-image:linear-gradient(to_right,#000_88%,transparent)] [-webkit-mask-image:linear-gradient(to_right,#000_88%,transparent)]">
+            {nav.map((n) => {
+              const active = isActive(pathname, n.href, n.exact);
+              return (
+                <Link
+                  key={n.href}
+                  href={n.href}
+                  ref={active ? activeMobileTabRef : undefined}
+                  className={cn(
+                    "inline-flex items-center min-h-[44px] px-3 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap",
+                    active ? "bg-sa-orange text-white" : "text-white/80",
+                  )}
+                >
+                  {n.label}
+                </Link>
+              );
+            })}
+          </div>
           <button
             type="button"
             onClick={signOut}
-            className="ml-auto min-h-[44px] px-3 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap text-white/80 inline-flex items-center gap-1.5"
+            className="shrink-0 min-h-[44px] pl-3 pr-1 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap text-white/80 inline-flex items-center gap-1.5 border-l border-white/10"
           >
             <LogOut className="w-3.5 h-3.5" />
             Sign out
