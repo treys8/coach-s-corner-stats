@@ -4,6 +4,11 @@ _Generated 2026-06-28 via a 7-surface multi-agent responsive audit (71 agents). 
 
 **Severity counts:** 🔴 3 blocker · 🟠 11 major · 🟡 29 minor · ⚪ 6 nit
 
+**✅ COMPLETE (2026-06-28):** all 3 blockers, all majors, and every 🟡 minor / ⚪ nit finding are
+resolved and merged to `main` (PRs #67–#71). The only deferred work is **F4** (pinned dialog
+header/footer restructure) and the **diamond landscape relayout**, both intentionally carved into
+their own future PRs — see Remaining below.
+
 > Context: mobile is the **primary** environment — a coach scoring a live game one-handed on a phone outdoors, plus parents/fans browsing scores and stat tables on phones. Tablet = iPad portrait (768px) & landscape (1024–1366px). The app's nav only switches to the desktop row at `xl` (1280px), so **every iPad gets the mobile nav**.
 
 ## Status — updated 2026-06-28
@@ -55,7 +60,7 @@ _Generated 2026-06-28 via a 7-surface multi-agent responsive audit (71 agents). 
   `r=4→6`) and runner chips (added a transparent `r=4` hit circle) stay tappable/draggable
   above the touch floor, especially when the diamond letterboxes to a short square in landscape.
 
-**✅ Shipped — minors/nits batch:**
+**✅ Shipped — minors/nits batch (PR #71):**
 - **Live-scoring secondary controls** bumped to the 44px floor: Sheet close (40px hit area),
   OfflinePill, TagUpChip Dismiss/"Left early?", PitchRail dock More ▾ / Direct outcome and rail
   Direct outcome, EditLastPlay count steppers (`h-11 w-11`), RunnerActionDialog steal/WP/PB/balk
