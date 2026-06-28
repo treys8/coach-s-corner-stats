@@ -63,13 +63,13 @@ export function Layout({
               <h1 className="font-display text-3xl md:text-4xl text-white truncate">{teamName}</h1>
             </div>
           </Link>
-          <nav className="hidden md:flex items-center gap-1">
+          <nav className="hidden xl:flex items-center gap-1 min-w-0 overflow-x-auto">
             {nav.map((n) => (
               <Link
                 key={n.href}
                 href={n.href}
                 className={cn(
-                  "px-4 py-2 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors",
+                  "px-4 py-2 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors whitespace-nowrap",
                   isActive(pathname, n.href, n.exact)
                     ? "bg-sa-orange text-white shadow-orange"
                     : "text-white/80 hover:text-white hover:bg-white/10",
@@ -89,7 +89,7 @@ export function Layout({
             </button>
           </nav>
         </div>
-        <nav className="md:hidden border-t border-white/10 px-4 py-2 flex gap-1 overflow-x-auto">
+        <nav className="xl:hidden border-t border-white/10 px-4 py-2 flex gap-1 overflow-x-auto">
           {nav.map((n) => (
             <Link
               key={n.href}
