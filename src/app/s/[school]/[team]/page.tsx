@@ -292,7 +292,7 @@ export default function RosterPage() {
                     href={`/s/${school.slug}/${team.slug}/upload/roster`}
                     aria-label={`Set jersey number for ${p.first_name} ${p.last_name} — upload a roster file to fill it in.`}
                     title="No jersey or position on file — upload a roster to fill them in."
-                    className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full bg-sa-orange/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sa-orange border border-sa-orange/30 hover:bg-sa-orange/20 transition-colors"
+                    className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full bg-sa-orange/10 px-2 py-0.5 text-[10px] touch:min-h-[44px] touch:px-3 touch:text-xs font-semibold uppercase tracking-wider text-sa-orange border border-sa-orange/30 hover:bg-sa-orange/20 transition-colors"
                   >
                     Set jersey?
                   </Link>
@@ -335,7 +335,7 @@ function GradeChip({ playerId, grade, locked, onChange }: GradeChipProps) {
           aria-label={missing ? "Set grade" : `Change grade (currently ${grade})`}
           title={missing ? "Grade not set — pick one" : `Grade: ${grade} — click to change`}
           className={
-            "absolute top-2 left-2 z-10 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider border transition-colors " +
+            "absolute top-2 left-2 z-10 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] touch:min-h-[44px] touch:px-3 touch:text-xs font-semibold uppercase tracking-wider border transition-colors " +
             (missing
               ? "bg-sa-orange/10 text-sa-orange border-sa-orange/30 hover:bg-sa-orange/20"
               : "bg-sa-blue/10 text-sa-blue border-sa-blue/30 hover:bg-sa-blue/20")

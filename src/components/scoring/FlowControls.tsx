@@ -73,6 +73,13 @@ export function FlowControls({
       >
         Mound visit{conferencesThisGame > 0 ? ` (${conferencesThisGame})` : ""}
       </Button>
+      {/* Surface the conference rule as visible text — the warning was
+          previously only in the hover-only title, invisible on touch. */}
+      {conferencesThisGame >= 3 && (
+        <p className="rounded-md border border-sa-orange/30 bg-sa-orange/10 px-2.5 py-1.5 text-[11px] font-semibold text-sa-orange">
+          {moundVisitTitle}
+        </p>
+      )}
       <Button
         variant="outline"
         disabled={disabled || !canEdit}

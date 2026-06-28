@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef } from "react";
 import { LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth";
@@ -30,6 +31,13 @@ export function Layout({
 }: LayoutProps) {
   const { user, signOut } = useAuth();
   const pathname = usePathname();
+  // Keep the active tab visible in the horizontally-scrolling mobile strip:
+  // on a trailing page (Upload/Settings) the active pill would otherwise sit
+  // off-screen with no hint of where you are.
+  const activeMobileTabRef = useRef<HTMLAnchorElement | null>(null);
+  useEffect(() => {
+    activeMobileTabRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [pathname]);
   const base = `/s/${schoolSlug}/${teamSlug}`;
   const headerLabel = schoolShortName?.trim() || schoolName;
   const nav = [
@@ -63,7 +71,7 @@ export function Layout({
               <h1 className="font-display text-3xl md:text-4xl text-white truncate">{teamName}</h1>
             </div>
           </Link>
-          <nav className="hidden xl:flex items-center gap-1 min-w-0 overflow-x-auto">
+          <nav className="hidden lg:flex items-center gap-1 min-w-0 overflow-x-auto">
             {nav.map((n) => (
               <Link
                 key={n.href}
@@ -89,19 +97,23 @@ export function Layout({
             </button>
           </nav>
         </div>
-        <nav className="xl:hidden border-t border-white/10 px-4 py-2 flex gap-2 overflow-x-auto">
-          {nav.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className={cn(
-                "inline-flex items-center min-h-[44px] px-3 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap",
-                isActive(pathname, n.href, n.exact) ? "bg-sa-orange text-white" : "text-white/80",
-              )}
-            >
-              {n.label}
-            </Link>
-          ))}
+        <nav className="lg:hidden border-t border-white/10 px-4 py-2 flex gap-2 overflow-x-auto [mask-image:linear-gradient(to_right,#000_88%,transparent)] [-webkit-mask-image:linear-gradient(to_right,#000_88%,transparent)]">
+          {nav.map((n) => {
+            const active = isActive(pathname, n.href, n.exact);
+            return (
+              <Link
+                key={n.href}
+                href={n.href}
+                ref={active ? activeMobileTabRef : undefined}
+                className={cn(
+                  "inline-flex items-center min-h-[44px] px-3 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap",
+                  active ? "bg-sa-orange text-white" : "text-white/80",
+                )}
+              >
+                {n.label}
+              </Link>
+            );
+          })}
           <button
             type="button"
             onClick={signOut}

@@ -92,7 +92,7 @@ export function GameStatusBar({
           aria-label="Undo last play"
           disabled={!canUndo}
           onClick={onUndo}
-          className="shrink-0"
+          className="shrink-0 h-11 w-11"
         >
           <Undo2 className="h-5 w-5" />
         </Button>
@@ -123,7 +123,7 @@ export function GameStatusBar({
             size="icon"
             aria-label="Box score"
             onClick={onOpenBox}
-            className="shrink-0"
+            className="shrink-0 h-11 w-11"
           >
             <ClipboardList className="h-5 w-5" />
           </Button>
@@ -134,7 +134,7 @@ export function GameStatusBar({
             size="icon"
             aria-label="Batter detail"
             onClick={onOpenBatter}
-            className="shrink-0 lg:hidden"
+            className="shrink-0 lg:hidden h-11 w-11"
           >
             <User className="h-5 w-5" />
           </Button>
@@ -147,7 +147,7 @@ export function GameStatusBar({
           size="icon"
           aria-label="Manage game"
           onClick={onOpenManage}
-          className="shrink-0"
+          className="shrink-0 h-11 w-11"
         >
           <MoreVertical className="h-5 w-5" />
         </Button>

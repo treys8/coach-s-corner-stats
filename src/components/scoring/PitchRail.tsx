@@ -128,7 +128,7 @@ export function PitchRail({
   // with a right border; dock = bottom-pinned footer with a top border and a
   // height cap so it doesn't eat the diamond.
   const containerCls = isDock
-    ? "relative z-10 flex flex-col border-t bg-background max-h-[55dvh] rounded-t-2xl shadow-[0_-10px_28px_-14px_hsl(224_40%_20%/0.22)]"
+    ? "relative z-10 flex flex-col border-t bg-background max-h-[55dvh] pb-safe rounded-t-2xl shadow-[0_-10px_28px_-14px_hsl(224_40%_20%/0.22)]"
     : "relative z-10 flex flex-col h-full min-h-0 border-r bg-background shadow-[8px_0_24px_-14px_hsl(224_40%_20%/0.22)]";
 
   return (

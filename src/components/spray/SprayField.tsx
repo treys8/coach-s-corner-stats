@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { FieldBackground } from "@/components/scoring/FieldBackground";
 
 export type SprayBucket = "hit" | "out" | "other";
@@ -40,9 +41,11 @@ export function SprayField({
   countsInLegend = false,
   className,
 }: SprayFieldProps) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const sprayed = markers.filter(
     (m) => m.spray_x !== null && m.spray_y !== null,
   );
+  const selected = sprayed.find((m) => m.id === selectedId) ?? null;
   const counts = sprayed.reduce(
     (acc, m) => {
       acc[bucketOf(m.result)] += 1;
@@ -80,11 +83,13 @@ export function SprayField({
           </g>
         ))}
 
-        {/* Markers */}
+        {/* Markers — each has an enlarged invisible hit circle so it's a real
+            tap target on touch, where the SVG <title> hover never fires. */}
         {sprayed.map((m) => {
           const x = (m.spray_x ?? 0) * 100;
           const y = (m.spray_y ?? 0) * 100;
           const fill = SPRAY_BUCKET_FILL[bucketOf(m.result)];
+          const isSelected = m.id === selectedId;
           return (
             <g key={m.id}>
               <circle
@@ -92,14 +97,30 @@ export function SprayField({
                 cy={y}
                 r="1.9"
                 fill={fill}
-                stroke="#fff"
-                strokeWidth="0.45"
+                stroke={isSelected ? "#001a4d" : "#fff"}
+                strokeWidth={isSelected ? "0.9" : "0.45"}
+              />
+              <circle
+                cx={x}
+                cy={y}
+                r="4"
+                fill="transparent"
+                className="cursor-pointer"
+                style={{ pointerEvents: "all" }}
+                onClick={() => setSelectedId(isSelected ? null : m.id)}
               />
               {m.description && <title>{m.description}</title>}
             </g>
           );
         })}
       </svg>
+
+      {selected && (
+        <p className="text-sm text-center text-foreground" aria-live="polite">
+          <span className="font-semibold">{selected.result}</span>
+          {selected.description ? ` — ${selected.description}` : ""}
+        </p>
+      )}
 
       <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
         <div className="flex items-center gap-3">

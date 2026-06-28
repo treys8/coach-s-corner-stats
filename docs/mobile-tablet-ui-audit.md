@@ -18,14 +18,22 @@ _Generated 2026-06-28 via a 7-surface multi-agent responsive audit (71 agents). 
 - Stat glossary tappable — `StatLabel` Tooltip → tap Popover (the StatTooltip half of F8)
 - Leaderboard team column visible on phone; PitchRail dock `55vh` → `55dvh`
 
-**⏳ Remaining (next: foundation pass):**
+**✅ Shipped — foundation mechanical batch:**
+- New shared primitives: `.pb-safe`/`.pt-safe` utilities (globals.css) + a `touch` variant
+  (`@media (hover:none)`, tailwind.config) to bump tap targets on touch only
+- **F2** — `pb-safe` applied to the scoring dock + the edit-opposing-lineup sheet footer
+- **F5** — active nav tab scrolls into view on route change; right-edge mask-fade affordance;
+  desktop-nav switch lowered `xl`→`lg` so iPad landscape gets the full nav
+- **F7** — player season table: frozen (`sticky left-0`) Season column + right-edge fade
+- **F8** — spray markers (SprayField + LiveSprayChart) now tap to a caption with an enlarged hit
+  circle; OutcomeGrid touch-only tap glossary; FlowControls mound-visit warning + DefensiveDiamond
+  runner hint surfaced as visible/on-canvas text (`InPlayOutcomeSheet` was already full-word)
+- **F9** — 44px floor applied: GameStatusBar icons, RunnersControls, FailedEventsSheet Retry/Discard,
+  `tabs.tsx` (touch-gated), settings copy/revoke/remove icons, roster grade/jersey chips (touch-gated)
+
+**⏳ Remaining (next: structural batch):**
 - **F1** — extract the live-scoring takeover out of the nav chrome (3rd blocker, still open)
 - **F4** — pinned header/footer dialog restructure (deferred: conflicts with 3 dialogs' nested scroll)
-- **F2** — add a `.pb-safe`/`.pt-safe` safe-area utility and apply it to the scoring dock + sticky footers
-- **F5** — scroll the active nav tab into view, edge-fade affordance, lower the desktop-nav switch to `lg`
-- **F7** — sticky first column + the remaining wide grids (player season table)
-- **F8** — replace the remaining hover-only help (native `title=` strings, spray-chart markers)
-- **F9** — 44px floor for secondary controls (status bar, runner controls, settings icons, tabs, chips)
 - The remaining majors / minors / nits in the punch list below.
 
 ## Verdict

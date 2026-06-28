@@ -81,15 +81,16 @@ export function RunnersControls({
                 <Button
                   size="sm"
                   variant="pitchStrike"
+                  className="h-11"
                   disabled={disabled}
                   onClick={() => steal(b, runner.player_id)}
                 >
                   {STEAL_LABEL[b]}
                 </Button>
-                <Button size="sm" variant="outline" disabled={disabled} onClick={() => caughtStealing(b, runner.player_id)}>
+                <Button size="sm" variant="outline" className="h-11" disabled={disabled} onClick={() => caughtStealing(b, runner.player_id)}>
                   CS
                 </Button>
-                <Button size="sm" variant="outline" disabled={disabled} onClick={() => pickoff(b, runner.player_id)}>
+                <Button size="sm" variant="outline" className="h-11" disabled={disabled} onClick={() => pickoff(b, runner.player_id)}>
                   Pickoff
                 </Button>
               </div>
@@ -100,13 +101,13 @@ export function RunnersControls({
       <div className="space-y-1 pt-1 border-t">
         <p className="text-eyebrow">Advance all</p>
         <div className="grid grid-cols-3 gap-2">
-          <Button size="sm" variant="outline" disabled={disabled} onClick={() => allUp("wild_pitch", "wp")}>
+          <Button size="sm" variant="outline" className="h-11" disabled={disabled} onClick={() => allUp("wild_pitch", "wp")}>
             WP
           </Button>
-          <Button size="sm" variant="outline" disabled={disabled} onClick={() => allUp("passed_ball", "pb")}>
+          <Button size="sm" variant="outline" className="h-11" disabled={disabled} onClick={() => allUp("passed_ball", "pb")}>
             PB
           </Button>
-          <Button size="sm" variant="outline" disabled={disabled} onClick={() => allUp("balk", "bk")}>
+          <Button size="sm" variant="outline" className="h-11" disabled={disabled} onClick={() => allUp("balk", "bk")}>
             Balk
           </Button>
         </div>

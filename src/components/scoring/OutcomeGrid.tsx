@@ -14,6 +14,20 @@ import {
   RESULT_LABEL,
   isInPlay,
 } from "@/lib/scoring/at-bat-helpers";
+
+// Union of every code the grid can show, for the tap glossary. Touch users
+// can't reach the per-button `title=` tooltips (hover never fires), so the
+// dotted codes are otherwise unexplained on the primary scoring surface.
+const GLOSSARY_RESULTS: AtBatResult[] = Array.from(
+  new Set<AtBatResult>([
+    ...NON_CONTACT,
+    ...RARE_OUTCOMES,
+    ...HITS,
+    ...OUTS_IN_PLAY,
+    ...OTHER_IN_PLAY,
+    ...PRODUCTIVE,
+  ]),
+);
 import type { AtBatResult, K3ReachSource } from "@/lib/scoring/types";
 import { ARMED_IN_PLAY_PENDING, type ArmedState } from "@/hooks/scoring/useAtBatActions";
 
@@ -48,8 +62,31 @@ export function OutcomeGrid({ disabled, onPick, onK3Reach, armedResult, currentS
   // (post in-play selection); pass null while pending so no specific
   // button gets the ring treatment.
   const buttonArm = inPlayPending ? null : armedResult;
+  const [legendOpen, setLegendOpen] = useState(false);
   return (
     <div className="space-y-2">
+      {/* Tap glossary — touch-only (desktop has the hover tooltips). */}
+      <div className="hidden touch:flex justify-end">
+        <button
+          type="button"
+          onClick={() => setLegendOpen((o) => !o)}
+          aria-expanded={legendOpen}
+          className="inline-flex items-center gap-1 min-h-[36px] px-2 text-xs font-semibold text-muted-foreground"
+        >
+          <span aria-hidden>ⓘ</span>
+          {legendOpen ? "Hide codes" : "What do these mean?"}
+        </button>
+      </div>
+      {legendOpen && (
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md bg-muted/50 p-2 text-[11px] leading-tight">
+          {GLOSSARY_RESULTS.map((r) => (
+            <div key={r} className="flex gap-1.5">
+              <dt className="font-bold shrink-0">{RESULT_LABEL[r]}</dt>
+              <dd className="text-muted-foreground">{RESULT_DESC[r] ?? r}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
       <NonContactRow
         disabled={disabled}
         onPick={onPick}

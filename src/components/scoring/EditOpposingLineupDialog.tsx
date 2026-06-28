@@ -226,7 +226,7 @@ export function EditOpposingLineupDialog({
           {validationError && (
             <p className="text-sm text-amber-600">{validationError}</p>
           )}
-          <div className="flex items-center justify-end gap-2 pt-2 border-t">
+          <div className="flex items-center justify-end gap-2 pt-2 pb-safe border-t">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
               Cancel
             </Button>
