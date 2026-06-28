@@ -14,6 +14,7 @@ import { discardEntry, drainGame } from "@/lib/outbox/drain";
 import { listByGame } from "@/lib/outbox/store";
 import type { GameEventPayload, GameEventRecord, ReplayState } from "@/lib/scoring/types";
 import type { GameEventType } from "@/integrations/supabase/types";
+import { isDemoGame, demoLoadEvents } from "@/lib/scoring/demo-engine";
 
 const supabase = createClient();
 
@@ -160,11 +161,14 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
     let active = true;
     (async () => {
       const fetchStart = performance.now();
-      const { data, error } = await supabase
-        .from("game_events")
-        .select("*")
-        .eq("game_id", gameId)
-        .order("sequence_number", { ascending: true });
+      // DEV demo: serve seeded events from the in-memory engine, no Supabase.
+      const { data, error } = isDemoGame(gameId)
+        ? { data: demoLoadEvents(gameId), error: null }
+        : await supabase
+            .from("game_events")
+            .select("*")
+            .eq("game_id", gameId)
+            .order("sequence_number", { ascending: true });
       const fetchMs = performance.now() - fetchStart;
       if (!active) return;
       if (error) {
@@ -216,11 +220,13 @@ export function useGameEvents(gameId: string): UseGameEventsResult {
   useEffect(() => { eventsRef.current = events; }, [events]);
 
   const refresh = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("game_events")
-      .select("*")
-      .eq("game_id", gameId)
-      .order("sequence_number", { ascending: true });
+    const { data, error } = isDemoGame(gameId)
+      ? { data: demoLoadEvents(gameId), error: null }
+      : await supabase
+          .from("game_events")
+          .select("*")
+          .eq("game_id", gameId)
+          .order("sequence_number", { ascending: true });
     // Offline / supabase failure: fall back to the cached events array so
     // a discard-while-offline still re-folds the (now smaller) queue and
     // drops the discarded entry's optimistic effect from local state.

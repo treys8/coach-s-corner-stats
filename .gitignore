@@ -38,3 +38,8 @@ tsconfig.tsbuildinfo
 supabase/.temp/
 .vercel
 .env*
+
+# Dev-only no-login live-scoring demo (throwaway). The in-memory engine it
+# uses (src/lib/scoring/demo-engine.ts) is committed because the scoring hooks
+# import it, but the route entry point itself stays local.
+/src/app/demo-scoring/

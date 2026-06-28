@@ -6,6 +6,7 @@ import { publish } from "@/lib/outbox/status";
 import { registerRefresher } from "@/lib/outbox/refresh-registry";
 import type { GameEventRecord, ReplayState } from "@/lib/scoring/types";
 import type { GameEventType } from "@/integrations/supabase/types";
+import { isDemoGame, demoPostEvent } from "@/lib/scoring/demo-engine";
 
 // Re-exported so existing imports keep their import path; the registry
 // itself lives in outbox/refresh-registry to avoid a circular import with
@@ -63,6 +64,8 @@ async function enqueueEvent(gameId: string, body: PostBody): Promise<PostResult>
 }
 
 export async function postEvent(gameId: string, body: PostBody): Promise<PostResult> {
+  // DEV demo: in-memory engine, no network/outbox. Dead code for real games.
+  if (isDemoGame(gameId)) return demoPostEvent(gameId, body);
   return timeAsync(
     "postEvent",
     { game_id: gameId, event_type: body.event_type, client_event_id: body.client_event_id },
