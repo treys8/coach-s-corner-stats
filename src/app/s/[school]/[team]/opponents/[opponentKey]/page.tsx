@@ -182,7 +182,7 @@ export default function OpponentDetailPage({
         </p>
       ) : (
         <Card className="overflow-x-auto">
-          <div className="min-w-[640px]">
+          <div className="min-w-[760px]">
           <div className="grid grid-cols-[80px_minmax(0,1fr)_60px_60px_60px_60px_60px_60px_60px_40px] gap-2 px-4 py-2 bg-muted/50 text-[11px] uppercase tracking-wider font-bold text-muted-foreground">
             <div>#</div>
             <div>Player</div>
