@@ -6,6 +6,28 @@ _Generated 2026-06-28 via a 7-surface multi-agent responsive audit (71 agents). 
 
 > Context: mobile is the **primary** environment — a coach scoring a live game one-handed on a phone outdoors, plus parents/fans browsing scores and stat tables on phones. Tablet = iPad portrait (768px) & landscape (1024–1366px). The app's nav only switches to the desktop row at `xl` (1280px), so **every iPad gets the mobile nav**.
 
+## Status — updated 2026-06-28
+
+**✅ Shipped — quick-wins batch (PR #67):**
+- **Blocker** — hover-gated row/card actions un-gated on touch via a `can-hover` variant (F6)
+- **Blocker** — dialog Save/Confirm reachable via a safe `max-h`+scroll cap (the safe subset of F4)
+- iOS focus-zoom killed — input/textarea ≥16px (F3)
+- `viewport` export added: `viewportFit:'cover'` + `themeColor` (the export half of F2)
+- Mobile nav pills → 44px touch targets (the touch-target half of F5)
+- Wide-grid horizontal scroll — opponent stats + CSV import preview wrapped (part of F7)
+- Stat glossary tappable — `StatLabel` Tooltip → tap Popover (the StatTooltip half of F8)
+- Leaderboard team column visible on phone; PitchRail dock `55vh` → `55dvh`
+
+**⏳ Remaining (next: foundation pass):**
+- **F1** — extract the live-scoring takeover out of the nav chrome (3rd blocker, still open)
+- **F4** — pinned header/footer dialog restructure (deferred: conflicts with 3 dialogs' nested scroll)
+- **F2** — add a `.pb-safe`/`.pt-safe` safe-area utility and apply it to the scoring dock + sticky footers
+- **F5** — scroll the active nav tab into view, edge-fade affordance, lower the desktop-nav switch to `lg`
+- **F7** — sticky first column + the remaining wide grids (player season table)
+- **F8** — replace the remaining hover-only help (native `title=` strings, spray-chart markers)
+- **F9** — 44px floor for secondary controls (status bar, runner controls, settings icons, tabs, chips)
+- The remaining majors / minors / nits in the punch list below.
+
 ## Verdict
 
 Statly's headline scoring controls are genuinely touch-first (pitch/outcome buttons are correctly 48-56px), but the scaffolding around them is not yet ready for a coach scoring one-handed outdoors. Three true blockers sit squarely in the core loop: the live-scoring takeover is rendered inside the global header+nav chrome so its 100dvh shell pushes the Ball/Strike/In-play dock below the fold and the page double-scrolls; the shared Dialog primitive has no height cap or scroll, so the Save/Confirm footer on the very dialogs used to correct a play falls off short or keyboard-covered viewports; and the entire schedule/team action set (Score, Mark Final, Edit, Delete) is hidden behind group-hover, making the primary post-game workflow invisible and unreachable on every phone and iPad. On top of that, fixed-width stat/opponent/CSV grids either clip silently or blow out the page on phones and iPad-portrait, a large amount of help (stat glossaries, play nuance, spray context) is locked in hover/title tooltips that never fire on touch, and sub-44px targets are pervasive in the secondary controls. The encouraging part is leverage: nearly all of it traces to about eight shared primitives — dialog, input/textarea, the Layout nav, a table wrapper, the hover-gating pattern, and a missing viewport/safe-area export — so a focused foundation pass would resolve dozens of findings at once. Tablet fares somewhat better than phone (more width, fewer layout collisions) but still hits the dialog-scroll and hover-gated-action blockers. As it stands I would not call it game-ready for live one-handed phone scoring; it is demo-able but the foundation fixes above are prerequisites before putting it in a coach's hand at a real game.
