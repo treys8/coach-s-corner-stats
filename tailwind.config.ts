@@ -107,6 +107,7 @@ export default {
     require("tailwindcss-animate"),
     plugin(({ addVariant }) => {
       addVariant("can-hover", "@media (hover: hover)");
+      addVariant("touch", "@media (hover: none)");
     }),
   ],
 } satisfies Config;

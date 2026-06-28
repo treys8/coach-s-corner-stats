@@ -43,3 +43,6 @@ supabase/.temp/
 # uses (src/lib/scoring/demo-engine.ts) is committed because the scoring hooks
 # import it, but the route entry point itself stays local.
 /src/app/demo-scoring/
+
+# Claude Code local workspace (worktrees, plans, settings)
+.claude/

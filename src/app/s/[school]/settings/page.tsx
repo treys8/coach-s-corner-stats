@@ -766,7 +766,7 @@ export default function SchoolSettingsPage() {
                   size="sm"
                   variant="ghost"
                   onClick={() => copyLink(newInviteUrl)}
-                  className="h-7"
+                  className="h-11 w-11"
                 >
                   <Copy className="w-3.5 h-3.5" />
                 </Button>
@@ -788,7 +788,7 @@ export default function SchoolSettingsPage() {
               {pendingInvites.map((inv) => (
                 <div
                   key={inv.id}
-                  className="flex items-center gap-2 py-1.5 px-2 border rounded text-sm"
+                  className="flex items-center gap-3 py-1.5 px-2 border rounded text-sm"
                 >
                   <span className="flex-1 truncate">{inv.email}</span>
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">
@@ -801,7 +801,7 @@ export default function SchoolSettingsPage() {
                       copyLink(`${window.location.origin}/invite/${inv.token}`)
                     }
                     title="Copy invite link"
-                    className="h-7 w-7 p-0"
+                    className="h-11 w-11 p-0"
                   >
                     <Copy className="w-3.5 h-3.5" />
                   </Button>
@@ -810,7 +810,7 @@ export default function SchoolSettingsPage() {
                     variant="ghost"
                     onClick={() => revokeInvite(inv.id)}
                     title="Revoke invite"
-                    className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                    className="h-11 w-11 p-0 text-destructive hover:text-destructive"
                   >
                     <X className="w-3.5 h-3.5" />
                   </Button>
@@ -860,7 +860,7 @@ export default function SchoolSettingsPage() {
                         variant="ghost"
                         onClick={() => removeAdmin(a.user_id, a.email)}
                         title="Remove admin"
-                        className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                        className="h-11 w-11 p-0 text-destructive hover:text-destructive"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </Button>

@@ -164,4 +164,10 @@
   .text-eyebrow { @apply text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground; }
   .text-stat-xl { @apply leading-none font-bold tabular-nums; font-family: 'JetBrains Mono', monospace; }
   .text-label { @apply text-xs font-medium tracking-tight; }
+
+  /* Safe-area padding (notch / home-indicator). Relies on viewportFit:'cover'
+     in the layout viewport export so env() resolves non-zero. The added-to
+     variants keep any existing padding and stack the inset on top. */
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+  .pt-safe { padding-top: env(safe-area-inset-top); }
 }

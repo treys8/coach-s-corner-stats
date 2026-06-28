@@ -337,6 +337,10 @@ export function DefensiveDiamond({
   };
 
   const runnerDragShowing = runnerDrag !== null && runnerDrag.active;
+  // On-canvas runner hint — the same guidance previously lived only in a
+  // hover-only <title> that never fires on touch (the primary surface).
+  const hasRunners = (["first", "second", "third"] as const).some((b) => state.bases[b]);
+  const showRunnerHint = !dragMode && !runnerDragShowing && !!onRunnerAction && hasRunners;
 
   return (
     <svg
@@ -744,6 +748,20 @@ export function DefensiveDiamond({
             );
           })}
         </g>
+      )}
+
+      {showRunnerHint && (
+        <text
+          x={50}
+          y={98}
+          textAnchor="middle"
+          fontSize={2.4}
+          fill={PALETTE.chalk}
+          opacity={0.75}
+          pointerEvents="none"
+        >
+          Drag a runner to SAFE/OUT, or tap to record an action
+        </text>
       )}
     </svg>
   );

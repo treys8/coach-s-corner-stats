@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { FieldBackground } from "@/components/scoring/FieldBackground";
 import type { ReplayState } from "@/lib/scoring/types";
 
@@ -96,6 +96,9 @@ export function LiveSprayChart({
     return [...markers].sort((a, b) => kindZ(a.kind) - kindZ(b.kind));
   }, [state.at_bats, currentBatterId, currentBatterIsOurs]);
 
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = ordered.find((m) => m.id === selectedId) ?? null;
+
   const emptyMessage = currentBatterId
     ? "No batted balls yet for this hitter."
     : "Waiting for a batter at the plate.";
@@ -137,6 +140,7 @@ export function LiveSprayChart({
         {ordered.map((m) => {
           const style = MARKER_STYLE[m.kind];
           const filter = style.glow ? "url(#spray-hr-glow)" : "url(#spray-shadow)";
+          const isSelected = m.id === selectedId;
           return (
             <g key={m.id} filter={filter}>
               <circle
@@ -151,8 +155,8 @@ export function LiveSprayChart({
                 cy={m.y}
                 r={style.radius}
                 fill={style.fill}
-                stroke={style.stroke}
-                strokeWidth={m.kind === "ERR" ? 0.55 : 0.35}
+                stroke={isSelected ? "#001a4d" : style.stroke}
+                strokeWidth={isSelected ? 0.9 : m.kind === "ERR" ? 0.55 : 0.35}
               />
               {style.label && (
                 <text
@@ -169,11 +173,30 @@ export function LiveSprayChart({
                   {style.label}
                 </text>
               )}
+              {/* Enlarged invisible hit target — taps surface the play
+                  description in the caption below (SVG <title> hover never
+                  fires on touch). */}
+              <circle
+                cx={m.x}
+                cy={m.y}
+                r="4"
+                fill="transparent"
+                className="cursor-pointer"
+                style={{ pointerEvents: "all" }}
+                onClick={() => setSelectedId(isSelected ? null : m.id)}
+              />
               {m.title && <title>{m.title}</title>}
             </g>
           );
         })}
       </svg>
+
+      {selected && (
+        <p className="text-sm text-center text-foreground" aria-live="polite">
+          <span className="font-semibold">{selected.kind}</span>
+          {selected.title ? ` — ${selected.title}` : ""}
+        </p>
+      )}
 
       <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
         <div className="flex items-center gap-2.5 flex-wrap">

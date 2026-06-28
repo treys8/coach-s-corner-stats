@@ -163,9 +163,9 @@ function Row({
         {entry.client_event_id} · attempt{entry.attempts === 1 ? "" : "s"} {entry.attempts}
       </p>
       {showActions && (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-2 flex gap-3">
           {onRetry && (
-            <Button size="sm" variant="default" className="h-7 px-2" onClick={onRetry}>
+            <Button size="sm" variant="default" className="h-11 px-3" onClick={onRetry}>
               <RefreshCw className="h-3.5 w-3.5 mr-1" /> Retry
             </Button>
           )}
@@ -173,7 +173,7 @@ function Row({
             <Button
               size="sm"
               variant="outline"
-              className="h-7 px-2 border-red-200 text-red-700 hover:bg-red-50"
+              className="h-11 px-3 border-red-200 text-red-700 hover:bg-red-50"
               onClick={onDiscard}
             >
               <Trash2 className="h-3.5 w-3.5 mr-1" /> Discard

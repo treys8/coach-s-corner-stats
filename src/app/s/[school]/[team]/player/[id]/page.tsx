@@ -280,11 +280,12 @@ function SeasonTable({
   career: Record<string, number>;
 }) {
   return (
-    <div className="mt-6 -mx-6 px-6 overflow-x-auto">
+    <div className="relative mt-6 -mx-6">
+      <div className="overflow-x-auto px-6">
       <table className="w-full text-sm border-collapse min-w-[480px]">
         <thead>
           <tr className="border-b border-border">
-            <th className="text-left text-xs uppercase tracking-wider text-muted-foreground py-2 pr-4 font-semibold">
+            <th className="sticky left-0 z-10 bg-card text-left text-xs uppercase tracking-wider text-muted-foreground py-2 pr-4 font-semibold">
               Season
             </th>
             {columns.map((k) => (
@@ -297,7 +298,7 @@ function SeasonTable({
         <tbody>
           {rows.map((r) => (
             <tr key={r.season_year} className="border-b border-border/50">
-              <td className="py-2 pr-4 font-mono-stat text-sa-blue-deep">{r.season_year}</td>
+              <td className="sticky left-0 z-10 bg-card py-2 pr-4 font-mono-stat text-sa-blue-deep">{r.season_year}</td>
               {columns.map((k) => (
                 <td key={k} className="text-right py-2 px-2 font-mono-stat">
                   {k in r.agg ? formatStat(r.agg[k]) : "—"}
@@ -306,7 +307,7 @@ function SeasonTable({
             </tr>
           ))}
           <tr className="border-t-2 border-sa-blue-deep bg-muted/40">
-            <td className="py-2 pr-4 font-display font-bold text-sa-blue-deep uppercase tracking-wider text-xs">
+            <td className="sticky left-0 z-10 bg-muted py-2 pr-4 font-display font-bold text-sa-blue-deep uppercase tracking-wider text-xs">
               Career
             </td>
             {columns.map((k) => (
@@ -322,6 +323,12 @@ function SeasonTable({
           Career row recomputes rate stats from summed counters; per-season rows do the same within each year.
         </p>
       )}
+      </div>
+      {/* Right-edge fade hints that more stat columns scroll into view. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-card to-transparent"
+      />
     </div>
   );
 }
