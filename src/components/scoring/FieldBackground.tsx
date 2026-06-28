@@ -221,8 +221,8 @@ export function FieldBackground({ idSuffix }: FieldBackgroundProps) {
       </g>
 
       <g>
-        <rect x="20" y="80" width="6" height="2.4" fill="none" stroke="#f5f5f0" strokeWidth="0.25" opacity="0.7" transform="rotate(35 23 81.2)" />
-        <rect x="74" y="80" width="6" height="2.4" fill="none" stroke="#f5f5f0" strokeWidth="0.25" opacity="0.7" transform="rotate(-35 77 81.2)" />
+        <rect x="25.7" y="72.6" width="6" height="2.4" fill="none" stroke="#f5f5f0" strokeWidth="0.25" opacity="0.7" transform="rotate(54 28.7 73.8)" />
+        <rect x="68.3" y="72.6" width="6" height="2.4" fill="none" stroke="#f5f5f0" strokeWidth="0.25" opacity="0.7" transform="rotate(-54 71.3 73.8)" />
       </g>
 
       <polygon
