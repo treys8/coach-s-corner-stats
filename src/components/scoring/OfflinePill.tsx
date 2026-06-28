@@ -60,7 +60,7 @@ export function OfflinePill({ gameId }: OfflinePillProps) {
         disabled={!interactive}
         onClick={interactive ? () => setOpen(true) : undefined}
         aria-label={aria}
-        className={`shrink-0 h-8 px-2 gap-1.5 font-medium border ${color} disabled:opacity-100 disabled:cursor-default`}
+        className={`shrink-0 h-11 px-2 gap-1.5 font-medium border ${color} disabled:opacity-100 disabled:cursor-default`}
       >
         {icon}
         <span className="text-xs whitespace-nowrap">{label}</span>

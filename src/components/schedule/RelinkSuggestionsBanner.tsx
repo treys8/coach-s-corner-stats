@@ -183,28 +183,30 @@ export function RelinkSuggestionsBanner({ teamId, onChange }: RelinkSuggestionsB
                   {g.games.map((gm) => {
                     const skipped = skipForGroup.has(gm.id);
                     return (
-                      <li key={gm.id} className="flex items-center gap-2 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={!skipped}
-                          onChange={() => {
-                            setExcluded((prev) => {
-                              const next = { ...prev };
-                              const set = new Set(next[g.schoolId] ?? []);
-                              if (skipped) set.delete(gm.id);
-                              else set.add(gm.id);
-                              next[g.schoolId] = set;
-                              return next;
-                            });
-                          }}
-                          className="h-3.5 w-3.5"
-                          aria-label={`Include game on ${gm.date}`}
-                        />
-                        <span className={skipped ? "line-through text-muted-foreground" : ""}>
-                          {gm.date}
-                          {gm.time ? ` · ${formatGameTime(gm.time)}` : ""}
-                          <span className="text-muted-foreground"> · &quot;{gm.text}&quot;</span>
-                        </span>
+                      <li key={gm.id}>
+                        <label className="flex items-center gap-2 py-2.5 cursor-pointer text-xs">
+                          <input
+                            type="checkbox"
+                            checked={!skipped}
+                            onChange={() => {
+                              setExcluded((prev) => {
+                                const next = { ...prev };
+                                const set = new Set(next[g.schoolId] ?? []);
+                                if (skipped) set.delete(gm.id);
+                                else set.add(gm.id);
+                                next[g.schoolId] = set;
+                                return next;
+                              });
+                            }}
+                            className="h-4 w-4 shrink-0"
+                            aria-label={`Include game on ${gm.date}`}
+                          />
+                          <span className={skipped ? "line-through text-muted-foreground" : ""}>
+                            {gm.date}
+                            {gm.time ? ` · ${formatGameTime(gm.time)}` : ""}
+                            <span className="text-muted-foreground"> · &quot;{gm.text}&quot;</span>
+                          </span>
+                        </label>
                       </li>
                     );
                   })}

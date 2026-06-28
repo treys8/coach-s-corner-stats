@@ -199,7 +199,7 @@ export function EditOpposingLineupDialog({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+      <SheetContent side="right" className="w-full sm:max-w-xl flex flex-col h-full p-4 sm:p-6">
         <SheetHeader>
           <SheetTitle>Edit opposing lineup</SheetTitle>
           <SheetDescription>
@@ -207,26 +207,28 @@ export function EditOpposingLineupDialog({
             event so the prior lineup remains in the replay history.
           </SheetDescription>
         </SheetHeader>
-        <div className="mt-4 space-y-4">
-          <OpposingLineupPicker
-            myTeamId={myTeamId}
-            gameId={gameId}
-            gameDate={gameDate}
-            opponentName={opponentName}
-            opponentTeamId={opponentTeamId}
-            opponentIsPublicRoster={opponentIsPublicRoster}
-            draft={draft}
-            setDraft={setDraft}
-            opposingPitcherName=""
-            setOpposingPitcherName={() => {}}
-            opposingPitcherJersey=""
-            setOpposingPitcherJersey={() => {}}
-            hidePitcher
-          />
-          {validationError && (
-            <p className="text-sm text-amber-600">{validationError}</p>
-          )}
-          <div className="flex items-center justify-end gap-2 pt-2 pb-safe border-t">
+        <div className="mt-4 flex flex-col flex-1 min-h-0">
+          <div className="flex-1 overflow-y-auto space-y-4">
+            <OpposingLineupPicker
+              myTeamId={myTeamId}
+              gameId={gameId}
+              gameDate={gameDate}
+              opponentName={opponentName}
+              opponentTeamId={opponentTeamId}
+              opponentIsPublicRoster={opponentIsPublicRoster}
+              draft={draft}
+              setDraft={setDraft}
+              opposingPitcherName=""
+              setOpposingPitcherName={() => {}}
+              opposingPitcherJersey=""
+              setOpposingPitcherJersey={() => {}}
+              hidePitcher
+            />
+            {validationError && (
+              <p className="text-sm text-amber-600">{validationError}</p>
+            )}
+          </div>
+          <div className="sticky bottom-0 bg-background -mx-4 px-4 sm:-mx-6 sm:px-6 flex items-center justify-end gap-2 pt-2 pb-safe border-t">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
               Cancel
             </Button>

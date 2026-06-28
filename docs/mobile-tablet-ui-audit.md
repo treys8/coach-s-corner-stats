@@ -55,13 +55,32 @@ _Generated 2026-06-28 via a 7-surface multi-agent responsive audit (71 agents). 
   `r=4→6`) and runner chips (added a transparent `r=4` hit circle) stay tappable/draggable
   above the touch floor, especially when the diamond letterboxes to a short square in landscape.
 
+**✅ Shipped — minors/nits batch:**
+- **Live-scoring secondary controls** bumped to the 44px floor: Sheet close (40px hit area),
+  OfflinePill, TagUpChip Dismiss/"Left early?", PitchRail dock More ▾ / Direct outcome and rail
+  Direct outcome, EditLastPlay count steppers (`h-11 w-11`), RunnerActionDialog steal/WP/PB/balk
+  (`outcomeSm` = h-11). Dock pitch labels now `whitespace-normal leading-tight` so "Called K"/
+  "Swing K" wrap instead of crowding at 360px. InPlayOutcomeSheet "More ▾" popover opens
+  `side="bottom"` at trigger width (no off-screen flip) with h-11 items.
+- **Opposing lineup/batter:** OpposingBatterPanel stat grid `grid-cols-3 sm:grid-cols-6` with
+  readable labels and `min-h-[36px]` year pills; OpposingLineupPicker jersey/position columns
+  rebalanced; EditOpposingLineupDialog Save/Cancel now sticky-footer with `p-4 sm:p-6` instance
+  padding so the coach doesn't scroll past 9 rows to submit.
+- **Schedule banners:** GameLinkBanner / GameDiscrepancyBanner confirm buttons `h-7`→`h-9` with
+  `gap-2`; RelinkSuggestionsBanner rows are now full-width `<label>` toggles (~44px) with `h-4 w-4`
+  checkboxes.
+- **Stats/records/public:** stat-leader Select + sort, Leaderboard rows, /scores filters, team
+  Edit/Delete, and name-review buttons raised toward 44px; compounding `px-6`/`p-6`/`p-8` padding
+  gated `*-4 sm:*-6/8` on the dense grids; 10–11px stat labels and public scorecard live-state /
+  meta labels nudged up (`text-[11px] sm:text-[10px]` / `text-xs`). Verified live at 375px on
+  `/demo-scoring`; `next lint` clean + `vitest run` 472 green.
+
 **⏳ Remaining:**
 - **F4** — pinned header/footer dialog restructure (deferred: conflicts with 3 dialogs' nested scroll)
 - **Diamond landscape relayout** — the two-column landscape layout (diamond left, pitch/outcome
   controls right) so the diamond stops shrinking to a ~190px square with wasted side margins.
   Deferred to its own PR — it reshapes the just-stabilized F1 scoring shell and wants on-device
   testing. (The hit-target enlargement above is the safe half of this major; shipped.)
-- The remaining minors / nits in the punch list below.
 
 ## Verdict
 

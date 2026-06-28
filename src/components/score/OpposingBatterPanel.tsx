@@ -168,7 +168,7 @@ export function OpposingBatterPanel({
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       {profile && profile.line.PA > 0 && (
-        <div className="grid grid-cols-6 gap-2 text-center text-xs">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center text-xs">
           <Stat label="PA" value={profile.line.PA} />
           <Stat label="AVG" value={fmtPct(profile.line.AVG)} />
           <Stat label="OBP" value={fmtPct(profile.line.OBP)} />
@@ -187,7 +187,7 @@ export function OpposingBatterPanel({
       {(careerMarkersWithYear.length > 0 || currentMarkersWithYear.length > 0) && (
         <div className="-mx-1 space-y-2">
           {availableYears.length > 1 && (
-            <div className="flex flex-wrap items-center gap-1 px-1">
+            <div className="flex flex-wrap items-center gap-2 px-1">
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground mr-1">
                 Year
               </span>
@@ -235,7 +235,7 @@ function YearPill({
       type="button"
       onClick={onClick}
       className={
-        "text-[11px] px-2 py-0.5 rounded-full border transition-colors " +
+        "text-xs px-3 py-1.5 min-h-[36px] rounded-full border transition-colors " +
         (active
           ? "bg-sa-blue-deep text-white border-sa-blue-deep"
           : "bg-transparent text-muted-foreground border-border hover:bg-muted")
@@ -256,7 +256,7 @@ function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="flex flex-col">
       <span className="font-mono-stat font-bold text-sa-blue-deep">{value}</span>
-      <span className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</span>
     </div>
   );
 }

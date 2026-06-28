@@ -85,22 +85,22 @@ export function RunnerActionDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-2 py-2">
-          <Button onClick={steal} disabled={disabled} className="bg-sa-orange hover:bg-sa-orange/90 text-white">
+          <Button onClick={steal} disabled={disabled} size="outcomeSm" className="bg-sa-orange hover:bg-sa-orange/90 text-white">
             {stealLabel}
           </Button>
-          <Button onClick={caughtStealing} disabled={disabled} variant="outline">
+          <Button onClick={caughtStealing} disabled={disabled} size="outcomeSm" variant="outline">
             Caught stealing
           </Button>
-          <Button onClick={pickoff} disabled={disabled} variant="outline">
+          <Button onClick={pickoff} disabled={disabled} size="outcomeSm" variant="outline">
             Pickoff out
           </Button>
-          <Button onClick={() => allUp("wild_pitch", "wp")} disabled={disabled} variant="outline">
+          <Button onClick={() => allUp("wild_pitch", "wp")} disabled={disabled} size="outcomeSm" variant="outline">
             Wild pitch
           </Button>
-          <Button onClick={() => allUp("passed_ball", "pb")} disabled={disabled} variant="outline">
+          <Button onClick={() => allUp("passed_ball", "pb")} disabled={disabled} size="outcomeSm" variant="outline">
             Passed ball
           </Button>
-          <Button onClick={() => allUp("balk", "bk")} disabled={disabled} variant="outline">
+          <Button onClick={() => allUp("balk", "bk")} disabled={disabled} size="outcomeSm" variant="outline">
             Balk
           </Button>
         </div>

@@ -561,7 +561,7 @@ export default function UploadStatsPage() {
                             <button
                               type="button"
                               onClick={() => handleRejectSuggestion(idx)}
-                              className="flex-shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-md border-2 border-sa-blue/40 bg-sa-blue/10 text-sa-blue text-xs font-semibold"
+                              className="flex-shrink-0 inline-flex items-center gap-1 min-h-[40px] px-3 rounded-md border-2 border-sa-blue/40 bg-sa-blue/10 text-sa-blue text-sm font-semibold"
                             >
                               <Check className="w-3 h-3" /> Using match
                             </button>
@@ -569,7 +569,7 @@ export default function UploadStatsPage() {
                             <button
                               type="button"
                               onClick={() => handleAcceptSuggestion(idx)}
-                              className="flex-shrink-0 px-3 py-1.5 rounded-md border-2 border-border bg-background text-xs font-semibold hover:border-sa-orange hover:text-sa-orange transition-colors"
+                              className="flex-shrink-0 inline-flex items-center justify-center min-h-[40px] px-3 rounded-md border-2 border-border bg-background text-sm font-semibold hover:border-sa-orange hover:text-sa-orange transition-colors"
                             >
                               Use match
                             </button>

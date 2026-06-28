@@ -168,7 +168,7 @@ export function OpposingLineupPicker({
             <div className="col-span-1 text-right font-mono-stat font-bold text-sa-blue-deep">
               {slot.batting_order}
             </div>
-            <div className="col-span-2">
+            <div className="col-span-3">
               <Input
                 placeholder="#"
                 value={slot.jersey_number ?? ""}
@@ -184,7 +184,7 @@ export function OpposingLineupPicker({
                 className={!slotHasIdentity(slot) ? "border-amber-300" : ""}
               />
             </div>
-            <div className="col-span-4">
+            <div className="col-span-3">
               <Select
                 value={slot.position ?? ""}
                 onValueChange={(v) => updateSlot(i, { position: v || null })}

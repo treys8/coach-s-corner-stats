@@ -116,7 +116,7 @@ export function InPlayOutcomeSheet({ disabled, onPick, canRecord }: Props) {
             More ▾
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-56 p-2" align="start" side="right">
+        <PopoverContent className="w-[--radix-popover-trigger-width] p-2" align="start" side="bottom">
           <div className="flex flex-col gap-2">
             {MORE.map((b) => (
               <Button
@@ -127,7 +127,7 @@ export function InPlayOutcomeSheet({ disabled, onPick, canRecord }: Props) {
                   setMoreOpen(false);
                   onPick(b.result, b.extras);
                 }}
-                className="h-9 text-sm justify-start font-semibold"
+                className="h-11 text-sm justify-start font-semibold"
                 title={b.title}
               >
                 {b.label}

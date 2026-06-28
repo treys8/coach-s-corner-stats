@@ -134,9 +134,9 @@ function Counter({
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs uppercase tracking-wider text-muted-foreground w-12">{label}</span>
-      <Button size="sm" variant="outline" onClick={() => onChange(Math.max(0, value - 1))} disabled={value <= 0}>−</Button>
+      <Button size="sm" variant="outline" className="h-11 w-11" onClick={() => onChange(Math.max(0, value - 1))} disabled={value <= 0}>−</Button>
       <span className="font-mono-stat text-xl w-6 text-center">{value}</span>
-      <Button size="sm" variant="outline" onClick={() => onChange(Math.min(max, value + 1))} disabled={value >= max}>+</Button>
+      <Button size="sm" variant="outline" className="h-11 w-11" onClick={() => onChange(Math.min(max, value + 1))} disabled={value >= max}>+</Button>
     </div>
   );
 }
