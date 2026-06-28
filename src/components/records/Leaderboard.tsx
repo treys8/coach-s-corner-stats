@@ -88,7 +88,7 @@ export function Leaderboard({
                 <span className="font-mono-stat text-xs text-muted-foreground w-8">#{p?.jersey_number ?? "—"}</span>
                 <span className="flex-1 min-w-0 text-sm font-medium text-sa-blue-deep truncate">{name}</span>
                 {teamLabel && (
-                  <span className="hidden sm:inline text-[11px] uppercase tracking-wider text-muted-foreground truncate max-w-[120px]">
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground truncate max-w-[88px] sm:max-w-[120px]">
                     {teamLabel}
                   </span>
                 )}

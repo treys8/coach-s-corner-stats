@@ -188,7 +188,8 @@ export function ScheduleUploadPreview({
         </Card>
       )}
 
-      <div className="border border-border rounded-lg">
+      <div className="border border-border rounded-lg overflow-x-auto">
+        <div className="min-w-[860px]">
         <div className="grid grid-cols-[110px_88px_minmax(220px,1fr)_110px_minmax(160px,1fr)_60px_40px] gap-2 px-3 py-2 bg-muted/50 text-[11px] uppercase tracking-wider font-bold text-muted-foreground rounded-t-lg">
           <div>Date</div>
           <div>Time</div>
@@ -267,6 +268,7 @@ export function ScheduleUploadPreview({
             );
           })}
         </ul>
+        </div>
       </div>
 
       <Card className="p-5">

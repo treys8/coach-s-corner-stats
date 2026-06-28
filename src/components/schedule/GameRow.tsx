@@ -118,7 +118,7 @@ export function GameRow({ game: g, closed, onEdit, onChange }: Props) {
           </Link>
         </Button>
       )}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-1 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 transition-opacity">
         {canScore && !isLive && (
           <Button
             asChild

@@ -299,7 +299,7 @@ export default function SchoolDashboard() {
                 </div>
               </Link>
               {isAdmin && (
-                <div className="absolute top-3 right-3 flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-3 right-3 flex gap-1 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 transition-opacity">
                   <Button
                     size="icon"
                     variant="ghost"
