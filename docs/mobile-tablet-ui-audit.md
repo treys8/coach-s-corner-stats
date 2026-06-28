@@ -31,8 +31,15 @@ _Generated 2026-06-28 via a 7-surface multi-agent responsive audit (71 agents). 
 - **F9** — 44px floor applied: GameStatusBar icons, RunnersControls, FailedEventsSheet Retry/Discard,
   `tabs.tsx` (touch-gated), settings copy/revoke/remove icons, roster grade/jersey chips (touch-gated)
 
-**⏳ Remaining (next: structural batch):**
-- **F1** — extract the live-scoring takeover out of the nav chrome (3rd blocker, still open)
+**✅ Shipped — structural batch (F1, the 3rd blocker):**
+- **F1** — the live-scoring shell now escapes the nav chrome as a full-screen focus-mode takeover on
+  all breakpoints: `LiveScoring`'s shell + loading branch are `fixed inset-x-0 top-0 z-50 h-[100dvh]
+  overflow-hidden`, a body-scroll lock kills the residual double-scroll, and `GameStatusBar` gained a
+  top safe-area inset (`pt-[calc(0.5rem_+_env(safe-area-inset-top))]`) to match the dock's `pb-safe`.
+  Verified via `/demo-scoring`: status top / diamond middle / dock pinned bottom in one glance, no
+  document double-scroll, at phone and desktop widths. **All 3 blockers are now resolved.**
+
+**⏳ Remaining:**
 - **F4** — pinned header/footer dialog restructure (deferred: conflicts with 3 dialogs' nested scroll)
 - The remaining majors / minors / nits in the punch list below.
 
