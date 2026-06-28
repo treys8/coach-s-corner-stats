@@ -299,11 +299,11 @@ export default function SchoolDashboard() {
                 </div>
               </Link>
               {isAdmin && (
-                <div className="absolute top-3 right-3 flex gap-1 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-3 right-3 flex gap-2 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 transition-opacity">
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-8 w-8 bg-white/80 backdrop-blur hover:bg-white"
+                    className="h-11 w-11 bg-white/80 backdrop-blur hover:bg-white"
                     onClick={() => openEdit(t)}
                     title="Edit team"
                   >
@@ -312,7 +312,7 @@ export default function SchoolDashboard() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-8 w-8 bg-white/80 backdrop-blur hover:bg-white"
+                    className="h-11 w-11 bg-white/80 backdrop-blur hover:bg-white"
                     onClick={() => remove(t)}
                     title="Delete team"
                   >

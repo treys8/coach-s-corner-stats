@@ -107,11 +107,11 @@ function FilterSelect({
 }) {
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+      <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
         {label}
       </p>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className="h-9">
+        <SelectTrigger className="h-11">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

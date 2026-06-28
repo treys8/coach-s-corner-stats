@@ -138,7 +138,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
               key={k}
               className="group relative bg-muted/30 hover:bg-muted/60 rounded-md px-2 py-1.5 border border-border/70 transition-colors flex items-baseline justify-between gap-2"
             >
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-none">
+              <div className="text-[11px] sm:text-[10px] uppercase tracking-wider text-muted-foreground leading-none">
                 <StatLabel abbr={k} />
               </div>
               <div className="font-mono-stat text-sm font-bold text-sa-blue-deep leading-none">
@@ -205,7 +205,7 @@ export default function PlayerDetailPage({ params }: { params: Promise<{ id: str
         <ArrowLeft className="w-4 h-4 mr-1" /> Back to roster
       </Link>
 
-      <div className="bg-gradient-blue text-white rounded-lg p-8 mb-8 shadow-elevated relative overflow-hidden">
+      <div className="bg-gradient-blue text-white rounded-lg p-5 sm:p-8 mb-8 shadow-elevated relative overflow-hidden">
         <div className="absolute -right-8 -bottom-12 font-display text-[14rem] leading-none text-sa-orange/20 select-none font-mono-stat">
           {jersey || "—"}
         </div>

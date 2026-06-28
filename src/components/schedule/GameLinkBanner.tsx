@@ -165,7 +165,7 @@ export function GameLinkBanner({
           type="button"
           variant="ghost"
           size="sm"
-          className="ml-auto h-7"
+          className="ml-auto h-9"
           onClick={unlink}
           disabled={acting}
         >
@@ -199,14 +199,14 @@ export function GameLinkBanner({
           {c.game_sequence > 1 ? `, game ${c.game_sequence}` : ""}).{" "}
           <span className="text-muted-foreground">Same game?</span>
         </span>
-        <div className="flex gap-1.5 ml-auto">
-          <Button size="sm" className="h-7" onClick={() => confirm(c)} disabled={acting}>
+        <div className="flex gap-2 ml-auto">
+          <Button size="sm" className="h-9" onClick={() => confirm(c)} disabled={acting}>
             Yes
           </Button>
           <Button
             size="sm"
             variant="outline"
-            className="h-7"
+            className="h-9"
             onClick={() =>
               setDismissed((prev) => new Set(prev).add(c.candidate_game_id))
             }
@@ -243,7 +243,7 @@ export function GameLinkBanner({
             </Badge>
             <Button
               size="sm"
-              className="ml-auto h-7"
+              className="ml-auto h-9"
               onClick={() => confirm(c)}
               disabled={acting}
             >

@@ -126,7 +126,7 @@ export default function RecordsPage() {
   }
 
   return (
-    <div className="container mx-auto px-6 py-10">
+    <div className="container mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
         <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Team</p>
         <h2 className="font-display text-5xl md:text-6xl text-sa-blue-deep">Season Records</h2>
@@ -154,7 +154,7 @@ export default function RecordsPage() {
                   <p className="font-display font-mono-stat text-3xl text-sa-orange leading-none">
                     {label}
                   </p>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wider text-muted-foreground">
                     {r.games_played} game{r.games_played === 1 ? "" : "s"}
                   </p>
                 </Card>

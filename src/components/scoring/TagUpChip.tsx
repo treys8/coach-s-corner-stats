@@ -61,12 +61,12 @@ export function TagUpChip({ state, onLeftEarly }: Props) {
           Caught fly + runner advance. Defaulted to legal tag-up.
         </div>
       </div>
-      <div className="flex flex-col gap-1 shrink-0">
+      <div className="flex flex-col gap-2 shrink-0">
         <Button
           size="sm"
           variant="ghost"
           onClick={() => setDismissedEventId(lastAB.event_id)}
-          className="h-7 text-xs px-2 text-emerald-700"
+          className="h-11 text-xs px-3 text-emerald-700"
         >
           Dismiss
         </Button>
@@ -74,7 +74,7 @@ export function TagUpChip({ state, onLeftEarly }: Props) {
           size="sm"
           variant="ghost"
           onClick={onLeftEarly}
-          className="h-6 text-[11px] px-2 text-muted-foreground"
+          className="h-11 text-xs px-3 text-muted-foreground"
         >
           Left early?
         </Button>

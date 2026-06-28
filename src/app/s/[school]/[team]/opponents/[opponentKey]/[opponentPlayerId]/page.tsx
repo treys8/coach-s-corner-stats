@@ -120,7 +120,7 @@ export default function OpponentPlayerPage({
                     <span>{formatDatePart(g.game_date, "short", school.timezone)}</span>
                     <Link
                       href={`/s/${school.slug}/${team.slug}/score/${g.game_id}`}
-                      className="text-sa-orange hover:underline"
+                      className="text-sa-orange hover:underline py-2 px-3 inline-flex"
                     >
                       Open
                     </Link>
@@ -139,7 +139,7 @@ function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <div>
       <p className="font-mono-stat font-bold text-sa-blue-deep text-xl">{value}</p>
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">{label}</p>
+      <p className="text-xs uppercase tracking-wider text-muted-foreground mt-0.5">{label}</p>
     </div>
   );
 }

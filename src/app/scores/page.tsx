@@ -544,12 +544,12 @@ function ScoreCard({ tile }: { tile: Tile }) {
         </p>
         <div className="flex items-center gap-1.5">
           {tile.showUpdated && (
-            <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-sa-blue/10 text-sa-blue">
+            <span className="text-[11px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-sa-blue/10 text-sa-blue">
               Updated
             </span>
           )}
           {isLive && (
-            <span className="text-[10px] font-bold uppercase tracking-wider text-sa-orange flex items-center gap-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-sa-orange flex items-center gap-1">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-sa-orange animate-pulse" />
               Live{inningLabel ? ` · ${inningLabel}` : ""}
             </span>
@@ -564,7 +564,7 @@ function ScoreCard({ tile }: { tile: Tile }) {
       </div>
 
       {footerParts.length > 0 && (
-        <p className="mt-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <p className="mt-2 text-[11px] uppercase tracking-wider text-muted-foreground">
           {footerParts.join(" · ")}
         </p>
       )}

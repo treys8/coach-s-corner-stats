@@ -79,7 +79,7 @@ export function Leaderboard({
               <Link
                 key={`${row.player_id}-${row.season_year}`}
                 href={href}
-                className={`flex items-center gap-3 px-3 py-2 hover:bg-muted/60 transition-colors ${isTop ? "bg-sa-orange/5" : ""}`}
+                className={`flex items-center gap-3 px-3 py-3 hover:bg-muted/60 transition-colors ${isTop ? "bg-sa-orange/5" : ""}`}
               >
                 <span className={`font-mono-stat text-xs w-5 text-center font-bold ${isTop ? "text-sa-orange" : "text-muted-foreground"}`}>
                   {i + 1}

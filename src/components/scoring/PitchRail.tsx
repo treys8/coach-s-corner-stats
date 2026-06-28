@@ -167,6 +167,7 @@ export function PitchRail({
                     size="pitchSm"
                     disabled={disabled}
                     onClick={() => onPitch(p.type)}
+                    className="whitespace-normal leading-tight text-xs"
                   >
                     {p.label}
                   </Button>
@@ -178,7 +179,7 @@ export function PitchRail({
                     <Button
                       variant="outline"
                       disabled={disabled}
-                      className="h-9 text-xs"
+                      className="h-11 text-xs"
                     >
                       More ▾
                     </Button>
@@ -198,7 +199,7 @@ export function PitchRail({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-9 px-2 text-xs text-muted-foreground"
+                  className="h-11 px-2 text-xs text-muted-foreground"
                   onClick={() => setShowOutcomesManually(true)}
                   disabled={disabled}
                 >
@@ -246,7 +247,7 @@ export function PitchRail({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-8 px-2 text-xs text-muted-foreground"
+                className="h-11 px-2 text-xs text-muted-foreground"
                 onClick={() => setShowOutcomesManually(true)}
                 disabled={disabled}
               >

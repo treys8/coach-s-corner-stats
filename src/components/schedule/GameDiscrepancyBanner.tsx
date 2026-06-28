@@ -132,9 +132,9 @@ export function GameDiscrepancyBanner({
           </p>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1.5 mt-2 ml-6">
+      <div className="flex flex-wrap gap-2 mt-2 ml-6">
         {gameEditHref && (
-          <Button asChild size="sm" variant="outline" className="h-7" disabled={acting}>
+          <Button asChild size="sm" variant="outline" className="h-9" disabled={acting}>
             <Link href={gameEditHref}>
               <Edit3 className="w-3.5 h-3.5 mr-1" aria-hidden />
               Update my score
@@ -144,7 +144,7 @@ export function GameDiscrepancyBanner({
         <Button
           size="sm"
           variant={iSelfConfirmed ? "secondary" : "default"}
-          className="h-7"
+          className="h-9"
           onClick={confirmMyScore}
           disabled={acting || iSelfConfirmed}
         >

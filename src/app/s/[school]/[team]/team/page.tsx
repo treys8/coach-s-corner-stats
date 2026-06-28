@@ -169,7 +169,7 @@ export default function TeamTotalsPage() {
   };
 
   return (
-    <div className="container mx-auto px-6 py-10">
+    <div className="container mx-auto px-4 sm:px-6 py-10">
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-2">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-sa-orange font-bold">Team</p>
@@ -227,12 +227,12 @@ export default function TeamTotalsPage() {
             board.sort((a, b) => dir === "desc" ? b.value - a.value : a.value - b.value);
             return (
             <TabsContent key={sec} value={sec} className="space-y-6 mt-6">
-              <Card className="p-6">
+              <Card className="p-4 sm:p-6">
                 <h3 className="font-display text-2xl text-sa-blue-deep mb-4 capitalize">{sec} Totals</h3>
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-1.5">
                   {KEY_DISPLAY[sec].map((k) => (
                     <div key={k} className="group relative bg-muted/30 hover:bg-muted/60 rounded-md px-2 py-1.5 border border-border/70 transition-colors flex items-baseline justify-between gap-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-none">
+                      <div className="text-[11px] sm:text-[10px] uppercase tracking-wider text-muted-foreground leading-none">
                         <StatLabel abbr={k} />
                       </div>
                       <div className="font-mono-stat text-sm font-bold text-sa-blue-deep leading-none">
@@ -248,7 +248,7 @@ export default function TeamTotalsPage() {
                   <h3 className="font-display text-2xl text-sa-blue-deep">Stat Leaders</h3>
                   <div className="flex items-center gap-2">
                     <Select value={activeStat} onValueChange={(v) => setLeaderStat((s) => ({ ...s, [sec]: v }))}>
-                      <SelectTrigger className="w-[180px] h-9">
+                      <SelectTrigger className="w-[180px] h-11">
                         <SelectValue placeholder="Pick a stat" />
                       </SelectTrigger>
                       <SelectContent className="max-h-72">
@@ -263,7 +263,7 @@ export default function TeamTotalsPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-9"
+                      className="h-11"
                       onClick={() => setLeaderDir((d) => ({ ...d, [sec]: d[sec] === "desc" ? "asc" : "desc" }))}
                     >
                       {dir === "desc" ? <ArrowDown className="w-4 h-4 mr-1" /> : <ArrowUp className="w-4 h-4 mr-1" />}
@@ -298,7 +298,7 @@ export default function TeamTotalsPage() {
                   </div>
                 )}
                 {(latestDate || qualifierNote(sec, activeStat)) && (
-                  <p className="text-[11px] text-muted-foreground mt-3">
+                  <p className="text-xs sm:text-[11px] text-muted-foreground mt-3">
                     {qualifierNote(sec, activeStat) && <span className="font-semibold text-sa-orange">{qualifierNote(sec, activeStat)} · </span>}
                     {latestDate && <>Based on each player's latest snapshot · most recent {formatDatePart(latestDate, "short", school.timezone)}</>}
                   </p>
