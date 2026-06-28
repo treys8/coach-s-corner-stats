@@ -72,85 +72,98 @@ export function GameStatusBar({
 
   return (
     <div className={containerCls}>
-      <div className="flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap">
-        {backHref && (
-          <Button
-            asChild
-            variant="ghost"
-            size="icon"
-            aria-label="Back to score picker"
-            className="shrink-0"
-          >
-            <Link href={backHref}>
-              <ChevronLeft className="h-5 w-5" />
-            </Link>
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Undo last play"
-          disabled={!canUndo}
-          onClick={onUndo}
-          className="shrink-0 h-11 w-11"
-        >
-          <Undo2 className="h-5 w-5" />
-        </Button>
+      {/* Two-tier on phone, one row on md+. The glance group (score + state +
+          bases) and the action cluster are separate flex children: the cluster
+          is `w-full md:w-auto` so it wraps to its own full-width line below the
+          score on a phone, but sits inline on md+. This replaces the old
+          flex-wrap that reflowed ~9 controls into 2-3 ragged rows and let the
+          score jump vertically whenever the OfflinePill label changed width. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 md:gap-3 md:flex-nowrap">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 order-1">
+          {backHref && (
+            <Button
+              asChild
+              variant="ghost"
+              size="icon"
+              aria-label="Back to score picker"
+              className="shrink-0 h-11 w-11"
+            >
+              <Link href={backHref}>
+                <ChevronLeft className="h-5 w-5" />
+              </Link>
+            </Button>
+          )}
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <ScoreLine
+              teamShortLabel={teamShortLabel}
+              opponentName={opponentName}
+              teamScore={state.team_score}
+              opponentScore={state.opponent_score}
+            />
+          </div>
 
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ScoreLine
-            teamShortLabel={teamShortLabel}
-            opponentName={opponentName}
-            teamScore={state.team_score}
-            opponentScore={state.opponent_score}
+          <StateChip
+            halfLabel={halfLabel}
+            inning={state.inning}
+            outs={state.outs}
+            balls={state.current_balls}
+            strikes={state.current_strikes}
+            showCount={showCount}
           />
+
+          {/* Redundant with the base runners shown on the diamond directly
+              below, so hidden on phones to give the team names room; shown
+              from sm+ where the header has space. */}
+          <MiniBases bases={state.bases} className="hidden sm:block shrink-0" />
         </div>
 
-        <StateChip
-          halfLabel={halfLabel}
-          inning={state.inning}
-          outs={state.outs}
-          balls={state.current_balls}
-          strikes={state.current_strikes}
-          showCount={showCount}
-        />
-
-        <MiniBases bases={state.bases} className="shrink-0" />
-
-        {onOpenBox && (
+        <div className="flex items-center gap-1 md:gap-3 w-full md:w-auto justify-between md:justify-start order-2 shrink-0">
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Box score"
-            onClick={onOpenBox}
+            aria-label="Undo last play"
+            disabled={!canUndo}
+            onClick={onUndo}
             className="shrink-0 h-11 w-11"
           >
-            <ClipboardList className="h-5 w-5" />
+            <Undo2 className="h-5 w-5" />
           </Button>
-        )}
-        {onOpenBatter && (
+
+          {onOpenBox && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Box score"
+              onClick={onOpenBox}
+              className="shrink-0 h-11 w-11"
+            >
+              <ClipboardList className="h-5 w-5" />
+            </Button>
+          )}
+          {onOpenBatter && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Batter detail"
+              onClick={onOpenBatter}
+              className="shrink-0 lg:hidden h-11 w-11"
+            >
+              <User className="h-5 w-5" />
+            </Button>
+          )}
+
+          {gameId && <OfflinePill gameId={gameId} />}
+
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Batter detail"
-            onClick={onOpenBatter}
-            className="shrink-0 lg:hidden h-11 w-11"
+            aria-label="Manage game"
+            onClick={onOpenManage}
+            className="shrink-0 h-11 w-11"
           >
-            <User className="h-5 w-5" />
+            <MoreVertical className="h-5 w-5" />
           </Button>
-        )}
-
-        {gameId && <OfflinePill gameId={gameId} />}
-
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Manage game"
-          onClick={onOpenManage}
-          className="shrink-0 h-11 w-11"
-        >
-          <MoreVertical className="h-5 w-5" />
-        </Button>
+        </div>
       </div>
 
       <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
@@ -179,17 +192,36 @@ function ScoreLine({
 }) {
   const teamLeading = teamScore > opponentScore;
   const oppLeading = opponentScore > teamScore;
+  // Stacked mini-scoreboard: one row per team (name + score) so the full team
+  // names stay readable on a phone. The old inline `LBL 0 – 0 LBL` layout had
+  // to truncate the names to ~3.5ch to fit the score + state on one line.
   return (
-    <div className="flex items-baseline gap-2 min-w-0">
-      <span className="text-eyebrow truncate max-w-[8ch]">{teamShortLabel}</span>
-      <span className={`text-stat-xl text-3xl md:text-4xl ${teamLeading ? "text-sa-orange" : "text-sa-blue-deep"}`}>
-        {teamScore}
+    <div className="flex flex-col gap-0.5 min-w-0 w-full">
+      <ScoreRow label={teamShortLabel} score={teamScore} leading={teamLeading} />
+      <ScoreRow label={opponentName} score={opponentScore} leading={oppLeading} />
+    </div>
+  );
+}
+
+function ScoreRow({
+  label,
+  score,
+  leading,
+}: {
+  label: string;
+  score: number;
+  leading: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="text-eyebrow truncate min-w-0 flex-1">{label}</span>
+      <span
+        className={`text-stat-xl text-xl md:text-2xl leading-none tabular-nums text-right min-w-[1.25ch] ${
+          leading ? "text-sa-orange" : "text-sa-blue-deep"
+        }`}
+      >
+        {score}
       </span>
-      <span className="text-muted-foreground">–</span>
-      <span className={`text-stat-xl text-3xl md:text-4xl ${oppLeading ? "text-sa-orange" : "text-sa-blue-deep"}`}>
-        {opponentScore}
-      </span>
-      <span className="text-eyebrow truncate max-w-[12ch]">{opponentName}</span>
     </div>
   );
 }

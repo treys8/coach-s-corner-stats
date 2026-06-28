@@ -572,6 +572,12 @@ export function DefensiveDiamond({
             onPointerCancel={runnerDrag?.from === b ? endRunnerDrag : undefined}
           >
             {tappable && <title>Drag to SAFE/OUT or tap to record action</title>}
+            {/* Enlarged invisible hit target so the ~19px runner chip stays
+                tappable/draggable above the touch floor — especially in
+                landscape where the diamond shrinks to a short square. */}
+            {(draggable || tappable) && (
+              <circle cx={0} cy={0} r={4} fill="transparent" />
+            )}
             <g filter="url(#dd-soft-shadow)">
               <circle
                 cx={0} cy={0} r={dragging ? 3.2 : 2.8}
@@ -656,7 +662,10 @@ export function DefensiveDiamond({
               </g>
             ) : showsPositionOnly ? (
               <>
-                <circle cx={cx} cy={cy} r="4" fill="transparent" />
+                {/* Enlarged invisible hit target — keeps the fielder tappable
+                    above the ~44px floor even when the diamond letterboxes to
+                    a short height in landscape. */}
+                <circle cx={cx} cy={cy} r="6" fill="transparent" />
                 <g filter="url(#dd-soft-shadow)" pointerEvents="none">
                   <circle
                     cx={cx} cy={cy} r="2.9"
@@ -675,7 +684,7 @@ export function DefensiveDiamond({
               </>
             ) : (
               <circle
-                cx={cx} cy={cy} r="4"
+                cx={cx} cy={cy} r="6"
                 fill="transparent"
               />
             )}

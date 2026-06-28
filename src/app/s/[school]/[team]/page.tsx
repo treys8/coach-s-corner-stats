@@ -218,7 +218,7 @@ export default function RosterPage() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-32 rounded-lg" />
           ))}
@@ -250,7 +250,7 @@ export default function RosterPage() {
           )}
         </Card>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {players.map((p) => {
             // A roster row with no jersey AND no position needs attention:
             // this is what ingest_stats_workbook writes for new players, and
@@ -267,8 +267,8 @@ export default function RosterPage() {
                   className="group block bg-card border border-border rounded-lg overflow-hidden shadow-card hover:shadow-elevated hover:-translate-y-0.5 transition-all"
                 >
                   <div className="bg-gradient-blue h-2" />
-                  <div className="p-5 flex items-center gap-4">
-                    <div className="font-display text-5xl text-sa-orange leading-none w-16 text-center font-mono-stat">
+                  <div className="p-3 sm:p-5 flex items-center gap-3 sm:gap-4">
+                    <div className="font-display text-4xl sm:text-5xl text-sa-orange leading-none w-12 sm:w-16 text-center font-mono-stat">
                       {p.jersey_number || "—"}
                     </div>
                     <div className="min-w-0 flex-1">
