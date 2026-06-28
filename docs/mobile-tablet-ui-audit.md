@@ -44,13 +44,15 @@ _Generated 2026-06-28 via a 7-surface multi-agent responsive audit (71 agents). 
   smaller jersey/padding (`w-12 sm:w-16`, `p-3 sm:p-5`, `gap-3 sm:gap-4`) so the last name
   is no longer crushed to ~28px on a 360px phone.
 - **Game status bar** — replaced the `flex-wrap` that reflowed ~9 controls into 2-3 ragged
-  rows with a deliberate two-tier layout on phone (`<md`): a stable glance line
-  (score + inning/outs/count + bases) over a full-width action cluster (undo / box / batter /
-  offline / manage), collapsing to one row on `md+`. The score no longer jumps when the
-  OfflinePill label width changes, and the count + bases no longer clip (team labels truncate
-  to `max-w-[3.5ch] sm:…`). OfflinePill mounts once (no markup duplication).
+  rows with a deliberate two-tier layout on phone (`<md`): a stable glance line over a
+  full-width action cluster (undo / box / batter / offline / manage), collapsing to one row
+  on `md+`. The score no longer jumps when the OfflinePill label width changes, and OfflinePill
+  mounts once (no markup duplication). The glance line is now a **stacked mini-scoreboard**
+  (one row per team: full name + score) so the team names stay fully readable on a phone
+  instead of truncating to `S…` / `N…`; MiniBases is hidden `<sm` (the diamond below already
+  shows base occupancy) so the names fit even at 360px.
 - **Diamond targetability** — enlarged the invisible hit targets so fielders (transparent
-  `r=4→6`) and runner chips (added a transparent `r=4.5` hit circle) stay tappable/draggable
+  `r=4→6`) and runner chips (added a transparent `r=4` hit circle) stay tappable/draggable
   above the touch floor, especially when the diamond letterboxes to a short square in landscape.
 
 **⏳ Remaining:**
