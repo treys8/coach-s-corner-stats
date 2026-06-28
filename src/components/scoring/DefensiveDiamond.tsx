@@ -576,7 +576,7 @@ export function DefensiveDiamond({
                 tappable/draggable above the touch floor — especially in
                 landscape where the diamond shrinks to a short square. */}
             {(draggable || tappable) && (
-              <circle cx={0} cy={0} r={4.5} fill="transparent" />
+              <circle cx={0} cy={0} r={4} fill="transparent" />
             )}
             <g filter="url(#dd-soft-shadow)">
               <circle
