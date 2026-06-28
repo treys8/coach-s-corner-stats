@@ -89,13 +89,13 @@ export function Layout({
             </button>
           </nav>
         </div>
-        <nav className="xl:hidden border-t border-white/10 px-4 py-2 flex gap-1 overflow-x-auto">
+        <nav className="xl:hidden border-t border-white/10 px-4 py-2 flex gap-2 overflow-x-auto">
           {nav.map((n) => (
             <Link
               key={n.href}
               href={n.href}
               className={cn(
-                "px-3 py-1.5 rounded text-xs font-semibold uppercase tracking-wider whitespace-nowrap",
+                "inline-flex items-center min-h-[44px] px-3 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap",
                 isActive(pathname, n.href, n.exact) ? "bg-sa-orange text-white" : "text-white/80",
               )}
             >
@@ -105,7 +105,7 @@ export function Layout({
           <button
             type="button"
             onClick={signOut}
-            className="ml-auto px-3 py-1.5 rounded text-xs font-semibold uppercase tracking-wider whitespace-nowrap text-white/80 inline-flex items-center gap-1.5"
+            className="ml-auto min-h-[44px] px-3 py-2.5 rounded text-sm font-semibold uppercase tracking-wider whitespace-nowrap text-white/80 inline-flex items-center gap-1.5"
           >
             <LogOut className="w-3.5 h-3.5" />
             Sign out
