@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -166,9 +166,22 @@ export function LiveScoring({
     [currentOpponentBatterId, state.at_bats],
   );
 
+  // The shell is a `fixed inset-x-0 top-0` full-viewport takeover that paints
+  // over the global nav chrome. Lock body scroll while it's mounted so the
+  // residual header/footer left behind in the flow can't phantom-scroll and
+  // iOS can't rubber-band behind the overlay. Declared before the loading
+  // early return to keep hook order stable across branches.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
   if (loading) {
     return (
-      <div className="h-[100dvh] p-6 flex flex-col gap-3">
+      <div className="fixed inset-x-0 top-0 z-50 h-[100dvh] p-6 flex flex-col gap-3 bg-background">
         {backHref && (
           <Link
             href={backHref}
@@ -229,7 +242,7 @@ export function LiveScoring({
   // The rail's wrapper uses `lg:contents` so it's transparent to the grid
   // on lg+; the dock wrapper uses `lg:hidden` so it disappears on lg+.
   return (
-    <div className="grid grid-rows-[auto_minmax(0,1fr)_auto] lg:grid-rows-[auto_minmax(0,1fr)] h-[100dvh] bg-background">
+    <div className="fixed inset-x-0 top-0 z-50 grid grid-rows-[auto_minmax(0,1fr)_auto] lg:grid-rows-[auto_minmax(0,1fr)] h-[100dvh] overflow-hidden bg-background">
       <GameStatusBar
         state={state}
         weAreBatting={weAreBatting}
